@@ -62,7 +62,7 @@ function Accounts({ isAdmin }: { isAdmin: boolean }) {
     <Card title="광고 계정">
       <ErrorText error={error} />
       <table className="mb-4 w-full text-sm">
-        <thead className="text-left text-xs text-gray-500"><tr><th className="py-2">광고주</th><th>고객 ID</th><th>구분</th><th>마지막 동기화</th><th /></tr></thead>
+        <thead className="text-left text-xs text-gray-500"><tr><th className="py-2">광고주</th><th>CUSTOMER_ID</th><th>구분</th><th>마지막 동기화</th><th /></tr></thead>
         <tbody>
           {accounts.map((a) => (
             <tr key={a.id} className="border-t border-gray-100">
@@ -113,7 +113,7 @@ function Accounts({ isAdmin }: { isAdmin: boolean }) {
               {credList.map((c) => <option key={c.id} value={c.id}>{c.label}{c.is_mock ? " (Mock)" : ""}</option>)}
             </select>
             {credList.length === 0 && <p className="text-xs text-gray-500">먼저 ①에서 자격증명을 등록하세요.</p>}
-            <input className={inputCls} placeholder="광고주 고객 ID (숫자)" inputMode="numeric" value={acc.customer_id} onChange={(e) => setAcc({ ...acc, customer_id: e.target.value.trim() })} required aria-label="고객 ID" />
+            <input className={inputCls} placeholder="CUSTOMER_ID (숫자)" inputMode="numeric" value={acc.customer_id} onChange={(e) => setAcc({ ...acc, customer_id: e.target.value.trim() })} required aria-label="CUSTOMER_ID" />
             <input className={inputCls} placeholder="광고주 이름" value={acc.name} onChange={(e) => setAcc({ ...acc, name: e.target.value })} required aria-label="광고주 이름" />
             <Button type="submit" disabled={busy}>접근 확인 후 연결 · 동기화</Button>
           </form>
