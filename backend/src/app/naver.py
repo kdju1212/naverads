@@ -50,11 +50,14 @@ UPDATE_SPEC = {
     ("keyword", "bid_amt"): ("keywords", "bidAmt", _set_bid),
     ("ad", "status"): ("ads", "userLock", _set_lock),
     ("ad", "bid_amt"): ("ads", "adAttr", _set_ad_bid),  # 쇼핑 상품소재 전용 — 검증 필요
+    ("ad_extension", "status"): ("ad-extensions", "userLock", _set_lock),
 }
 # 공식 샘플 AdManagementSample.java·명세(gh-pages assets/json/ncc-heroes-ncc.json)로 경로·fields를 확인한 것만
 # (쇼핑 소재 입찰가는 미확인)
 VERIFIED_WRITES = {("campaign", "status"), ("campaign", "daily_budget"), ("adgroup", "status"), ("adgroup", "bid_amt"),
-                   ("keyword", "status"), ("keyword", "bid_amt"), ("ad", "status")}
+                   ("keyword", "status"), ("keyword", "bid_amt"), ("ad", "status"),
+                   # 확장소재: 명세에 fields 목록은 없지만 userLock이 ON/OFF용으로 정의돼 있다(응답 검증으로 반영 확인)
+                   ("ad_extension", "status")}
 
 
 class RealNaverClient:
@@ -126,7 +129,7 @@ MOCK_FAIL_IDS: set[str] = set()  # 테스트용: 여기 있는 naver_id 수정�
 
 
 def _seed(cid: str) -> dict:
-    s = {"campaigns": {}, "adgroups": {}, "keywords": {}, "ads": {}, "ad_extensions": {}}
+    s = {"campaigns": {}, "adgroups": {}, "keywords": {}, "ads": {}, "ad-extensions": {}}
     pl, sh = f"cmp-{cid}-pl", f"cmp-{cid}-sh"
     s["campaigns"][pl] = {"nccCampaignId": pl, "name": "파워링크_브랜드", "campaignTp": "WEB_SITE", "userLock": False, "dailyBudget": 50000}
     s["campaigns"][sh] = {"nccCampaignId": sh, "name": "쇼핑검색_상품", "campaignTp": "SHOPPING", "userLock": False, "dailyBudget": 30000}
@@ -140,7 +143,7 @@ def _seed(cid: str) -> dict:
         s["ads"][aid] = {"nccAdId": aid, "nccAdgroupId": g, "type": "TEXT_45", "userLock": False, "inspectStatus": "APPROVED",
                          "ad": {"headline": "여름 원피스 할인", "description": "전 상품 무료배송", "pc": {"final": "https://example.com"}}}
         eid = f"ext-{cid}-pl{i}"
-        s["ad_extensions"][eid] = {"nccAdExtensionId": eid, "ownerId": g, "type": "SUB_LINKS", "userLock": False,
+        s["ad-extensions"][eid] = {"nccAdExtensionId": eid, "ownerId": g, "type": "SUB_LINKS", "userLock": False,
                                    "inspectStatus": "APPROVED",
                                    "adExtension": '[{"name": "신상품", "final": "https://example.com/new"}]'}
     g = f"grp-{cid}-sh1"
@@ -173,7 +176,7 @@ class MockNaverClient:
 
     def list_ad_extensions(self, owner_id):
         # .get: 이 키가 생기기 전에 만들어진 Mock 저장소도 있다
-        return [dict(e) for e in self.s.get("ad_extensions", {}).values() if e["ownerId"] == owner_id]
+        return [dict(e) for e in self.s.get("ad-extensions", {}).values() if e["ownerId"] == owner_id]
 
     def stats(self, campaign_ids, since: date, until: date):
         out, d = [], since

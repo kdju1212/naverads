@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+import { BulkBar } from "@/components/BulkBar";
 import { Col, DataTable } from "@/components/DataTable";
 import { Badge, Card, ErrorText, PageTitle } from "@/components/ui";
 import { useApp } from "@/lib/store";
@@ -25,6 +27,8 @@ export default function ExtensionsPage() {
   const { ws, query, product, accountName } = useApp();
   const shoppingOnly = product === "SHOPPING";
   const { data, error, loading } = useFetch<Extension[]>(ws && !shoppingOnly ? `/workspaces/${ws.id}/ad-extensions${query()}` : null);
+  const [sel, setSel] = useState<Set<number>>(new Set());
+  const rows = data ?? [];
 
   if (shoppingOnly) {
     return (
@@ -46,9 +50,11 @@ export default function ExtensionsPage() {
 
   return (
     <>
-      <PageTitle desc="캠페인·광고그룹에 연결된 파워링크 확장소재를 조회합니다. 수정은 네이버 공식 API 검증 후 제공됩니다.">확장소재 (파워링크)</PageTitle>
+      <PageTitle desc="캠페인·광고그룹에 연결된 파워링크 확장소재를 조회하고 ON/OFF를 대량 변경합니다. 내용 수정은 아직 지원하지 않습니다.">확장소재 (파워링크)</PageTitle>
       <ErrorText error={error} />
-      <DataTable rows={data ?? []} cols={cols} loading={loading} empty="확장소재가 없습니다. 설정에서 동기화하면 불러옵니다." />
+      <DataTable rows={rows} cols={cols} selected={sel} onSelect={setSel} loading={loading}
+        empty="확장소재가 없습니다. 설정에서 동기화하면 불러옵니다."
+        toolbar={<BulkBar entityType="ad_extension" rows={rows.filter((r) => sel.has(r.id))} />} />
     </>
   );
 }

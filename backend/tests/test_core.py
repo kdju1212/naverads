@@ -81,6 +81,16 @@ def test_full_flow():
     assert retry["parent_job_id"] == job["id"] and retry["counts"]["VALID"] == 1
     assert c.post(f"/workspaces/{ws}/bulk-jobs/{retry['id']}/execute", headers=staff).json()["status"] == "DONE"
 
+    # 확장소재 ON/OFF (내용 수정은 없음)
+    ej = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [
+        {"entity_type": "ad_extension", "naver_id": "ext-1001-pl1", "field": "status", "value": "OFF"},
+        {"entity_type": "ad_extension", "naver_id": "ext-1001-pl1", "field": "payload", "value": "x"}]}).json()
+    assert ej["counts"]["VALID"] == 1 and ej["counts"]["INVALID"] == 1
+    assert c.post(f"/workspaces/{ws}/bulk-jobs/{ej['id']}/execute", headers=owner).json()["counts"]["SUCCESS"] == 1
+    ext = next(e for e in c.get(f"/workspaces/{ws}/ad-extensions?account_ids={a1}", headers=owner).json()
+               if e["naver_id"] == "ext-1001-pl1")
+    assert ext["status"] == "OFF"
+
     # 엑셀 업로드 → 미리보기
     wb = Workbook()
     wb.active.append(["entity_type", "naver_id", "field", "value"])

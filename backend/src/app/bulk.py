@@ -8,17 +8,18 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .access import accessible_account_ids
-from .models import (Ad, AdAccount, AdGroup, AuditLog, BulkJob, BulkJobRow, Campaign, Keyword, Membership,
+from .models import (Ad, AdAccount, AdExtension, AdGroup, AuditLog, BulkJob, BulkJobRow, Campaign, Keyword, Membership,
                      NaverApiCredential, WorkspaceAdAccount, now)
 from .naver import NaverApiError, client_for
 from .security import decrypt
 
-ENTITY_MODELS = {"campaign": Campaign, "adgroup": AdGroup, "keyword": Keyword, "ad": Ad}
+ENTITY_MODELS = {"campaign": Campaign, "adgroup": AdGroup, "keyword": Keyword, "ad": Ad, "ad_extension": AdExtension}
 ALLOWED_FIELDS = {
     "campaign": {"status", "daily_budget"},
     "adgroup": {"status", "bid_amt"},
     "keyword": {"status", "bid_amt"},
     "ad": {"status", "bid_amt"},
+    "ad_extension": {"status"},  # 파워링크 확장소재: ON/OFF만 (내용 수정은 유형별 구조 확인 후)
 }
 # shortcut: 입찰가·예산 한도는 가정값, 공식 문서 확인 후 수정
 BID_RANGE = {"WEB_SITE": (70, 100_000), "SHOPPING": (50, 100_000)}
@@ -166,8 +167,8 @@ def excel_template() -> bytes:
     ws.append(["adgroup", "grp-...", "bid_amt", "500"])
     ws.append(["ad", "ad-...(쇼핑 상품소재)", "bid_amt", "300"])
     guide = wb.create_sheet("guide")
-    for line in [["entity_type", "campaign | adgroup | keyword(파워링크) | ad"],
-                 ["field", "status(ON/OFF), daily_budget(캠페인), bid_amt(광고그룹·키워드·쇼핑 상품소재)"],
+    for line in [["entity_type", "campaign | adgroup | keyword(파워링크) | ad | ad_extension(파워링크 확장소재)"],
+                 ["field", "status(ON/OFF), daily_budget(캠페인), bid_amt(광고그룹·키워드·쇼핑 상품소재), 확장소재는 status만"],
                  ["value", "10원 단위 숫자 또는 ON/OFF"]]:
         guide.append(line)
     buf = io.BytesIO()
