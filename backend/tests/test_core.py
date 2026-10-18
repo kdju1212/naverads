@@ -143,7 +143,15 @@ def test_real_write_gate(monkeypatch):
     with pytest.raises(NaverApiError, match="반영되지"):
         cl.update("keyword", "nkw-1", "bid_amt", 150)
 
+    echo = lambda o: o  # noqa: E731
+    cl.update("campaign", "cmp-1", "daily_budget", 10000)
+    assert calls[-1] == ("PUT", "/ncc/campaigns/cmp-1", {"fields": "budget"})
+
+    echo = lambda o: {**o, "dailyBudget": 0, "useDailyBudget": False}  # noqa: E731 — 예산이 반영 안 된 경우
+    with pytest.raises(NaverApiError, match="반영되지"):
+        cl.update("campaign", "cmp-1", "daily_budget", 10000)
+
     n = len(calls)
     with pytest.raises(NaverApiError, match="차단"):
-        cl.update("campaign", "cmp-1", "daily_budget", 10000)  # 미검증 항목은 차단, 호출도 안 함
+        cl.update("adgroup", "grp-1", "bid_amt", 300)  # 미검증 항목은 차단, 호출도 안 함
     assert len(calls) == n

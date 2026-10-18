@@ -46,8 +46,10 @@ UPDATE_SPEC = {
     ("ad", "status"): ("ads", "userLock", _set_lock),
     ("ad", "bid_amt"): ("ads", "adAttr", _set_ad_bid),  # 쇼핑 상품소재 전용 — 검증 필요
 }
-# 공식 샘플 AdManagementSample.java가 같은 경로·fields로 호출하는 것만 (예산·그룹 입찰가·쇼핑 소재 입찰가는 미확인)
-VERIFIED_WRITES = {("campaign", "status"), ("adgroup", "status"), ("keyword", "status"), ("keyword", "bid_amt"), ("ad", "status")}
+# 공식 샘플 AdManagementSample.java·명세(gh-pages assets/json/ncc-heroes-ncc.json)로 경로·fields를 확인한 것만
+# (그룹 입찰가·쇼핑 소재 입찰가는 미확인)
+VERIFIED_WRITES = {("campaign", "status"), ("campaign", "daily_budget"), ("adgroup", "status"),
+                   ("keyword", "status"), ("keyword", "bid_amt"), ("ad", "status")}
 
 
 class RealNaverClient:
@@ -90,11 +92,14 @@ class RealNaverClient:
             raise NaverApiError("이 항목의 실계정 수정은 공식 API 검증 전이라 아직 차단되어 있습니다")
         res, fields, apply = UPDATE_SPEC[(entity_type, field)]
         obj = self._req("GET", f"/ncc/{res}/{naver_id}")
+        before = dict(obj)
         apply(obj, value)
+        want = {k: v for k, v in obj.items() if before.get(k) != v}
         out = self._req("PUT", f"/ncc/{res}/{naver_id}", params={"fields": fields}, json=obj)
-        # 네이버가 200을 주면서 이전 값을 돌려주는 경우가 있어(searchad-apidoc#982) 응답으로 반영 여부를 확인한다
-        if out.get(fields) != obj.get(fields):
-            raise NaverApiError(f"네이버에 반영되지 않았습니다 (요청 {obj.get(fields)}, 응답 {out.get(fields)})")
+        # 네이버가 200을 주면서 이전 값을 돌려주는 경우가 있어(searchad-apidoc#982) 바꾼 필드가 응답에 반영됐는지 확인한다
+        got = {k: out.get(k) for k in want}
+        if got != want:
+            raise NaverApiError(f"네이버에 반영되지 않았습니다 (요청 {want}, 응답 {got})")
 
 
 # ---- Mock ----
