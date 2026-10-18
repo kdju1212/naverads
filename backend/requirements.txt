@@ -7,3 +7,4 @@ openpyxl
 httpx
 cryptography
 pytest
+psycopg[binary]
