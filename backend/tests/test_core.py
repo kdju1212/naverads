@@ -105,7 +105,7 @@ def test_full_flow():
                                           "links": [{"name": "신상품", "final": "https://example.com/a"}]}).json()
     row = next(e for e in c.get(f"{url}?account_ids={a1}", headers=owner).json() if e["id"] == new["id"])
     assert row["payload"] == [{"name": "신상품", "final": "https://example.com/a"}] and row["owner_name"] == "파워링크그룹1"
-    assert c.delete(f"{url}/{new['id']}", headers=owner).status_code == 200
+    assert c.delete(f"{url}/{new['id']}", headers=owner).json() == {"ok": True, "already_gone": False}
     assert all(e["id"] != new["id"] for e in c.get(f"{url}?account_ids={a1}", headers=owner).json())
     logs = c.get(f"/workspaces/{ws}/audit-logs?account_id={a1}", headers=owner).json()
     assert {l["action"] for l in logs if l["naver_id"] == new["naver_id"]} == {"CREATE", "DELETE"}
@@ -224,3 +224,16 @@ def test_rsa_texts():
               {"linkType": "DESCRIPTION", "assetData": {"text": "전 상품 할인"}},
               {"linkType": "OTHER", "assetData": "무시"}]
     assert _rsa_texts(assets) == {"headlines": ["여름 세일", "무료배송"], "descriptions": ["전 상품 할인"]}
+
+
+def test_delete_extension_already_gone():
+    from app.naver import _MOCK_STORE
+
+    owner = user("gone@a.com")
+    ws = c.post("/workspaces", json={"name": "G"}, headers=owner).json()["id"]
+    cred = c.post(f"/workspaces/{ws}/credentials", json={"label": "m", "api_key": "k", "secret_key": "s"}, headers=owner).json()["id"]
+    acc = c.post(f"/workspaces/{ws}/ad-accounts", json={"credential_id": cred, "customer_id": "3003", "name": "g"}, headers=owner).json()
+    c.post(f"/workspaces/{ws}/ad-accounts/{acc['id']}/sync", headers=owner)
+    ext = c.get(f"/workspaces/{ws}/ad-extensions", headers=owner).json()[0]
+    _MOCK_STORE["3003"]["ad-extensions"].pop(ext["naver_id"])  # 네이버 화면에서 먼저 지워진 상황
+    assert c.delete(f"/workspaces/{ws}/ad-extensions/{ext['id']}", headers=owner).json() == {"ok": True, "already_gone": True}

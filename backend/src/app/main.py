@@ -357,8 +357,7 @@ async def delete_ad_extension(ext_id: int, m: Membership = Depends(membership), 
     ext = db.get(AdExtension, ext_id)
     if not ext:
         raise HTTPException(404, "확장소재를 찾을 수 없습니다")
-    bulk.delete_extension(db, m, ext)
-    return {"ok": True}
+    return {"ok": True, "already_gone": bulk.delete_extension(db, m, ext)}
 
 
 # ---------- 대량 작업 ----------

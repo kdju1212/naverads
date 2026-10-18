@@ -182,14 +182,24 @@ def create_extension(db: Session, m: Membership, grp: AdGroup, ext_type: str, co
 def delete_extension(db: Session, m: Membership, ext: AdExtension):
     if ext.ad_account_id not in accessible_account_ids(db, m, edit=True):
         raise HTTPException(403, "이 광고 계정을 수정할 권한이 없습니다")
+    client = _client(db, m.workspace_id, ext.ad_account_id)
+    gone = False
     try:
-        _client(db, m.workspace_id, ext.ad_account_id).delete_ad_extension(ext.naver_id)
+        client.delete_ad_extension(ext.naver_id)
     except NaverApiError as err:
-        raise HTTPException(400, f"네이버 확장소재 삭제 실패: {err}")
+        # 네이버에서 이미 지워진 확장소재는 404가 난다(동기화는 사라진 항목을 지우지 않음): 소유자 목록으로 실제 존재 여부를 확인
+        try:
+            gone = all(e["nccAdExtensionId"] != ext.naver_id for e in client.list_ad_extensions(ext.owner_naver_id))
+        except NaverApiError:
+            gone = False
+        if not gone:
+            raise HTTPException(400, f"네이버 확장소재 삭제 실패: {err}")
     db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=ext.ad_account_id, action="DELETE",
-                    entity_type="ad_extension", naver_id=ext.naver_id, field="ext_type", before=ext.ext_type))
+                    entity_type="ad_extension", naver_id=ext.naver_id, field="ext_type", before=ext.ext_type,
+                    after="네이버에 이미 없음" if gone else None))
     db.delete(ext)
     db.commit()
+    return gone
 
 
 def excel_template() -> bytes:
