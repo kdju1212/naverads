@@ -7,6 +7,7 @@
 import base64
 import hashlib
 import hmac
+import json
 import os
 import random
 import time
@@ -89,7 +90,17 @@ class RealNaverClient:
         return self._req("GET", "/ncc/ads", params={"nccAdgroupId": adgroup_id})
 
     def stats(self, campaign_ids, since: date, until: date):
-        raise NaverApiError("성과 통계 API 미검증 — 실계정 성과 조회는 아직 지원하지 않습니다")
+        # 명세(gh-pages assets/json/ncc-report.json): 일별(timeIncrement=1)은 단일 id만 지원, salesAmt는 VAT 포함
+        fields = json.dumps(["impCnt", "clkCnt", "salesAmt", "ccnt", "convAmt"])
+        time_range = json.dumps({"since": since.isoformat(), "until": until.isoformat()})
+        out = []
+        for cid in campaign_ids:
+            r = self._req("GET", "/stats", params={"id": cid, "fields": fields, "timeRange": time_range, "timeIncrement": "1"})
+            for s in r.get("data", []):
+                out.append({"id": cid, "date": date.fromisoformat(s["dateStart"]), "impCnt": s.get("impCnt", 0),
+                            "clkCnt": s.get("clkCnt", 0), "salesAmt": s.get("salesAmt", 0),
+                            "ccnt": s.get("ccnt"), "convAmt": s.get("convAmt")})
+        return out
 
     def update(self, entity_type, naver_id, field, value):
         if (entity_type, field) not in VERIFIED_WRITES and os.getenv("NAVER_ALLOW_REAL_WRITE") != "1":

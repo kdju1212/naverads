@@ -159,3 +159,23 @@ def test_real_write_gate(monkeypatch):
     with pytest.raises(NaverApiError, match="차단"):
         cl.update("ad", "nad-1", "bid_amt", 300)  # 미검증 항목은 차단, 호출도 안 함
     assert len(calls) == n
+
+
+def test_real_stats(monkeypatch):
+    import json
+    from datetime import date
+
+    from app.naver import RealNaverClient
+
+    calls = []
+
+    def fake_req(self, method, uri, **kw):
+        calls.append((method, uri, kw["params"]))
+        return {"data": [{"dateStart": "2026-10-01", "dateEnd": "2026-10-01", "impCnt": 10, "clkCnt": 2, "salesAmt": 300}]}
+
+    monkeypatch.setattr(RealNaverClient, "_req", fake_req)
+    rows = RealNaverClient("k", "s", "1").stats(["cmp-1", "cmp-2"], date(2026, 10, 1), date(2026, 10, 1))
+    assert [c[2]["id"] for c in calls] == ["cmp-1", "cmp-2"]  # 일별 통계는 캠페인별로 따로 요청
+    assert json.loads(calls[0][2]["timeRange"]) == {"since": "2026-10-01", "until": "2026-10-01"}
+    assert rows[0] == {"id": "cmp-1", "date": date(2026, 10, 1), "impCnt": 10, "clkCnt": 2, "salesAmt": 300,
+                       "ccnt": None, "convAmt": None}
