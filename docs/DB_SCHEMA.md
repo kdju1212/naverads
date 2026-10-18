@@ -1,6 +1,6 @@
 # DB 스키마 — MVP v1.0
 
-> 최종 갱신: 2026-10-18. 구현: `backend/app/models.py` (SQLAlchemy). 운영 DB: PostgreSQL, 개발/테스트: SQLite.
+> 최종 갱신: 2026-10-18. 구현: `backend/src/app/models.py` (SQLAlchemy). 운영 DB: Cloudflare D1(SQLite 호환), 개발/테스트: SQLite. 스키마 SQL: `backend/migrations/`.
 
 ## 설계 원칙
 - **조직(workspace)과 광고 계정(ad_account)은 다대다 관계 테이블(`workspace_ad_accounts`)로 분리.** 한 광고 계정이 대행사 교체 등으로 다른 조직에 연결될 수 있다.

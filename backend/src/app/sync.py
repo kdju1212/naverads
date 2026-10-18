@@ -10,15 +10,22 @@ from .naver import NaverApiError
 STATS_DAYS = 30
 
 
-def _upsert(db: Session, model, naver_id: str, **fields):
-    obj = db.scalar(select(model).where(model.naver_id == naver_id))
-    if obj is None:
-        obj = model(naver_id=naver_id)
-        db.add(obj)
-    for k, v in fields.items():
-        setattr(obj, k, v)
-    db.flush()
-    return obj
+class _Upserter:
+    """계정의 기존 객체를 모델당 한 번에 읽어 두고 upsert. 객체마다 SELECT하면 Workers에서 CPU 한도를 넘는다."""
+
+    def __init__(self, db: Session, account_id: int):
+        self.db, self.aid, self.cache = db, account_id, {}
+
+    def __call__(self, model, naver_id: str, **fields):
+        if model not in self.cache:
+            self.cache[model] = {o.naver_id: o for o in self.db.scalars(select(model).where(model.ad_account_id == self.aid))}
+        obj = self.cache[model].get(naver_id)
+        if obj is None:
+            obj = self.cache[model][naver_id] = model(naver_id=naver_id, ad_account_id=self.aid)
+            self.db.add(obj)
+        for k, v in fields.items():
+            setattr(obj, k, v)
+        return obj
 
 
 def _status(o):
@@ -30,23 +37,26 @@ def sync_account(db: Session, account: AdAccount, client) -> SyncRun:
     db.add(run)
     try:
         aid = account.id
+        _upsert = _Upserter(db, aid)
         campaigns = []
         for c in client.list_campaigns():
             if c["campaignTp"] not in ("WEB_SITE", "SHOPPING"):
                 continue  # MVP 범위 밖 캠페인 유형은 저장하지 않는다
-            camp = _upsert(db, Campaign, c["nccCampaignId"], ad_account_id=aid, name=c["name"], campaign_tp=c["campaignTp"],
+            camp = _upsert(Campaign, c["nccCampaignId"], ad_account_id=aid, name=c["name"], campaign_tp=c["campaignTp"],
                            status=_status(c), daily_budget=c.get("dailyBudget") or 0)
+            db.flush()
             campaigns.append(camp)
             for g in client.list_adgroups(camp.naver_id):
-                grp = _upsert(db, AdGroup, g["nccAdgroupId"], ad_account_id=aid, campaign_id=camp.id, name=g["name"],
+                grp = _upsert(AdGroup, g["nccAdgroupId"], ad_account_id=aid, campaign_id=camp.id, name=g["name"],
                               adgroup_type=g["adgroupType"], status=_status(g), bid_amt=g["bidAmt"])
+                db.flush()
                 if grp.adgroup_type == "WEB_SITE":
                     for k in client.list_keywords(grp.naver_id):
-                        _upsert(db, Keyword, k["nccKeywordId"], ad_account_id=aid, adgroup_id=grp.id, keyword=k["keyword"],
+                        _upsert(Keyword, k["nccKeywordId"], ad_account_id=aid, adgroup_id=grp.id, keyword=k["keyword"],
                                 status=_status(k), bid_amt=k["bidAmt"], use_group_bid=k.get("useGroupBidAmt", False))
                 for a in client.list_ads(grp.naver_id):
                     attr = a.get("adAttr") or {}
-                    _upsert(db, Ad, a["nccAdId"], ad_account_id=aid, adgroup_id=grp.id, ad_type=a["type"], status=_status(a),
+                    _upsert(Ad, a["nccAdId"], ad_account_id=aid, adgroup_id=grp.id, ad_type=a["type"], status=_status(a),
                             inspect_status=a.get("inspectStatus", ""), bid_amt=attr.get("bidAmt"),
                             use_group_bid=attr.get("useGroupBidAmt", True), payload=a.get("ad", {}))
         db.commit()
@@ -63,9 +73,12 @@ def sync_account(db: Session, account: AdAccount, client) -> SyncRun:
 def _sync_stats(db: Session, account: AdAccount, client, campaigns: list[Campaign]):
     by_naver = {c.naver_id: c for c in campaigns}
     until = date.today() - timedelta(days=1)
-    for s in client.stats(list(by_naver), until - timedelta(days=STATS_DAYS - 1), until):
+    since = until - timedelta(days=STATS_DAYS - 1)
+    existing = {(r.campaign_id, r.date): r for r in db.scalars(select(PerformanceDaily).where(
+        PerformanceDaily.ad_account_id == account.id, PerformanceDaily.date.between(since, until)))}
+    for s in client.stats(list(by_naver), since, until):
         camp = by_naver[s["id"]]
-        row = db.scalar(select(PerformanceDaily).where(PerformanceDaily.campaign_id == camp.id, PerformanceDaily.date == s["date"]))
+        row = existing.get((camp.id, s["date"]))
         if row is None:
             row = PerformanceDaily(ad_account_id=account.id, campaign_id=camp.id, date=s["date"])
             db.add(row)

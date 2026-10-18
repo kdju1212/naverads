@@ -58,7 +58,7 @@ SMB 전문 광고대행사가 여러 광고주의 **네이버 파워링크 및 �
 ## 7. 아키텍처 초안 — 아직 기술 검토 가능
 - 프론트엔드: Next.js + TypeScript + Tailwind CSS + shadcn/ui + TanStack Table.
 - 백엔드: FastAPI + Pydantic + SQLAlchemy.
-- 데이터: PostgreSQL + Alembic.
+- 데이터: Cloudflare D1 (SQL 마이그레이션 파일). 배포: Cloudflare Workers(백엔드) / Pages(프론트엔드 예정).
 - 비동기 작업: Redis + Celery.
 - 파일: openpyxl / CSV. 테스트: pytest / Playwright. 개발: Docker Compose.
 - 멀티테넌트: `workspace`(대행사/조직) → 직원 역할/권한 → 접근 가능한 광고주 계정. 모든 읽기/쓰기에서 서버 측 접근 검증.
@@ -89,6 +89,7 @@ SMB 전문 광고대행사가 여러 광고주의 **네이버 파워링크 및 �
 - 2026-10-18: **파워링크와 쇼핑검색 쇼핑몰 상품형을 모두 MVP v1.0에 포함**.
 - 2026-10-18: **1차 타겟 SMB 전문 광고대행사, 2차 타겟 직접 운영 SMB 광고주** 확정.
 - 2026-10-18: Claude Code용 지속 갱신 가능한 Markdown 마스터 컨텍스트 도입.
+- 2026-10-18: 백엔드 배포를 Cloudflare Python Workers 무료 플랜 + D1로 결정(무료 검증 우선). 무료 CPU 한도 때문에 무거운 동기화는 분할 처리 또는 Workers Paid 전환 필요.
 - 2026-10-18: MVP v1.0 = SMB 전문 광고대행사용. P0/P1/P2 우선순위 확정, 하나의 코드베이스에서 `AGENCY`/`DIRECT_ADVERTISER` 지원(현재 AGENCY 우선). 구독 데이터는 광고 관리와 분리. docs/ 4종 작성.
 
 ## 11. Claude Code에 주는 지속 지시

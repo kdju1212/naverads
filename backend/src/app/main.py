@@ -18,8 +18,9 @@ from .security import decrypt, encrypt, hash_password, make_token, verify_passwo
 from .sync import sync_account
 
 app = FastAPI(title="네이버 광고 통합 관리 API")
-# shortcut: create_all로 스키마 생성, 스키마 안정화 후 Alembic 마이그레이션으로 교체
-Base.metadata.create_all(engine)
+# 로컬(SQLite)은 create_all, Cloudflare D1은 migrations/*.sql 로 스키마 관리
+if engine is not None:
+    Base.metadata.create_all(engine)
 
 DEFAULT_PLAN = {"code": "PER_ACCOUNT", "name": "계정당 요금제", "price_per_account": 19_900, "trial_days": 14}
 
@@ -40,12 +41,12 @@ class SignupIn(BaseModel):
 
 
 @app.post("/auth/signup")
-def signup(body: SignupIn, db: Session = Depends(get_db)):
+async def signup(body: SignupIn, db: Session = Depends(get_db)):
     if len(body.password) < 8:
         raise HTTPException(400, "비밀번호는 8자 이상")
     if db.scalar(select(User).where(User.email == body.email)):
         raise HTTPException(409, "이미 가입된 이메일입니다")
-    user = User(email=body.email, password_hash=hash_password(body.password), name=body.name)
+    user = User(email=body.email, password_hash=await hash_password(body.password), name=body.name)
     db.add(user)
     db.commit()
     return {"id": user.id, "token": make_token(user.id)}
@@ -57,9 +58,9 @@ class LoginIn(BaseModel):
 
 
 @app.post("/auth/login")
-def login(body: LoginIn, db: Session = Depends(get_db)):
+async def login(body: LoginIn, db: Session = Depends(get_db)):
     user = db.scalar(select(User).where(User.email == body.email))
-    if not user or not verify_password(body.password, user.password_hash):
+    if not user or not await verify_password(body.password, user.password_hash):
         raise HTTPException(401, "이메일 또는 비밀번호가 올바르지 않습니다")
     return {"id": user.id, "token": make_token(user.id)}
 
@@ -71,7 +72,7 @@ class WorkspaceIn(BaseModel):
 
 
 @app.post("/workspaces")
-def create_workspace(body: WorkspaceIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+async def create_workspace(body: WorkspaceIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
     ws = Workspace(name=body.name, type=body.type)
     db.add(ws)
     db.flush()
@@ -85,7 +86,7 @@ def create_workspace(body: WorkspaceIn, user: User = Depends(current_user), db: 
 
 
 @app.get("/workspaces")
-def my_workspaces(user: User = Depends(current_user), db: Session = Depends(get_db)):
+async def my_workspaces(user: User = Depends(current_user), db: Session = Depends(get_db)):
     q = select(Workspace, Membership.role).join(Membership, Membership.workspace_id == Workspace.id).where(Membership.user_id == user.id)
     return [{"id": w.id, "name": w.name, "type": w.type, "role": r} for w, r in db.execute(q)]
 
@@ -96,7 +97,7 @@ class MemberIn(BaseModel):
 
 
 @app.get("/workspaces/{ws_id}/members")
-def list_members(m: Membership = Depends(membership), db: Session = Depends(get_db)):
+async def list_members(m: Membership = Depends(membership), db: Session = Depends(get_db)):
     q = select(Membership, User).join(User, User.id == Membership.user_id).where(Membership.workspace_id == m.workspace_id)
     out = []
     for mem, u in db.execute(q):
@@ -107,7 +108,7 @@ def list_members(m: Membership = Depends(membership), db: Session = Depends(get_
 
 
 @app.post("/workspaces/{ws_id}/members")
-def add_member(body: MemberIn, m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
+async def add_member(body: MemberIn, m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
     user = db.scalar(select(User).where(User.email == body.email))
     if not user:
         raise HTTPException(404, "가입된 사용자가 아닙니다")  # shortcut: 초대 메일 없음, 가입 후 추가. 초대 플로우는 2단계
@@ -125,7 +126,7 @@ class AccessIn(BaseModel):
 
 
 @app.put("/workspaces/{ws_id}/members/{membership_id}/access")
-def set_access(membership_id: int, body: AccessIn, m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
+async def set_access(membership_id: int, body: AccessIn, m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
     target = db.get(Membership, membership_id)
     if not target or target.workspace_id != m.workspace_id:
         raise HTTPException(404, "직원을 찾을 수 없습니다")
@@ -158,7 +159,7 @@ class CredentialIn(BaseModel):
 
 
 @app.post("/workspaces/{ws_id}/credentials")
-def add_credential(body: CredentialIn, m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
+async def add_credential(body: CredentialIn, m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
     cred = NaverApiCredential(workspace_id=m.workspace_id, label=body.label, api_key=body.api_key,
                               secret_key_enc=encrypt(body.secret_key), is_mock=body.is_mock)
     db.add(cred)
@@ -173,7 +174,7 @@ class ConnectIn(BaseModel):
 
 
 @app.post("/workspaces/{ws_id}/ad-accounts")
-def connect_account(body: ConnectIn, m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
+async def connect_account(body: ConnectIn, m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
     cred = db.get(NaverApiCredential, body.credential_id)
     if not cred or cred.workspace_id != m.workspace_id:
         raise HTTPException(404, "자격증명을 찾을 수 없습니다")
@@ -199,12 +200,12 @@ def connect_account(body: ConnectIn, m: Membership = Depends(admin_membership), 
         db.add(WorkspaceAdAccount(workspace_id=m.workspace_id, ad_account_id=acc.id, credential_id=cred.id, connected_by=m.user_id))
     db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=acc.id, action="ACCOUNT_CONNECT"))
     db.commit()
-    run = sync_account(db, acc, client)
-    return {"id": acc.id, "customer_id": acc.customer_id, "name": acc.name, "sync_status": run.status, "sync_error": run.error}
+    # 동기화는 별도 요청(POST .../sync): 무료 플랜 CPU 한도로 끊겨도 연결은 유지되고 동기화만 재시도하면 된다
+    return {"id": acc.id, "customer_id": acc.customer_id, "name": acc.name}
 
 
 @app.delete("/workspaces/{ws_id}/ad-accounts/{account_id}")
-def disconnect_account(account_id: int, m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
+async def disconnect_account(account_id: int, m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
     link = db.scalar(select(WorkspaceAdAccount).where(WorkspaceAdAccount.workspace_id == m.workspace_id,
                                                       WorkspaceAdAccount.ad_account_id == account_id,
                                                       WorkspaceAdAccount.status == "CONNECTED"))
@@ -217,7 +218,7 @@ def disconnect_account(account_id: int, m: Membership = Depends(admin_membership
 
 
 @app.get("/workspaces/{ws_id}/ad-accounts")
-def list_accounts(m: Membership = Depends(membership), db: Session = Depends(get_db)):
+async def list_accounts(m: Membership = Depends(membership), db: Session = Depends(get_db)):
     ids = resolve_account_ids(db, m, None)
     out = []
     for acc in db.scalars(select(AdAccount).where(AdAccount.id.in_(ids))):
@@ -228,7 +229,7 @@ def list_accounts(m: Membership = Depends(membership), db: Session = Depends(get
 
 
 @app.post("/workspaces/{ws_id}/ad-accounts/{account_id}/sync")
-def sync(account_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+async def sync(account_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
     resolve_account_ids(db, m, [account_id])
     link = db.scalar(select(WorkspaceAdAccount).where(WorkspaceAdAccount.workspace_id == m.workspace_id,
                                                       WorkspaceAdAccount.ad_account_id == account_id))
@@ -246,7 +247,7 @@ ProductType = Literal["WEB_SITE", "SHOPPING"] | None
 
 
 @app.get("/workspaces/{ws_id}/campaigns")
-def list_campaigns(account_ids: str | None = None, product: ProductType = None, q: str | None = None,
+async def list_campaigns(account_ids: str | None = None, product: ProductType = None, q: str | None = None,
                    m: Membership = Depends(membership), db: Session = Depends(get_db)):
     ids = resolve_account_ids(db, m, _ids(account_ids))
     s = select(Campaign).where(Campaign.ad_account_id.in_(ids))
@@ -259,7 +260,7 @@ def list_campaigns(account_ids: str | None = None, product: ProductType = None, 
 
 
 @app.get("/workspaces/{ws_id}/adgroups")
-def list_adgroups(account_ids: str | None = None, product: ProductType = None, campaign_id: int | None = None,
+async def list_adgroups(account_ids: str | None = None, product: ProductType = None, campaign_id: int | None = None,
                   q: str | None = None, m: Membership = Depends(membership), db: Session = Depends(get_db)):
     ids = resolve_account_ids(db, m, _ids(account_ids))
     s = select(AdGroup).where(AdGroup.ad_account_id.in_(ids))
@@ -274,7 +275,7 @@ def list_adgroups(account_ids: str | None = None, product: ProductType = None, c
 
 
 @app.get("/workspaces/{ws_id}/keywords")
-def list_keywords(account_ids: str | None = None, adgroup_id: int | None = None, q: str | None = None,
+async def list_keywords(account_ids: str | None = None, adgroup_id: int | None = None, q: str | None = None,
                   m: Membership = Depends(membership), db: Session = Depends(get_db)):
     ids = resolve_account_ids(db, m, _ids(account_ids))
     s = select(Keyword).where(Keyword.ad_account_id.in_(ids))
@@ -287,7 +288,7 @@ def list_keywords(account_ids: str | None = None, adgroup_id: int | None = None,
 
 
 @app.get("/workspaces/{ws_id}/ads")
-def list_ads(ad_type: Literal["TEXT_45", "SHOPPING_PRODUCT_AD"], account_ids: str | None = None, adgroup_id: int | None = None,
+async def list_ads(ad_type: Literal["TEXT_45", "SHOPPING_PRODUCT_AD"], account_ids: str | None = None, adgroup_id: int | None = None,
              m: Membership = Depends(membership), db: Session = Depends(get_db)):
     ids = resolve_account_ids(db, m, _ids(account_ids))
     s = select(Ad).where(Ad.ad_account_id.in_(ids), Ad.ad_type == ad_type)
@@ -331,7 +332,7 @@ def _job_out(db: Session, job: BulkJob):
 
 
 @app.post("/workspaces/{ws_id}/bulk-jobs")
-def create_bulk_job(body: BulkIn, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+async def create_bulk_job(body: BulkIn, m: Membership = Depends(membership), db: Session = Depends(get_db)):
     return _job_out(db, bulk.create_job(db, m, [c.model_dump() for c in body.changes], "UI"))
 
 
@@ -341,35 +342,35 @@ async def create_bulk_job_excel(file: UploadFile, m: Membership = Depends(member
 
 
 @app.get("/bulk-jobs/excel-template")
-def excel_template():
+async def excel_template():
     return Response(bulk.excel_template(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": "attachment; filename=bulk_template.xlsx"})
 
 
 @app.get("/workspaces/{ws_id}/bulk-jobs")
-def list_bulk_jobs(m: Membership = Depends(membership), db: Session = Depends(get_db)):
+async def list_bulk_jobs(m: Membership = Depends(membership), db: Session = Depends(get_db)):
     jobs = db.scalars(select(BulkJob).where(BulkJob.workspace_id == m.workspace_id).order_by(BulkJob.id.desc()).limit(50))
     return _rows(jobs, "id", "status", "source", "parent_job_id", "created_by", "created_at", "executed_at")
 
 
 @app.get("/workspaces/{ws_id}/bulk-jobs/{job_id}")
-def get_bulk_job(job_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+async def get_bulk_job(job_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
     return _job_out(db, _job(db, m, job_id))
 
 
 @app.post("/workspaces/{ws_id}/bulk-jobs/{job_id}/execute")
-def execute_bulk_job(job_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+async def execute_bulk_job(job_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
     return _job_out(db, bulk.execute_job(db, m, _job(db, m, job_id)))
 
 
 @app.post("/workspaces/{ws_id}/bulk-jobs/{job_id}/retry-failed")
-def retry_bulk_job(job_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+async def retry_bulk_job(job_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
     return _job_out(db, bulk.retry_failed(db, m, _job(db, m, job_id)))
 
 
 # ---------- 이력·성과·대시보드 ----------
 @app.get("/workspaces/{ws_id}/audit-logs")
-def audit_logs(user_id: int | None = None, account_id: int | None = None, m: Membership = Depends(membership),
+async def audit_logs(user_id: int | None = None, account_id: int | None = None, m: Membership = Depends(membership),
                db: Session = Depends(get_db)):
     ids = resolve_account_ids(db, m, [account_id] if account_id else None)
     s = select(AuditLog).where(AuditLog.workspace_id == m.workspace_id, AuditLog.ad_account_id.in_(ids))
@@ -397,7 +398,7 @@ def _account_performance(db: Session, ids: set[int], since: date, until: date):
 
 
 @app.get("/workspaces/{ws_id}/performance/accounts")
-def performance_accounts(since: date | None = None, until: date | None = None, account_ids: str | None = None,
+async def performance_accounts(since: date | None = None, until: date | None = None, account_ids: str | None = None,
                          m: Membership = Depends(membership), db: Session = Depends(get_db)):
     until = until or date.today() - timedelta(days=1)
     since = since or until - timedelta(days=6)
@@ -405,7 +406,7 @@ def performance_accounts(since: date | None = None, until: date | None = None, a
 
 
 @app.get("/workspaces/{ws_id}/dashboard")
-def dashboard(m: Membership = Depends(membership), db: Session = Depends(get_db)):
+async def dashboard(m: Membership = Depends(membership), db: Session = Depends(get_db)):
     ids = resolve_account_ids(db, m, None)
     until = date.today() - timedelta(days=1)
     jobs = db.scalars(select(BulkJob).where(BulkJob.workspace_id == m.workspace_id, BulkJob.status != "PREVIEW")
@@ -426,7 +427,7 @@ def dashboard(m: Membership = Depends(membership), db: Session = Depends(get_db)
 
 # ---------- 구독 (광고 관리와 분리) ----------
 @app.get("/workspaces/{ws_id}/subscription")
-def subscription(m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
+async def subscription(m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
     sub = db.scalar(select(Subscription).where(Subscription.workspace_id == m.workspace_id))
     plan = db.get(Plan, sub.plan_code)
     billable = db.scalar(select(func.count()).select_from(WorkspaceAdAccount).where(

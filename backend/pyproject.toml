@@ -1,0 +1,21 @@
+[project]
+name = "naverads-api"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+  "fastapi",
+  "sqlalchemy>=2",
+  "sqlalchemy-cloudflare-d1",
+  "pydantic[email]",
+  "python-multipart",
+  "openpyxl",
+  "httpx",
+  "cryptography",
+]
+
+[dependency-groups]
+dev = ["workers-py", "workers-runtime-sdk"]
+local = ["uvicorn[standard]", "pytest"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

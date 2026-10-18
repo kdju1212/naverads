@@ -9,9 +9,9 @@
 4. 모든 쓰기 = 대량 작업 엔진(미리보기 → 실행 → 결과 → 감사 로그) 단일 경로.
 
 ## 기술 스택
-- 백엔드: FastAPI + SQLAlchemy 2 + Pydantic (`backend/`)
-- 프론트엔드: Next.js + TypeScript + Tailwind + shadcn/ui + TanStack Table (`frontend/`, 2단계)
-- DB: PostgreSQL(운영) / SQLite(개발·테스트). Alembic은 스키마 안정화 후 도입
+- 백엔드: FastAPI + SQLAlchemy 2 + Pydantic (`backend/`) — **Cloudflare Python Workers(무료 플랜)** 에 배포
+- 프론트엔드: Next.js + TypeScript + Tailwind + shadcn/ui + TanStack Table (`frontend/`, 2단계) — Cloudflare Pages 예정
+- DB: **Cloudflare D1**(운영, 커뮤니티 드라이버 `sqlalchemy-cloudflare-d1`) / SQLite(개발·테스트). 스키마는 `backend/migrations/*.sql`
 - 비동기: Redis + Celery — 대량 작업 행 수가 커지면 도입. 1단계는 동기 실행
 - 엑셀: openpyxl. 테스트: pytest, Playwright(2단계)
 
