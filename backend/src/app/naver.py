@@ -32,6 +32,10 @@ def _set_bid(o, v):
     o["bidAmt"], o["useGroupBidAmt"] = int(v), False
 
 
+def _set_group_bid(o, v):
+    o["bidAmt"] = int(v)  # 광고그룹에는 useGroupBidAmt가 없다
+
+
 def _set_ad_bid(o, v):
     o["adAttr"] = {**o.get("adAttr", {}), "bidAmt": int(v), "useGroupBidAmt": False}
 
@@ -40,15 +44,15 @@ UPDATE_SPEC = {
     ("campaign", "status"): ("campaigns", "userLock", _set_lock),
     ("campaign", "daily_budget"): ("campaigns", "budget", _set_budget),
     ("adgroup", "status"): ("adgroups", "userLock", _set_lock),
-    ("adgroup", "bid_amt"): ("adgroups", "bidAmt", _set_bid),
+    ("adgroup", "bid_amt"): ("adgroups", "bidAmt", _set_group_bid),
     ("keyword", "status"): ("keywords", "userLock", _set_lock),
     ("keyword", "bid_amt"): ("keywords", "bidAmt", _set_bid),
     ("ad", "status"): ("ads", "userLock", _set_lock),
     ("ad", "bid_amt"): ("ads", "adAttr", _set_ad_bid),  # 쇼핑 상품소재 전용 — 검증 필요
 }
 # 공식 샘플 AdManagementSample.java·명세(gh-pages assets/json/ncc-heroes-ncc.json)로 경로·fields를 확인한 것만
-# (그룹 입찰가·쇼핑 소재 입찰가는 미확인)
-VERIFIED_WRITES = {("campaign", "status"), ("campaign", "daily_budget"), ("adgroup", "status"),
+# (쇼핑 소재 입찰가는 미확인)
+VERIFIED_WRITES = {("campaign", "status"), ("campaign", "daily_budget"), ("adgroup", "status"), ("adgroup", "bid_amt"),
                    ("keyword", "status"), ("keyword", "bid_amt"), ("ad", "status")}
 
 

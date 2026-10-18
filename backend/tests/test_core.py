@@ -151,7 +151,11 @@ def test_real_write_gate(monkeypatch):
     with pytest.raises(NaverApiError, match="반영되지"):
         cl.update("campaign", "cmp-1", "daily_budget", 10000)
 
+    echo = lambda o: {k: v for k, v in o.items() if k != "useGroupBidAmt"}  # noqa: E731 — 광고그룹 응답엔 이 필드가 없다
+    cl.update("adgroup", "grp-1", "bid_amt", 300)
+    assert calls[-1] == ("PUT", "/ncc/adgroups/grp-1", {"fields": "bidAmt"})
+
     n = len(calls)
     with pytest.raises(NaverApiError, match="차단"):
-        cl.update("adgroup", "grp-1", "bid_amt", 300)  # 미검증 항목은 차단, 호출도 안 함
+        cl.update("ad", "nad-1", "bid_amt", 300)  # 미검증 항목은 차단, 호출도 안 함
     assert len(calls) == n
