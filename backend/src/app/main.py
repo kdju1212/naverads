@@ -2,6 +2,7 @@ from datetime import date, timedelta
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import func, select
@@ -18,6 +19,8 @@ from .security import decrypt, encrypt, hash_password, make_token, verify_passwo
 from .sync import sync_account
 
 app = FastAPI(title="네이버 광고 통합 관리 API")
+# 인증은 쿠키가 아닌 Bearer 토큰이라 모든 출처 허용해도 다른 사이트가 토큰을 쓸 수 없다
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 # 로컬(SQLite)은 create_all, Cloudflare D1은 migrations/*.sql 로 스키마 관리
 if engine is not None:
     Base.metadata.create_all(engine)
@@ -165,6 +168,12 @@ async def add_credential(body: CredentialIn, m: Membership = Depends(admin_membe
     db.add(cred)
     db.commit()
     return {"id": cred.id, "label": cred.label, "is_mock": cred.is_mock}  # 비밀키는 반환하지 않는다
+
+
+@app.get("/workspaces/{ws_id}/credentials")
+async def list_credentials(m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
+    creds = db.scalars(select(NaverApiCredential).where(NaverApiCredential.workspace_id == m.workspace_id))
+    return _rows(creds, "id", "label", "is_mock")  # 키는 반환하지 않는다
 
 
 class ConnectIn(BaseModel):

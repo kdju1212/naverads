@@ -6,6 +6,15 @@ SMB 전문 광고대행사용 네이버 광고(파워링크·쇼핑검색 상품
 - 기획/설계: `docs/PRD.md`, `docs/SCREEN_SPEC.md`, `docs/DB_SCHEMA.md`, `docs/IMPLEMENTATION_PLAN.md`
 - 진행 상태: `docs/IMPLEMENTATION_STATUS.md`
 
+## 웹 (Next.js 정적 사이트 on Cloudflare Workers)
+주소: https://naverads.djkim0509.workers.dev
+
+```
+cd frontend && npm install && npm run dev      # http://localhost:3000 (API는 배포 주소 사용, NEXT_PUBLIC_API_URL로 변경 가능)
+npm run build && npx wrangler deploy             # 저장소 루트에서 배포 (wrangler.jsonc, Worker 이름 naverads)
+```
+GitHub 연결된 Worker(`naverads`)는 루트 `npm run build` → `npx wrangler deploy`로 자동 배포된다.
+
 ## 백엔드 (FastAPI on Cloudflare Python Workers + D1)
 배포 주소: https://naverads-api.djkim0509.workers.dev/docs
 

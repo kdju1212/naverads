@@ -10,7 +10,7 @@
 
 ## 기술 스택
 - 백엔드: FastAPI + SQLAlchemy 2 + Pydantic (`backend/`) — **Cloudflare Python Workers(무료 플랜)** 에 배포
-- 프론트엔드: Next.js + TypeScript + Tailwind + shadcn/ui + TanStack Table (`frontend/`, 2단계) — Cloudflare Pages 예정
+- 프론트엔드: Next.js 16 정적 내보내기 + TypeScript + Tailwind (`frontend/`) — Cloudflare Workers 정적 자산(`naverads`). 표는 자체 컴포넌트(정렬·검색·다중 선택), shadcn/ui·TanStack Table은 미사용
 - DB: **Cloudflare D1**(운영, 커뮤니티 드라이버 `sqlalchemy-cloudflare-d1`) / SQLite(개발·테스트). 스키마는 `backend/migrations/*.sql`
 - 비동기: Redis + Celery — 대량 작업 행 수가 커지면 도입. 1단계는 동기 실행
 - 엑셀: openpyxl. 테스트: pytest, Playwright(2단계)
@@ -32,7 +32,7 @@
 - [x] 실패 행만 재실행(P1-7, 엔진 재사용으로 비용 낮아 선반영)
 - [x] 구독 데이터 분리(체험 플랜 자동 생성, 과금 계정 수 계산)
 
-### 2단계 — 프론트엔드 P0
+### 2단계 — 프론트엔드 P0 (1차 완료, 2026-10-18)
 - 로그인, 계정 다중 선택기, 대시보드, 캠페인/광고그룹/키워드/소재 통합 테이블
 - 대량 작업 미리보기·결과 화면, 엑셀 업로드, 작업 이력, 설정(계정 연결·직원·배정)
 

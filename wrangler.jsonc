@@ -1,0 +1,10 @@
+{
+  // 프론트엔드(Next.js 정적 내보내기)를 Workers 정적 자산으로 배포. 백엔드 API는 backend/wrangler.jsonc (naverads-api)
+  "$schema": "https://unpkg.com/wrangler/config-schema.json",
+  "name": "naverads",
+  "compatibility_date": "2026-10-18",
+  "assets": {
+    "directory": "./frontend/out",
+    "not_found_handling": "404-page"
+  }
+}
