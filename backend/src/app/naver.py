@@ -1,8 +1,8 @@
 """네이버 검색광고 API 클라이언트 (실계정 / Mock).
 
 두 클라이언트는 같은 인터페이스를 가진다. 응답 필드명은 네이버 API 형식(nccCampaignId, userLock ...)을 따른다.
-실계정 클라이언트의 엔드포인트·fields 파라미터는 공식 문서(https://naver.github.io/searchad-apidoc/) 재검증 전이므로
-쓰기는 NAVER_ALLOW_REAL_WRITE=1 일 때만 허용한다.
+실계정 쓰기는 공식 샘플(github.com/naver/searchad-apidoc java-sample)로 확인한 VERIFIED_WRITES만 허용하고,
+나머지는 NAVER_ALLOW_REAL_WRITE=1 일 때만 허용한다.
 """
 import base64
 import hashlib
@@ -46,6 +46,8 @@ UPDATE_SPEC = {
     ("ad", "status"): ("ads", "userLock", _set_lock),
     ("ad", "bid_amt"): ("ads", "adAttr", _set_ad_bid),  # 쇼핑 상품소재 전용 — 검증 필요
 }
+# 공식 샘플 AdManagementSample.java가 같은 경로·fields로 호출하는 것만 (예산·그룹 입찰가·쇼핑 소재 입찰가는 미확인)
+VERIFIED_WRITES = {("campaign", "status"), ("adgroup", "status"), ("keyword", "status"), ("keyword", "bid_amt"), ("ad", "status")}
 
 
 class RealNaverClient:
@@ -84,12 +86,15 @@ class RealNaverClient:
         raise NaverApiError("성과 통계 API 미검증 — 실계정 성과 조회는 아직 지원하지 않습니다")
 
     def update(self, entity_type, naver_id, field, value):
-        if os.getenv("NAVER_ALLOW_REAL_WRITE") != "1":
-            raise NaverApiError("실계정 쓰기는 공식 API 검증 전까지 차단되어 있습니다")
+        if (entity_type, field) not in VERIFIED_WRITES and os.getenv("NAVER_ALLOW_REAL_WRITE") != "1":
+            raise NaverApiError("이 항목의 실계정 수정은 공식 API 검증 전이라 아직 차단되어 있습니다")
         res, fields, apply = UPDATE_SPEC[(entity_type, field)]
         obj = self._req("GET", f"/ncc/{res}/{naver_id}")
         apply(obj, value)
-        self._req("PUT", f"/ncc/{res}/{naver_id}", params={"fields": fields}, json=obj)
+        out = self._req("PUT", f"/ncc/{res}/{naver_id}", params={"fields": fields}, json=obj)
+        # 네이버가 200을 주면서 이전 값을 돌려주는 경우가 있어(searchad-apidoc#982) 응답으로 반영 여부를 확인한다
+        if out.get(fields) != obj.get(fields):
+            raise NaverApiError(f"네이버에 반영되지 않았습니다 (요청 {obj.get(fields)}, 응답 {out.get(fields)})")
 
 
 # ---- Mock ----

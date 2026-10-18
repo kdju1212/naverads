@@ -120,3 +120,30 @@ def test_connect_validation():
     r = c.post(f"/workspaces/{ws}/ad-accounts", json={"credential_id": cred["id"], "customer_id": "abc", "name": "x"}, headers=owner)
     assert r.status_code == 400
     assert c.get(f"/workspaces/{ws}/campaigns").status_code == 401
+
+
+def test_real_write_gate(monkeypatch):
+    import pytest
+    from app.naver import NaverApiError, RealNaverClient
+
+    calls = []
+
+    def fake_req(self, method, uri, **kw):
+        calls.append((method, uri, kw.get("params")))
+        return {"bidAmt": 100, "useGroupBidAmt": True} if method == "GET" else echo(kw["json"])
+
+    echo = lambda o: o  # noqa: E731
+    monkeypatch.setattr(RealNaverClient, "_req", fake_req)
+    cl = RealNaverClient("k", "s", "1")
+
+    cl.update("keyword", "nkw-1", "bid_amt", 150)  # 검증된 항목은 허용
+    assert calls[-1] == ("PUT", "/ncc/keywords/nkw-1", {"fields": "bidAmt"})
+
+    echo = lambda o: {**o, "bidAmt": 100}  # noqa: E731 — 네이버가 이전 값을 돌려준 경우
+    with pytest.raises(NaverApiError, match="반영되지"):
+        cl.update("keyword", "nkw-1", "bid_amt", 150)
+
+    n = len(calls)
+    with pytest.raises(NaverApiError, match="차단"):
+        cl.update("campaign", "cmp-1", "daily_budget", 10000)  # 미검증 항목은 차단, 호출도 안 함
+    assert len(calls) == n
