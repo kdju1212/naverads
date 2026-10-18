@@ -42,6 +42,9 @@ def test_full_flow():
     assert {x["ad_account_id"] for x in camps} == {a1, a2} and len(camps) == 4
     assert len(c.get(f"/workspaces/{ws}/campaigns?product=SHOPPING", headers=owner).json()) == 2
     assert len(c.get(f"/workspaces/{ws}/ads?ad_type=SHOPPING_PRODUCT_AD&account_ids={a1}", headers=owner).json()) == 3
+    exts = c.get(f"/workspaces/{ws}/ad-extensions?account_ids={a1}", headers=owner).json()
+    assert [(e["ext_type"], e["owner_name"]) for e in exts] == [("SUB_LINKS", "파워링크그룹1"), ("SUB_LINKS", "파워링크그룹2")]
+    assert exts[0]["payload"] == [{"name": "신상품", "final": "https://example.com/new"}]  # JSON 문자열을 풀어 저장
 
     # 다른 조직은 아무것도 볼 수 없다
     outsider = user("other@b.com")
@@ -179,3 +182,13 @@ def test_real_stats(monkeypatch):
     assert json.loads(calls[0][2]["timeRange"]) == {"since": "2026-10-01", "until": "2026-10-01"}
     assert rows[0] == {"id": "cmp-1", "date": date(2026, 10, 1), "impCnt": 10, "clkCnt": 2, "salesAmt": 300,
                        "ccnt": None, "convAmt": None}
+
+
+def test_rsa_texts():
+    from app.sync import _rsa_texts
+
+    assets = [{"linkType": "HEADLINE", "assetData": '{"text": "여름 세일"}'},
+              {"linkType": "HEADLINE", "assetData": "무료배송"},
+              {"linkType": "DESCRIPTION", "assetData": {"text": "전 상품 할인"}},
+              {"linkType": "OTHER", "assetData": "무시"}]
+    assert _rsa_texts(assets) == {"headlines": ["여름 세일", "무료배송"], "descriptions": ["전 상품 할인"]}

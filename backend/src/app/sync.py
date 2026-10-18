@@ -1,10 +1,11 @@
 """네이버 → 로컬 DB 동기화. 계정 단위로 전체 교체(upsert)한다."""
+import json
 from datetime import date, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import Ad, AdAccount, AdGroup, Campaign, Keyword, PerformanceDaily, SyncRun, now
+from .models import Ad, AdAccount, AdExtension, AdGroup, Campaign, Keyword, PerformanceDaily, SyncRun, now
 from .naver import NaverApiError
 
 STATS_DAYS = 30
@@ -32,6 +33,33 @@ def _status(o):
     return "OFF" if o.get("userLock") else "ON"
 
 
+def _json(v):
+    """네이버는 일부 필드(adExtension, assetData)를 JSON 문자열로 준다."""
+    if isinstance(v, str):
+        try:
+            return json.loads(v)
+        except ValueError:
+            return {"text": v}
+    return v if v is not None else {}
+
+
+def _rsa_texts(assets) -> dict:
+    # shortcut: assetData 형식은 명세에 없어 문자열/JSON 모두 받아 문자열 값만 모은다, 실응답 확인 후 정리
+    out = {"headlines": [], "descriptions": []}
+    for x in assets:
+        key = {"HEADLINE": "headlines", "DESCRIPTION": "descriptions"}.get(x.get("linkType"))
+        if key:
+            d = _json(x.get("assetData"))
+            out[key].append(" ".join(v for v in d.values() if isinstance(v, str)) if isinstance(d, dict) else str(d))
+    return out
+
+
+def _sync_extensions(_upsert, client, owner_id: str):
+    for e in client.list_ad_extensions(owner_id):
+        _upsert(AdExtension, e["nccAdExtensionId"], owner_naver_id=owner_id, ext_type=e["type"], status=_status(e),
+                inspect_status=e.get("inspectStatus", ""), payload=_json(e.get("adExtension")))
+
+
 def sync_account(db: Session, account: AdAccount, client) -> SyncRun:
     run = SyncRun(ad_account_id=account.id, status="SUCCESS")
     db.add(run)
@@ -46,19 +74,25 @@ def sync_account(db: Session, account: AdAccount, client) -> SyncRun:
                            status=_status(c), daily_budget=c.get("dailyBudget") or 0)
             db.flush()
             campaigns.append(camp)
+            if camp.campaign_tp == "WEB_SITE":
+                _sync_extensions(_upsert, client, camp.naver_id)
             for g in client.list_adgroups(camp.naver_id):
                 grp = _upsert(AdGroup, g["nccAdgroupId"], ad_account_id=aid, campaign_id=camp.id, name=g["name"],
                               adgroup_type=g["adgroupType"], status=_status(g), bid_amt=g["bidAmt"])
                 db.flush()
                 if grp.adgroup_type == "WEB_SITE":
+                    _sync_extensions(_upsert, client, grp.naver_id)
                     for k in client.list_keywords(grp.naver_id):
                         _upsert(Keyword, k["nccKeywordId"], ad_account_id=aid, adgroup_id=grp.id, keyword=k["keyword"],
                                 status=_status(k), bid_amt=k["bidAmt"], use_group_bid=k.get("useGroupBidAmt", False))
                 for a in client.list_ads(grp.naver_id):
                     attr = a.get("adAttr") or {}
+                    payload = a.get("ad", {})
+                    if a.get("assets"):  # RSA_AD: 제목·설명은 ad가 아니라 assets에 온다
+                        payload = {**payload, **_rsa_texts(a["assets"])}
                     _upsert(Ad, a["nccAdId"], ad_account_id=aid, adgroup_id=grp.id, ad_type=a["type"], status=_status(a),
                             inspect_status=a.get("inspectStatus", ""), bid_amt=attr.get("bidAmt"),
-                            use_group_bid=attr.get("useGroupBidAmt", True), payload=a.get("ad", {}))
+                            use_group_bid=attr.get("useGroupBidAmt", True), payload=payload)
         db.commit()
         _sync_stats(db, account, client, campaigns)
     except NaverApiError as e:

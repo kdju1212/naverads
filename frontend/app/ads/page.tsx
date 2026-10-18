@@ -10,10 +10,12 @@ import { useFetch } from "@/lib/useFetch";
 
 type AdType = "TEXT_45" | "SHOPPING_PRODUCT_AD";
 interface Ad {
-  id: number; ad_account_id: number; adgroup_id: number; naver_id: string; ad_type: AdType; status: string;
+  id: number; ad_account_id: number; adgroup_id: number; naver_id: string; ad_type: AdType | "RSA_AD"; status: string;
   inspect_status: string; bid_amt: number | null; use_group_bid: boolean; payload: Record<string, unknown>;
 }
 const str = (v: unknown) => (typeof v === "string" ? v : null);
+// RSA_AD는 제목·설명이 여러 개(headlines/descriptions)로 온다
+const texts = (v: unknown) => (Array.isArray(v) && v.length ? v.join(" / ") : null);
 
 export default function AdsPage() {
   const { ws, query, product, accountName } = useApp();
@@ -31,8 +33,9 @@ export default function AdsPage() {
   ];
   const cols: Col<Ad>[] = tab === "TEXT_45" ? [
     common[0],
-    { key: "headline", label: "제목", value: (r) => str(r.payload.headline) },
-    { key: "desc", label: "설명", value: (r) => str(r.payload.description) },
+    { key: "type", label: "유형", value: (r) => (r.ad_type === "RSA_AD" ? "반응형" : "텍스트") },
+    { key: "headline", label: "제목", value: (r) => str(r.payload.headline) ?? texts(r.payload.headlines) },
+    { key: "desc", label: "설명", value: (r) => str(r.payload.description) ?? texts(r.payload.descriptions) },
     { key: "url", label: "연결 URL", value: (r) => str((r.payload.pc as { final?: string } | undefined)?.final) },
     ...common.slice(1),
   ] : [

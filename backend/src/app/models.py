@@ -127,6 +127,19 @@ class Ad(Base):
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+class AdExtension(Base):
+    """파워링크 확장소재. 소유자는 캠페인 또는 광고그룹(네이버 ID). 현재는 조회 전용."""
+    __tablename__ = "ad_extensions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ad_account_id: Mapped[int] = mapped_column(ForeignKey("ad_accounts.id"), index=True)
+    naver_id: Mapped[str] = mapped_column(String(50), unique=True)
+    owner_naver_id: Mapped[str] = mapped_column(String(50))
+    ext_type: Mapped[str] = mapped_column(String(40))
+    status: Mapped[str] = mapped_column(String(3))
+    inspect_status: Mapped[str] = mapped_column(String(20))
+    payload: Mapped[dict | list] = mapped_column(JSON, default=dict)
+
+
 class PerformanceDaily(Base):
     __tablename__ = "performance_daily"
     __table_args__ = (UniqueConstraint("campaign_id", "date"),)

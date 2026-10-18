@@ -89,6 +89,9 @@ class RealNaverClient:
     def list_ads(self, adgroup_id):
         return self._req("GET", "/ncc/ads", params={"nccAdgroupId": adgroup_id})
 
+    def list_ad_extensions(self, owner_id):
+        return self._req("GET", "/ncc/ad-extensions", params={"ownerId": owner_id})
+
     def stats(self, campaign_ids, since: date, until: date):
         # 명세(gh-pages assets/json/ncc-report.json): 일별(timeIncrement=1)은 단일 id만 지원, salesAmt는 VAT 포함
         fields = json.dumps(["impCnt", "clkCnt", "salesAmt", "ccnt", "convAmt"])
@@ -123,7 +126,7 @@ MOCK_FAIL_IDS: set[str] = set()  # 테스트용: 여기 있는 naver_id 수정�
 
 
 def _seed(cid: str) -> dict:
-    s = {"campaigns": {}, "adgroups": {}, "keywords": {}, "ads": {}}
+    s = {"campaigns": {}, "adgroups": {}, "keywords": {}, "ads": {}, "ad_extensions": {}}
     pl, sh = f"cmp-{cid}-pl", f"cmp-{cid}-sh"
     s["campaigns"][pl] = {"nccCampaignId": pl, "name": "파워링크_브랜드", "campaignTp": "WEB_SITE", "userLock": False, "dailyBudget": 50000}
     s["campaigns"][sh] = {"nccCampaignId": sh, "name": "쇼핑검색_상품", "campaignTp": "SHOPPING", "userLock": False, "dailyBudget": 30000}
@@ -136,6 +139,10 @@ def _seed(cid: str) -> dict:
         aid = f"ad-{cid}-pl{i}"
         s["ads"][aid] = {"nccAdId": aid, "nccAdgroupId": g, "type": "TEXT_45", "userLock": False, "inspectStatus": "APPROVED",
                          "ad": {"headline": "여름 원피스 할인", "description": "전 상품 무료배송", "pc": {"final": "https://example.com"}}}
+        eid = f"ext-{cid}-pl{i}"
+        s["ad_extensions"][eid] = {"nccAdExtensionId": eid, "ownerId": g, "type": "SUB_LINKS", "userLock": False,
+                                   "inspectStatus": "APPROVED",
+                                   "adExtension": '[{"name": "신상품", "final": "https://example.com/new"}]'}
     g = f"grp-{cid}-sh1"
     s["adgroups"][g] = {"nccAdgroupId": g, "nccCampaignId": sh, "name": "쇼핑그룹1", "adgroupType": "SHOPPING", "userLock": False, "bidAmt": 300}
     for p in (1, 2, 3):
@@ -163,6 +170,10 @@ class MockNaverClient:
 
     def list_ads(self, adgroup_id):
         return [dict(a) for a in self.s["ads"].values() if a["nccAdgroupId"] == adgroup_id]
+
+    def list_ad_extensions(self, owner_id):
+        # .get: 이 키가 생기기 전에 만들어진 Mock 저장소도 있다
+        return [dict(e) for e in self.s.get("ad_extensions", {}).values() if e["ownerId"] == owner_id]
 
     def stats(self, campaign_ids, since: date, until: date):
         out, d = [], since

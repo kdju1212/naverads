@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from . import bulk
 from .access import admin_membership, current_user, membership, resolve_account_ids
 from .db import Base, engine, get_db
-from .models import (AccountAccess, Ad, AdAccount, AdGroup, AuditLog, BulkJob, BulkJobRow, Campaign, Keyword, Membership,
+from .models import (AccountAccess, Ad, AdAccount, AdExtension, AdGroup, AuditLog, BulkJob, BulkJobRow, Campaign, Keyword, Membership,
                      NaverApiCredential, PerformanceDaily, Plan, Subscription, SyncRun, User, Workspace, WorkspaceAdAccount,
                      now)
 from .naver import NaverApiError, client_for
@@ -300,11 +300,24 @@ async def list_keywords(account_ids: str | None = None, adgroup_id: int | None =
 async def list_ads(ad_type: Literal["TEXT_45", "SHOPPING_PRODUCT_AD"], account_ids: str | None = None, adgroup_id: int | None = None,
              m: Membership = Depends(membership), db: Session = Depends(get_db)):
     ids = resolve_account_ids(db, m, _ids(account_ids))
-    s = select(Ad).where(Ad.ad_account_id.in_(ids), Ad.ad_type == ad_type)
+    # 파워링크 소재 탭에는 반응형 검색광고(RSA_AD)도 함께 보여 준다
+    types = ["TEXT_45", "RSA_AD"] if ad_type == "TEXT_45" else [ad_type]
+    s = select(Ad).where(Ad.ad_account_id.in_(ids), Ad.ad_type.in_(types))
     if adgroup_id:
         s = s.where(Ad.adgroup_id == adgroup_id)
     return _rows(db.scalars(s.order_by(Ad.ad_account_id, Ad.id)), "id", "ad_account_id", "adgroup_id", "naver_id", "ad_type",
                  "status", "inspect_status", "bid_amt", "use_group_bid", "payload")
+
+
+@app.get("/workspaces/{ws_id}/ad-extensions")
+async def list_ad_extensions(account_ids: str | None = None, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    ids = resolve_account_ids(db, m, _ids(account_ids))
+    owners = {o.naver_id: o.name for model in (Campaign, AdGroup)
+              for o in db.scalars(select(model).where(model.ad_account_id.in_(ids)))}
+    exts = db.scalars(select(AdExtension).where(AdExtension.ad_account_id.in_(ids))
+                      .order_by(AdExtension.ad_account_id, AdExtension.id))
+    return [{**r, "owner_name": owners.get(r["owner_naver_id"])} for r in _rows(
+        exts, "id", "ad_account_id", "naver_id", "owner_naver_id", "ext_type", "status", "inspect_status", "payload")]
 
 
 # ---------- 대량 작업 ----------
