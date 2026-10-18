@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+sqlalchemy>=2
+pydantic[email]
+python-multipart
+openpyxl
+httpx
+cryptography
+pytest
