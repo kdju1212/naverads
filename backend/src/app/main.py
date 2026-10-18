@@ -320,6 +320,47 @@ async def list_ad_extensions(account_ids: str | None = None, m: Membership = Dep
         exts, "id", "ad_account_id", "naver_id", "owner_naver_id", "ext_type", "status", "inspect_status", "payload")]
 
 
+class SubLinkIn(BaseModel):
+    name: str
+    final: str
+
+
+class ExtensionIn(BaseModel):
+    adgroup_id: int
+    # 실데이터로 내용 구조를 확인한 유형만: DESCRIPTION {heading, description}, SUB_LINKS [{name, final}]
+    ext_type: Literal["DESCRIPTION", "SUB_LINKS"]
+    heading: str = ""
+    description: str = ""
+    links: list[SubLinkIn] = []
+
+
+@app.post("/workspaces/{ws_id}/ad-extensions")
+async def create_ad_extension(body: ExtensionIn, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    grp = db.get(AdGroup, body.adgroup_id)
+    if not grp:
+        raise HTTPException(404, "광고그룹을 찾을 수 없습니다")
+    if body.ext_type == "DESCRIPTION":
+        if not body.heading.strip() or not body.description.strip():
+            raise HTTPException(400, "추가설명은 제목과 설명을 모두 입력하세요")
+        content = {"heading": body.heading.strip(), "description": body.description.strip()}
+    else:
+        links = [{"name": x.name.strip(), "final": x.final.strip()} for x in body.links]
+        if not links or any(not x["name"] or not x["final"].startswith(("http://", "https://")) for x in links):
+            raise HTTPException(400, "서브링크는 이름과 http(s):// 로 시작하는 URL을 입력하세요")
+        content = links
+    ext = bulk.create_extension(db, m, grp, body.ext_type, content)
+    return {"id": ext.id, "naver_id": ext.naver_id, "inspect_status": ext.inspect_status}
+
+
+@app.delete("/workspaces/{ws_id}/ad-extensions/{ext_id}")
+async def delete_ad_extension(ext_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    ext = db.get(AdExtension, ext_id)
+    if not ext:
+        raise HTTPException(404, "확장소재를 찾을 수 없습니다")
+    bulk.delete_extension(db, m, ext)
+    return {"ok": True}
+
+
 # ---------- 대량 작업 ----------
 class ChangeIn(BaseModel):
     entity_type: str

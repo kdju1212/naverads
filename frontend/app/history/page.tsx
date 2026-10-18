@@ -14,7 +14,7 @@ interface Log {
 }
 interface Member { user_id: number; name: string; email: string }
 
-const ACTION: Record<string, string> = { UPDATE: "변경", ACCOUNT_CONNECT: "계정 연결", ACCOUNT_DISCONNECT: "계정 해제", ACCESS_SET: "권한 배정" };
+const ACTION: Record<string, string> = { UPDATE: "변경", CREATE: "생성", DELETE: "삭제", ACCOUNT_CONNECT: "계정 연결", ACCOUNT_DISCONNECT: "계정 해제", ACCESS_SET: "권한 배정" };
 
 export default function HistoryPage() {
   const { ws, selected, accountName } = useApp();

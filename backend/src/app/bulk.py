@@ -1,5 +1,5 @@
 """대량 작업 엔진: 미리보기(검증) → 실행(권한 재검증) → 행별 결과 + 감사 로그.
-모든 광고 데이터 쓰기는 이 경로만 사용한다."""
+모든 광고 데이터 쓰기는 이 모듈만 사용한다(확장소재 생성·삭제도 여기서 권한 확인·감사 로그)."""
 import io
 
 from fastapi import HTTPException
@@ -12,6 +12,7 @@ from .models import (Ad, AdAccount, AdExtension, AdGroup, AuditLog, BulkJob, Bul
                      NaverApiCredential, WorkspaceAdAccount, now)
 from .naver import NaverApiError, client_for
 from .security import decrypt
+from .sync import _json, _status
 
 ENTITY_MODELS = {"campaign": Campaign, "adgroup": AdGroup, "keyword": Keyword, "ad": Ad, "ad_extension": AdExtension}
 ALLOWED_FIELDS = {
@@ -156,6 +157,39 @@ def parse_excel(data: bytes) -> list[dict]:
     if not rows or [str(c or "").strip() for c in rows[0][:4]] != EXCEL_HEADER:
         raise HTTPException(400, f"첫 행은 {EXCEL_HEADER} 이어야 합니다")
     return [dict(zip(EXCEL_HEADER, ("" if c is None else str(c) for c in r[:4]))) for r in rows[1:] if any(r[:4])]
+
+
+def create_extension(db: Session, m: Membership, grp: AdGroup, ext_type: str, content) -> AdExtension:
+    """확장소재 생성은 행 단위 미리보기 없이 바로 실행하되, 권한 확인과 감사 로그는 같은 규칙을 따른다."""
+    if grp.ad_account_id not in accessible_account_ids(db, m, edit=True):
+        raise HTTPException(403, "이 광고 계정을 수정할 권한이 없습니다")
+    if grp.adgroup_type != "WEB_SITE":
+        raise HTTPException(400, "확장소재는 파워링크 광고그룹에만 만들 수 있습니다")
+    try:
+        e = _client(db, m.workspace_id, grp.ad_account_id).create_ad_extension(grp.naver_id, ext_type, content)
+    except NaverApiError as err:
+        raise HTTPException(400, f"네이버 확장소재 생성 실패: {err}")
+    ext = AdExtension(ad_account_id=grp.ad_account_id, naver_id=e["nccAdExtensionId"], owner_naver_id=grp.naver_id,
+                      ext_type=e.get("type", ext_type), status=_status(e), inspect_status=e.get("inspectStatus", ""),
+                      payload=_json(e["adExtension"]) if e.get("adExtension") else content)
+    db.add(ext)
+    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=grp.ad_account_id, action="CREATE",
+                    entity_type="ad_extension", naver_id=ext.naver_id, field="ext_type", after=ext.ext_type))
+    db.commit()
+    return ext
+
+
+def delete_extension(db: Session, m: Membership, ext: AdExtension):
+    if ext.ad_account_id not in accessible_account_ids(db, m, edit=True):
+        raise HTTPException(403, "이 광고 계정을 수정할 권한이 없습니다")
+    try:
+        _client(db, m.workspace_id, ext.ad_account_id).delete_ad_extension(ext.naver_id)
+    except NaverApiError as err:
+        raise HTTPException(400, f"네이버 확장소재 삭제 실패: {err}")
+    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=ext.ad_account_id, action="DELETE",
+                    entity_type="ad_extension", naver_id=ext.naver_id, field="ext_type", before=ext.ext_type))
+    db.delete(ext)
+    db.commit()
 
 
 def excel_template() -> bytes:

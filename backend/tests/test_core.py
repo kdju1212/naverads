@@ -91,6 +91,25 @@ def test_full_flow():
                if e["naver_id"] == "ext-1001-pl1")
     assert ext["status"] == "OFF"
 
+    # 확장소재 생성·삭제: 입력 검증, VIEW 권한 계정은 거부, 감사 로그
+    grps = {g["naver_id"]: g["id"] for g in c.get(f"/workspaces/{ws}/adgroups", headers=owner).json()}
+    url = f"/workspaces/{ws}/ad-extensions"
+    assert c.post(url, headers=owner, json={"adgroup_id": grps["grp-1001-pl1"], "ext_type": "DESCRIPTION", "heading": "이벤트"}).status_code == 400
+    assert c.post(url, headers=owner, json={"adgroup_id": grps["grp-1001-pl1"], "ext_type": "SUB_LINKS",
+                                           "links": [{"name": "a", "final": "javascript:x"}]}).status_code == 400
+    assert c.post(url, headers=owner, json={"adgroup_id": grps["grp-1001-sh1"], "ext_type": "DESCRIPTION",
+                                           "heading": "a", "description": "b"}).status_code == 400  # 쇼핑 그룹
+    assert c.post(url, headers=staff, json={"adgroup_id": grps["grp-1002-pl1"], "ext_type": "DESCRIPTION",
+                                           "heading": "a", "description": "b"}).status_code == 403  # VIEW 계정
+    new = c.post(url, headers=owner, json={"adgroup_id": grps["grp-1001-pl1"], "ext_type": "SUB_LINKS",
+                                          "links": [{"name": "신상품", "final": "https://example.com/a"}]}).json()
+    row = next(e for e in c.get(f"{url}?account_ids={a1}", headers=owner).json() if e["id"] == new["id"])
+    assert row["payload"] == [{"name": "신상품", "final": "https://example.com/a"}] and row["owner_name"] == "파워링크그룹1"
+    assert c.delete(f"{url}/{new['id']}", headers=owner).status_code == 200
+    assert all(e["id"] != new["id"] for e in c.get(f"{url}?account_ids={a1}", headers=owner).json())
+    logs = c.get(f"/workspaces/{ws}/audit-logs?account_id={a1}", headers=owner).json()
+    assert {l["action"] for l in logs if l["naver_id"] == new["naver_id"]} == {"CREATE", "DELETE"}
+
     # 엑셀 업로드 → 미리보기
     wb = Workbook()
     wb.active.append(["entity_type", "naver_id", "field", "value"])

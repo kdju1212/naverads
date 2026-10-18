@@ -60,6 +60,10 @@ VERIFIED_WRITES = {("campaign", "status"), ("campaign", "daily_budget"), ("adgro
                    ("ad_extension", "status")}
 
 
+# 확장소재 노출 스케줄: 요일별 0~23시 비트 합 (2^24-1 = 매시간)
+ALL_WEEK = {d: 2 ** 24 - 1 for d in ("SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT")}
+
+
 class RealNaverClient:
     BASE = "https://api.searchad.naver.com"
 
@@ -78,7 +82,7 @@ class RealNaverClient:
             raise NaverApiError(f"네트워크 오류: {e}") from e
         if r.status_code >= 400:
             raise NaverApiError(f"{r.status_code} {r.text[:200]}")
-        return r.json()
+        return r.json() if r.content else None  # DELETE는 본문 없이 응답할 수 있다
 
     def list_campaigns(self):
         return self._req("GET", "/ncc/campaigns")
@@ -94,6 +98,16 @@ class RealNaverClient:
 
     def list_ad_extensions(self, owner_id):
         return self._req("GET", "/ncc/ad-extensions", params={"ownerId": owner_id})
+
+    def create_ad_extension(self, adgroup_id, ext_type, content):
+        # 명세상 생성에 비즈채널·스케줄이 필수라 소유 광고그룹의 채널을 쓰고 매일 24시간 노출로 만든다
+        grp = self._req("GET", f"/ncc/adgroups/{adgroup_id}")
+        return self._req("POST", "/ncc/ad-extensions", json={
+            "ownerId": adgroup_id, "type": ext_type, "userLock": False, "adExtension": content,
+            "pcChannelId": grp.get("pcChannelId"), "mobileChannelId": grp.get("mobileChannelId"), "schedule": ALL_WEEK})
+
+    def delete_ad_extension(self, ext_id):
+        self._req("DELETE", f"/ncc/ad-extensions/{ext_id}")
 
     def stats(self, campaign_ids, since: date, until: date):
         # 명세(gh-pages assets/json/ncc-report.json): 일별(timeIncrement=1)은 단일 id만 지원, salesAmt는 VAT 포함
@@ -177,6 +191,19 @@ class MockNaverClient:
     def list_ad_extensions(self, owner_id):
         # .get: 이 키가 생기기 전에 만들어진 Mock 저장소도 있다
         return [dict(e) for e in self.s.get("ad-extensions", {}).values() if e["ownerId"] == owner_id]
+
+    def create_ad_extension(self, adgroup_id, ext_type, content):
+        if adgroup_id not in self.s["adgroups"]:
+            raise NaverApiError("대상 광고그룹이 존재하지 않습니다")
+        eid = f"ext-mock-{len(self.s.setdefault('ad-extensions', {})) + 1}-{random.randint(1000, 9999)}"
+        e = {"nccAdExtensionId": eid, "ownerId": adgroup_id, "type": ext_type, "userLock": False,
+             "inspectStatus": "UNDER_REVIEW", "adExtension": json.dumps(content, ensure_ascii=False)}
+        self.s["ad-extensions"][eid] = e
+        return dict(e)
+
+    def delete_ad_extension(self, ext_id):
+        if self.s.get("ad-extensions", {}).pop(ext_id, None) is None:
+            raise NaverApiError("대상 확장소재가 존재하지 않습니다")
 
     def stats(self, campaign_ids, since: date, until: date):
         out, d = [], since

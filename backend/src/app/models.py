@@ -172,7 +172,7 @@ class BulkJobRow(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     job_id: Mapped[int] = mapped_column(ForeignKey("bulk_jobs.id"), index=True)
     ad_account_id: Mapped[int | None] = mapped_column(ForeignKey("ad_accounts.id"), nullable=True)
-    entity_type: Mapped[str] = mapped_column(String(10))
+    entity_type: Mapped[str] = mapped_column(String(20))  # SQLite·D1은 길이를 강제하지 않아 마이그레이션 불필요
     naver_id: Mapped[str] = mapped_column(String(50))
     field: Mapped[str] = mapped_column(String(20))
     before: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -188,8 +188,8 @@ class AuditLog(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     ad_account_id: Mapped[int | None] = mapped_column(ForeignKey("ad_accounts.id"), nullable=True)
     job_id: Mapped[int | None] = mapped_column(ForeignKey("bulk_jobs.id"), nullable=True)
-    action: Mapped[str] = mapped_column(String(30))  # UPDATE | ACCOUNT_CONNECT | ACCOUNT_DISCONNECT | ACCESS_SET
-    entity_type: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    action: Mapped[str] = mapped_column(String(30))  # UPDATE | CREATE | DELETE | ACCOUNT_CONNECT | ACCOUNT_DISCONNECT | ACCESS_SET
+    entity_type: Mapped[str | None] = mapped_column(String(20), nullable=True)  # ad_extension은 10자 초과
     naver_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     field: Mapped[str | None] = mapped_column(String(20), nullable=True)
     before: Mapped[str | None] = mapped_column(String(50), nullable=True)
