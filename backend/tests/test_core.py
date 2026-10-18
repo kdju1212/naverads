@@ -212,6 +212,9 @@ def test_real_stats(monkeypatch):
     assert rows[0] == {"id": "cmp-1", "date": date(2026, 10, 1), "impCnt": 10, "clkCnt": 2, "salesAmt": 300,
                        "ccnt": None, "convAmt": None}
 
+    RealNaverClient("k", "s", "1").delete_ad_extension("ext-1")
+    assert calls[-1] == ("DELETE", "/ncc/ad-extensions", {"ids": "ext-1"})  # 경로 방식은 실계정 404
+
 
 def test_rsa_texts():
     from app.sync import _rsa_texts

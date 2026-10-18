@@ -107,7 +107,8 @@ class RealNaverClient:
             "pcChannelId": grp.get("pcChannelId"), "mobileChannelId": grp.get("mobileChannelId"), "schedule": ALL_WEEK})
 
     def delete_ad_extension(self, ext_id):
-        self._req("DELETE", f"/ncc/ad-extensions/{ext_id}")
+        # 명세의 /ncc/ad-extensions/{id}는 실계정에서 404, 공식 샘플(AdExtensions.java)처럼 ids 쿼리로 지운다
+        self._req("DELETE", "/ncc/ad-extensions", params={"ids": ext_id})
 
     def stats(self, campaign_ids, since: date, until: date):
         # 명세(gh-pages assets/json/ncc-report.json): 일별(timeIncrement=1)은 단일 id만 지원, salesAmt는 VAT 포함
