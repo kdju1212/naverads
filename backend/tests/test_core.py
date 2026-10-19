@@ -286,6 +286,35 @@ def test_auto_bid():
     assert c.get(url, headers=owner).json() == []
 
 
+def test_sync_removes_stale():
+    from app.naver import _MOCK_STORE
+
+    owner = user("stale@a.com")
+    ws = c.post("/workspaces", json={"name": "S"}, headers=owner).json()["id"]
+    cred = c.post(f"/workspaces/{ws}/credentials", json={"label": "m", "api_key": "k", "secret_key": "s"}, headers=owner).json()["id"]
+    acc = c.post(f"/workspaces/{ws}/ad-accounts", json={"credential_id": cred, "customer_id": "5005", "name": "s"}, headers=owner).json()["id"]
+    sync = lambda: c.post(f"/workspaces/{ws}/ad-accounts/{acc}/sync", headers=owner).json()["status"]  # noqa: E731
+    assert sync() == "SUCCESS"
+    kw = next(k for k in c.get(f"/workspaces/{ws}/keywords", headers=owner).json() if k["naver_id"] == "kwd-5005-11")
+    c.put(f"/workspaces/{ws}/auto-bids", headers=owner, json={"keyword_ids": [kw["id"]], "device": "PC", "target_rank": 1, "max_bid": 500})
+
+    # 네이버 화면에서 키워드·확장소재·쇼핑 캠페인(성과 통계 있음)을 지운 상황
+    s = _MOCK_STORE["5005"]
+    s["keywords"].pop("kwd-5005-11")
+    s["ad-extensions"].pop("ext-5005-pl1")
+    s["campaigns"].pop("cmp-5005-sh")
+    assert sync() == "SUCCESS"
+
+    get = lambda p: {x["naver_id"] for x in c.get(f"/workspaces/{ws}/{p}", headers=owner).json()}  # noqa: E731
+    assert "kwd-5005-11" not in get("keywords") and "kwd-5005-12" in get("keywords")
+    assert get("ad-extensions") == {"ext-5005-pl2"}
+    assert get("campaigns") == {"cmp-5005-pl"}
+    assert "grp-5005-sh1" not in get("adgroups") and not get("ads?ad_type=SHOPPING_PRODUCT_AD")
+    assert c.get(f"/workspaces/{ws}/auto-bids", headers=owner).json() == []
+    perf = c.get(f"/workspaces/{ws}/performance/accounts", headers=owner).json()[0]
+    assert perf["SHOPPING"] is None and perf["WEB_SITE"] is not None
+
+
 def test_delete_extension_already_gone():
     from app.naver import _MOCK_STORE
 

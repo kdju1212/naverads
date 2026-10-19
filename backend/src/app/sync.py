@@ -2,10 +2,10 @@
 import json
 from datetime import date, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from .models import Ad, AdAccount, AdExtension, AdGroup, Campaign, Keyword, PerformanceDaily, SyncRun, now
+from .models import Ad, AdAccount, AdExtension, AdGroup, AutoBidRule, Campaign, Keyword, PerformanceDaily, SyncRun, now
 from .naver import NaverApiError
 
 STATS_DAYS = 30
@@ -15,18 +15,35 @@ class _Upserter:
     """계정의 기존 객체를 모델당 한 번에 읽어 두고 upsert. 객체마다 SELECT하면 Workers에서 CPU 한도를 넘는다."""
 
     def __init__(self, db: Session, account_id: int):
-        self.db, self.aid, self.cache = db, account_id, {}
+        self.db, self.aid, self.cache, self.seen = db, account_id, {}, set()
 
-    def __call__(self, model, naver_id: str, **fields):
+    def _load(self, model):
         if model not in self.cache:
             self.cache[model] = {o.naver_id: o for o in self.db.scalars(select(model).where(model.ad_account_id == self.aid))}
-        obj = self.cache[model].get(naver_id)
+        return self.cache[model]
+
+    def __call__(self, model, naver_id: str, **fields):
+        self.seen.add((model, naver_id))
+        obj = self._load(model).get(naver_id)
         if obj is None:
             obj = self.cache[model][naver_id] = model(naver_id=naver_id, ad_account_id=self.aid)
             self.db.add(obj)
         for k, v in fields.items():
             setattr(obj, k, v)
         return obj
+
+    def remove_stale(self):
+        """이번 동기화에서 네이버가 돌려주지 않은 객체를 지운다. 목록 조회가 전부 성공한 뒤에만 호출할 것."""
+        gone = {m: [o for nid, o in self._load(m).items() if (m, nid) not in self.seen]
+                for m in (Campaign, AdGroup, Keyword, Ad, AdExtension)}
+        if gone[Keyword]:
+            self.db.execute(delete(AutoBidRule).where(AutoBidRule.keyword_id.in_([k.id for k in gone[Keyword]])))
+        if gone[Campaign]:
+            self.db.execute(delete(PerformanceDaily).where(PerformanceDaily.campaign_id.in_([c.id for c in gone[Campaign]])))
+        for m in (Keyword, Ad, AdExtension, AdGroup, Campaign):  # 외래키: 자식부터
+            for o in gone[m]:
+                self.db.delete(o)
+            self.db.flush()
 
 
 def _status(o):
@@ -93,6 +110,7 @@ def sync_account(db: Session, account: AdAccount, client) -> SyncRun:
                     _upsert(Ad, a["nccAdId"], ad_account_id=aid, adgroup_id=grp.id, ad_type=a["type"], status=_status(a),
                             inspect_status=a.get("inspectStatus", ""), bid_amt=attr.get("bidAmt"),
                             use_group_bid=attr.get("useGroupBidAmt", True), payload=payload)
+        _upsert.remove_stale()  # 네이버에서 지운 항목. 조회 중 오류가 나면 여기 오지 않고 롤백된다
         db.commit()
         _sync_stats(db, account, client, campaigns)
     except NaverApiError as e:

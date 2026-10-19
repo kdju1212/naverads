@@ -252,7 +252,7 @@ def delete_extension(db: Session, m: Membership, ext: AdExtension):
     try:
         client.delete_ad_extension(ext.naver_id)
     except NaverApiError as err:
-        # 네이버에서 이미 지워진 확장소재는 404가 난다(동기화는 사라진 항목을 지우지 않음): 소유자 목록으로 실제 존재 여부를 확인
+        # 네이버에서 이미 지워진 확장소재는 404가 난다(다음 동기화 전까지는 앱에 남아 있다): 소유자 목록으로 실제 존재 여부를 확인
         try:
             gone = all(e["nccAdExtensionId"] != ext.naver_id for e in client.list_ad_extensions(ext.owner_naver_id))
         except NaverApiError:
