@@ -143,8 +143,21 @@ def test_full_flow():
     # 성과·대시보드·구독
     perf = c.get(f"/workspaces/{ws}/performance/accounts", headers=owner).json()
     assert len(perf) == 2 and perf[0]["WEB_SITE"]["cost"] > 0 and perf[0]["SHOPPING"] is not None
+    p1 = next(p for p in perf if p["ad_account_id"] == a1)
+    perf_a1_cost = p1["WEB_SITE"]["cost"] + p1["SHOPPING"]["cost"]
     dash = c.get(f"/workspaces/{ws}/dashboard", headers=owner).json()
     assert dash["connected_accounts"] == 2 and job["id"] in dash["failed_jobs"]
+    ops = c.get(f"/workspaces/{ws}/dashboard?account_ids={a1}", headers=owner).json()["ops"]
+    assert sum(ops["campaign"].values()) == 2 and ops["campaign"] == {"ON": 1, "OFF": 1} and sum(ops["keyword"].values()) == 6
+    from datetime import date, timedelta
+    until = date.today() - timedelta(days=1)
+    daily = c.get(f"/workspaces/{ws}/performance/daily?since={until - timedelta(days=6)}&until={until}&account_ids={a1}",
+                  headers=owner).json()
+    pl = c.get(f"/workspaces/{ws}/performance/daily?since={until - timedelta(days=6)}&until={until}&account_ids={a1}&product=WEB_SITE",
+               headers=owner).json()
+    assert len(daily) == 7 and daily[-1]["date"] == until.isoformat()
+    assert sum(d["cost"] for d in daily) == perf_a1_cost and 0 < sum(d["cost"] for d in pl) < perf_a1_cost
+    assert c.get(f"/workspaces/{ws}/performance/daily?since={until}&until={until - timedelta(days=1)}", headers=owner).status_code == 400
     sub = c.get(f"/workspaces/{ws}/subscription", headers=owner).json()
     assert sub["status"] == "TRIALING" and sub["monthly_total"] == 2 * 19_900
     assert c.get(f"/workspaces/{ws}/subscription", headers=staff).status_code == 403

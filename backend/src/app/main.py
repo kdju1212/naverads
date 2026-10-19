@@ -553,9 +553,44 @@ async def performance_accounts(since: date | None = None, until: date | None = N
     return _account_performance(db, resolve_account_ids(db, m, _ids(account_ids)), since, until)
 
 
+@app.get("/workspaces/{ws_id}/performance/daily")
+async def performance_daily(since: date, until: date, account_ids: str | None = None, product: ProductType = None,
+                            m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    """일별 합계. 동기화된 행이 없는 날은 0 (전환·매출은 미제공 NULL 유지)."""
+    if since > until or (until - since).days > 92:
+        raise HTTPException(400, "기간은 93일 이내")
+    ids = resolve_account_ids(db, m, _ids(account_ids))
+    q = (select(PerformanceDaily.date, func.sum(PerformanceDaily.impressions), func.sum(PerformanceDaily.clicks),
+                func.sum(PerformanceDaily.cost), func.sum(PerformanceDaily.conversions), func.sum(PerformanceDaily.revenue))
+         .join(Campaign, Campaign.id == PerformanceDaily.campaign_id)
+         .where(PerformanceDaily.ad_account_id.in_(ids), PerformanceDaily.date.between(since, until))
+         .group_by(PerformanceDaily.date))
+    if product:
+        q = q.where(Campaign.campaign_tp == product)
+    # D1은 날짜를 문자열로 돌려줄 수 있어 문자열 키로 맞춘다
+    by_day = {str(d)[:10]: (imp, clk, cost, conv, rev) for d, imp, clk, cost, conv, rev in db.execute(q)}
+    out, d = [], since
+    while d <= until:
+        imp, clk, cost, conv, rev = by_day.get(d.isoformat(), (0, 0, 0, None, None))
+        out.append({"date": d.isoformat(), "impressions": imp, "clicks": clk, "cost": cost, "conversions": conv, "revenue": rev})
+        d += timedelta(days=1)
+    return out
+
+
+def _ops_summary(db: Session, ids: set[int]):
+    def count(model, col):
+        return dict(db.execute(select(col, func.count()).where(model.ad_account_id.in_(ids)).group_by(col)).all())
+    return {"campaign": count(Campaign, Campaign.status), "adgroup": count(AdGroup, AdGroup.status),
+            "keyword": count(Keyword, Keyword.status), "ad_inspect": count(Ad, Ad.inspect_status),
+            "ext_inspect": count(AdExtension, AdExtension.inspect_status),
+            "auto_bids": db.scalar(select(func.count()).select_from(AutoBidRule).join(Keyword, Keyword.id == AutoBidRule.keyword_id)
+                                   .where(Keyword.ad_account_id.in_(ids), AutoBidRule.enabled.is_(True)))}
+
+
 @app.get("/workspaces/{ws_id}/dashboard")
-async def dashboard(m: Membership = Depends(membership), db: Session = Depends(get_db)):
+async def dashboard(account_ids: str | None = None, m: Membership = Depends(membership), db: Session = Depends(get_db)):
     ids = resolve_account_ids(db, m, None)
+    selected = resolve_account_ids(db, m, _ids(account_ids))
     until = date.today() - timedelta(days=1)
     jobs = db.scalars(select(BulkJob).where(BulkJob.workspace_id == m.workspace_id, BulkJob.status != "PREVIEW")
                       .order_by(BulkJob.id.desc()).limit(10)).all()
@@ -570,6 +605,7 @@ async def dashboard(m: Membership = Depends(membership), db: Session = Depends(g
         "recent_jobs": [_job_out(db, j) | {"accounts": None} for j in jobs],
         "failed_jobs": [j.id for j in jobs if j.status in ("PARTIAL", "FAILED")],
         "sync_errors": failed_syncs,
+        "ops": _ops_summary(db, selected),
     }
 
 
