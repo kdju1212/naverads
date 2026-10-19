@@ -154,13 +154,28 @@ class PerformanceDaily(Base):
     revenue: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
+class AutoBidRule(Base):
+    """키워드 자동입찰: 목표 순위의 예상 입찰가로 맞추되 최대 입찰가를 넘지 않는다. 실행은 만든 사람 권한으로."""
+    __tablename__ = "auto_bid_rules"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    keyword_id: Mapped[int] = mapped_column(ForeignKey("keywords.id"), unique=True)
+    device: Mapped[str] = mapped_column(String(6))  # PC | MOBILE
+    target_rank: Mapped[int] = mapped_column(Integer)
+    max_bid: Mapped[int] = mapped_column(Integer)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_result: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+
 # ---- 작업·감사 ----
 class BulkJob(Base):
     __tablename__ = "bulk_jobs"
     id: Mapped[int] = mapped_column(primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    source: Mapped[str] = mapped_column(String(10))  # UI | EXCEL | RETRY
+    source: Mapped[str] = mapped_column(String(10))  # UI | EXCEL | RETRY | AUTO_BID
     status: Mapped[str] = mapped_column(String(10), default="PREVIEW")  # PREVIEW|RUNNING|DONE|PARTIAL|FAILED
     parent_job_id: Mapped[int | None] = mapped_column(ForeignKey("bulk_jobs.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

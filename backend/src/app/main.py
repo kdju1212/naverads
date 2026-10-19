@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from . import bulk
 from .access import admin_membership, current_user, membership, resolve_account_ids
 from .db import Base, engine, get_db
-from .models import (AccountAccess, Ad, AdAccount, AdExtension, AdGroup, AuditLog, BulkJob, BulkJobRow, Campaign, Keyword, Membership,
+from .models import (AccountAccess, Ad, AdAccount, AdExtension, AdGroup, AuditLog, AutoBidRule, BulkJob, BulkJobRow, Campaign, Keyword, Membership,
                      NaverApiCredential, PerformanceDaily, Plan, Subscription, SyncRun, User, Workspace, WorkspaceAdAccount,
                      now)
 from .naver import NaverApiError, client_for
@@ -428,6 +428,82 @@ async def execute_bulk_job(job_id: int, m: Membership = Depends(membership), db:
 @app.post("/workspaces/{ws_id}/bulk-jobs/{job_id}/retry-failed")
 async def retry_bulk_job(job_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
     return _job_out(db, bulk.retry_failed(db, m, _job(db, m, job_id)))
+
+
+# ---------- 자동입찰 (목표 순위) ----------
+class AutoBidIn(BaseModel):
+    keyword_ids: list[int]
+    device: Literal["PC", "MOBILE"]
+    target_rank: int
+    max_bid: int
+    enabled: bool = True
+
+
+def _editable_keywords(db: Session, m: Membership, ids: list[int]) -> list[Keyword]:
+    allowed = resolve_account_ids(db, m, None, edit=True)
+    kws = db.scalars(select(Keyword).where(Keyword.id.in_(ids))).all()
+    if not ids or len(kws) != len(set(ids)) or any(k.ad_account_id not in allowed for k in kws):
+        raise HTTPException(403, "키워드가 없거나 수정 권한이 없습니다")
+    return kws
+
+
+@app.get("/workspaces/{ws_id}/auto-bids")
+async def list_auto_bids(m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    ids = resolve_account_ids(db, m, None)
+    q = (select(AutoBidRule, Keyword).join(Keyword, Keyword.id == AutoBidRule.keyword_id)
+         .where(AutoBidRule.workspace_id == m.workspace_id, Keyword.ad_account_id.in_(ids)).order_by(AutoBidRule.id))
+    return [{**_rows([r], "id", "keyword_id", "device", "target_rank", "max_bid", "enabled", "last_run_at", "last_result")[0],
+             "keyword": k.keyword, "ad_account_id": k.ad_account_id, "bid_amt": k.bid_amt} for r, k in db.execute(q)]
+
+
+@app.put("/workspaces/{ws_id}/auto-bids")
+async def set_auto_bids(body: AutoBidIn, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    """선택한 키워드에 같은 규칙을 만들거나 덮어쓴다. 실행은 마지막으로 저장한 사람의 권한으로 한다."""
+    hi_rank = 10 if body.device == "PC" else 5
+    if not 1 <= body.target_rank <= hi_rank:
+        raise HTTPException(400, f"{body.device} 목표 순위는 1~{hi_rank}위")
+    lo, hi = bulk.BID_RANGE["WEB_SITE"]
+    if not lo <= body.max_bid <= hi or body.max_bid % 10:
+        raise HTTPException(400, f"최대 입찰가는 {lo:,}~{hi:,}원, 10원 단위")
+    for k in _editable_keywords(db, m, body.keyword_ids):
+        r = db.scalar(select(AutoBidRule).where(AutoBidRule.keyword_id == k.id))
+        if r is None:
+            r = AutoBidRule(workspace_id=m.workspace_id, keyword_id=k.id)
+            db.add(r)
+        r.device, r.target_rank, r.max_bid, r.enabled, r.created_by = (body.device, body.target_rank, body.max_bid,
+                                                                       body.enabled, m.user_id)
+        db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=k.ad_account_id, action="AUTO_BID_SET",
+                        entity_type="keyword", naver_id=k.naver_id, field="auto_bid",
+                        after=f"{body.device} {body.target_rank}위 최대 {body.max_bid}" + ("" if body.enabled else " 중지")))
+    db.commit()
+    return {"ok": True}
+
+
+class AutoBidIdsIn(BaseModel):
+    keyword_ids: list[int]
+
+
+@app.post("/workspaces/{ws_id}/auto-bids/delete")
+async def delete_auto_bids(body: AutoBidIdsIn, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    for k in _editable_keywords(db, m, body.keyword_ids):
+        r = db.scalar(select(AutoBidRule).where(AutoBidRule.keyword_id == k.id))
+        if r:
+            db.delete(r)
+            db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=k.ad_account_id,
+                            action="AUTO_BID_DELETE", entity_type="keyword", naver_id=k.naver_id, field="auto_bid"))
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/workspaces/{ws_id}/auto-bids/run")
+async def run_auto_bids(body: AutoBidIdsIn | None = None, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    """지금 실행. keyword_ids를 주면 그 키워드 규칙만."""
+    rule_ids = None
+    if body and body.keyword_ids:
+        kids = [k.id for k in _editable_keywords(db, m, body.keyword_ids)]
+        rule_ids = list(db.scalars(select(AutoBidRule.id).where(AutoBidRule.keyword_id.in_(kids))))
+    jobs = bulk.run_auto_bids(db, m.workspace_id, rule_ids)
+    return {"job_ids": [j.id for j in jobs]}
 
 
 # ---------- 이력·성과·대시보드 ----------

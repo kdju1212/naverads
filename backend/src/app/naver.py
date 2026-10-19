@@ -123,6 +123,18 @@ class RealNaverClient:
                             "ccnt": s.get("ccnt"), "convAmt": s.get("convAmt")})
         return out
 
+    def estimate_bids(self, device, items):
+        """items: [(nccKeywordId, 순위)] → {nccKeywordId: 예상 입찰가}. 명세(gh-pages assets/json/estimate.json)."""
+        out = {}
+        for i in range(0, len(items), 100):  # shortcut: 한 번에 보낼 수 있는 개수는 명세에 없어 100개씩, 오류 나면 줄이기
+            chunk = items[i:i + 100]
+            r = self._req("POST", "/estimate/average-position-bid/id", json={
+                "device": device, "items": [{"key": k, "position": p} for k, p in chunk]})
+            # 응답은 요청 순서대로 온다. nccKeywordId가 있으면 그걸 쓴다
+            for (k, _), e in zip(chunk, r.get("estimate", [])):
+                out[e.get("nccKeywordId") or k] = e.get("bid")
+        return out
+
     def update(self, entity_type, naver_id, field, value):
         if (entity_type, field) not in VERIFIED_WRITES and os.getenv("NAVER_ALLOW_REAL_WRITE") != "1":
             raise NaverApiError("이 항목의 실계정 수정은 공식 API 검증 전이라 아직 차단되어 있습니다")
@@ -219,6 +231,11 @@ class MockNaverClient:
                             "ccnt": conv, "convAmt": conv * r.randint(20000, 60000)})
             d += timedelta(days=1)
         return out
+
+    def estimate_bids(self, device, items):
+        # 순위가 높을수록(숫자가 작을수록) 비싸다
+        base = 1000 if device == "PC" else 700
+        return {k: base // p // 10 * 10 + 70 for k, p in items if k in self.s["keywords"]}
 
     def update(self, entity_type, naver_id, field, value):
         if naver_id in MOCK_FAIL_IDS:

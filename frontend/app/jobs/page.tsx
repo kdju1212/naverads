@@ -8,7 +8,7 @@ import { api, downloadCsv, ENTITY_LABEL, FIELD_LABEL, fmt, Job } from "@/lib/api
 import { useApp } from "@/lib/store";
 import { useFetch } from "@/lib/useFetch";
 
-const SOURCE: Record<string, string> = { UI: "화면", EXCEL: "엑셀", RETRY: "재실행" };
+const SOURCE: Record<string, string> = { UI: "화면", EXCEL: "엑셀", RETRY: "재실행", AUTO_BID: "자동입찰" };
 const value = (field: string, v: string | null) => (v == null ? "-" : field === "status" ? v : fmt(Number(v), "원"));
 
 export default function JobsPage() {

@@ -7,12 +7,25 @@ os.environ.setdefault("DATABASE_URL", "d1")
 
 from workers import WorkerEntrypoint, asgi  # noqa: E402
 
-from app.db import bind_d1  # noqa: E402
+from app import db as app_db  # noqa: E402
+from app.bulk import run_all_auto_bids  # noqa: E402
 from app.main import app  # noqa: E402
 
 
 class Default(WorkerEntrypoint):
-    async def fetch(self, request):
+    def _bind(self):
         os.environ.setdefault("APP_SECRET", self.env.APP_SECRET)  # Workers는 os.environ을 채우지 않는다
-        bind_d1(self.env.DB)
+        app_db.bind_d1(self.env.DB)
+
+    async def fetch(self, request):
+        self._bind()
         return await asgi.fetch(app, request, self.env, self.ctx)
+
+    async def scheduled(self, controller, env=None, ctx=None):
+        # 자동입찰 (wrangler.jsonc triggers.crons)
+        self._bind()
+        db = app_db.SessionLocal()
+        try:
+            run_all_auto_bids(db)
+        finally:
+            db.close()

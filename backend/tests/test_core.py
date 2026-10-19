@@ -215,6 +215,15 @@ def test_real_stats(monkeypatch):
     RealNaverClient("k", "s", "1").delete_ad_extension("ext-1")
     assert calls[-1] == ("DELETE", "/ncc/ad-extensions", {"ids": "ext-1"})  # 경로 방식은 실계정 404
 
+    def fake_est(self, method, uri, **kw):
+        calls.append((method, uri, kw["json"]))
+        return {"device": "PC", "estimate": [{"keyword": "a", "position": 3, "bid": 1230}, {"keyword": "b", "position": 3, "bid": 70}]}
+
+    monkeypatch.setattr(RealNaverClient, "_req", fake_est)
+    assert RealNaverClient("k", "s", "1").estimate_bids("PC", [("nkw-1", 3), ("nkw-2", 3)]) == {"nkw-1": 1230, "nkw-2": 70}
+    assert calls[-1] == ("POST", "/estimate/average-position-bid/id",
+                         {"device": "PC", "items": [{"key": "nkw-1", "position": 3}, {"key": "nkw-2", "position": 3}]})
+
 
 def test_rsa_texts():
     from app.sync import _rsa_texts
@@ -224,6 +233,46 @@ def test_rsa_texts():
               {"linkType": "DESCRIPTION", "assetData": {"text": "전 상품 할인"}},
               {"linkType": "OTHER", "assetData": "무시"}]
     assert _rsa_texts(assets) == {"headlines": ["여름 세일", "무료배송"], "descriptions": ["전 상품 할인"]}
+
+
+def test_auto_bid():
+    from app.bulk import run_all_auto_bids
+    from app.db import SessionLocal
+
+    owner = user("bid@a.com")
+    ws = c.post("/workspaces", json={"name": "B"}, headers=owner).json()["id"]
+    cred = c.post(f"/workspaces/{ws}/credentials", json={"label": "m", "api_key": "k", "secret_key": "s"}, headers=owner).json()["id"]
+    acc = c.post(f"/workspaces/{ws}/ad-accounts", json={"credential_id": cred, "customer_id": "4004", "name": "b"}, headers=owner).json()
+    c.post(f"/workspaces/{ws}/ad-accounts/{acc['id']}/sync", headers=owner)
+    kws = {k["naver_id"]: k for k in c.get(f"/workspaces/{ws}/keywords", headers=owner).json()}
+    k1, k2 = kws["kwd-4004-11"], kws["kwd-4004-12"]  # 입찰가 300, 600
+    url = f"/workspaces/{ws}/auto-bids"
+
+    assert c.put(url, headers=owner, json={"keyword_ids": [k1["id"]], "device": "MOBILE", "target_rank": 6, "max_bid": 500}).status_code == 400
+    assert c.put(url, headers=owner, json={"keyword_ids": [k1["id"]], "device": "PC", "target_rank": 1, "max_bid": 505}).status_code == 400
+    outsider = user("bid2@b.com")
+    ws_b = c.post("/workspaces", json={"name": "B2"}, headers=outsider).json()["id"]
+    assert c.put(f"/workspaces/{ws_b}/auto-bids", headers=outsider,
+                 json={"keyword_ids": [k1["id"]], "device": "PC", "target_rank": 1, "max_bid": 500}).status_code == 403
+
+    # Mock 예상가: PC 1위 1070원 → 최대 500원으로 제한, PC 5위 270원
+    c.put(url, headers=owner, json={"keyword_ids": [k1["id"]], "device": "PC", "target_rank": 1, "max_bid": 500})
+    c.put(url, headers=owner, json={"keyword_ids": [k2["id"]], "device": "PC", "target_rank": 5, "max_bid": 5000})
+    jobs = c.post(f"{url}/run", headers=owner).json()["job_ids"]
+    assert len(jobs) == 1 and c.get(f"/workspaces/{ws}/bulk-jobs/{jobs[0]}", headers=owner).json()["status"] == "DONE"
+    bids = {k["naver_id"]: k["bid_amt"] for k in c.get(f"/workspaces/{ws}/keywords", headers=owner).json()}
+    assert bids["kwd-4004-11"] == 500 and bids["kwd-4004-12"] == 270
+    rules = c.get(url, headers=owner).json()
+    assert "최대 500원" in rules[0]["last_result"] and "300원 → 500원" in rules[0]["last_result"]
+
+    # 다시 돌리면 변경 없음 → 작업도 안 만든다 (크론 경로)
+    db = SessionLocal()
+    run_all_auto_bids(db)
+    db.close()
+    assert all("변경 없음" in r["last_result"] for r in c.get(url, headers=owner).json())
+
+    assert c.post(f"{url}/delete", headers=owner, json={"keyword_ids": [k1["id"], k2["id"]]}).json() == {"ok": True}
+    assert c.get(url, headers=owner).json() == []
 
 
 def test_delete_extension_already_gone():

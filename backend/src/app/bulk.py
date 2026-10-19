@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .access import accessible_account_ids
-from .models import (Ad, AdAccount, AdExtension, AdGroup, AuditLog, BulkJob, BulkJobRow, Campaign, Keyword, Membership,
+from .models import (Ad, AdAccount, AdExtension, AdGroup, AuditLog, AutoBidRule, BulkJob, BulkJobRow, Campaign, Keyword, Membership,
                      NaverApiCredential, WorkspaceAdAccount, now)
 from .naver import NaverApiError, client_for
 from .security import decrypt
@@ -146,6 +146,71 @@ def retry_failed(db: Session, m: Membership, job: BulkJob) -> BulkJob:
         raise HTTPException(400, "재실행할 실패 행이 없습니다")
     changes = [{"entity_type": r.entity_type, "naver_id": r.naver_id, "field": r.field, "value": r.after} for r in failed]
     return create_job(db, m, changes, "RETRY", parent_job_id=job.id)
+
+
+def run_auto_bids(db: Session, workspace_id: int, rule_ids: list[int] | None = None) -> list[BulkJob]:
+    """자동입찰 규칙 실행: 목표 순위 예상 입찰가(최대 입찰가 이하)로 바꿀 키워드를 모아 만든 사람별 대량 작업으로 실행한다.
+    권한 확인·네이버 반영 검증·감사 로그는 일반 대량 작업과 같다."""
+    s = select(AutoBidRule).where(AutoBidRule.workspace_id == workspace_id, AutoBidRule.enabled.is_(True))
+    if rule_ids is not None:
+        s = s.where(AutoBidRule.id.in_(rule_ids))
+    by_user: dict[int, list[AutoBidRule]] = {}
+    for r in db.scalars(s):
+        by_user.setdefault(r.created_by, []).append(r)
+    jobs = []
+    for user_id, rules in by_user.items():
+        m = db.scalar(select(Membership).where(Membership.workspace_id == workspace_id, Membership.user_id == user_id))
+        allowed = accessible_account_ids(db, m, edit=True) if m else set()
+        kws = {k.id: k for k in db.scalars(select(Keyword).where(Keyword.id.in_([r.keyword_id for r in rules])))}
+        groups: dict[tuple, list[AutoBidRule]] = {}
+        for r in rules:
+            r.last_run_at = now()
+            if kws[r.keyword_id].ad_account_id not in allowed:
+                r.last_result = "규칙을 만든 사람에게 이 계정 수정 권한이 없습니다"
+            else:
+                groups.setdefault((kws[r.keyword_id].ad_account_id, r.device), []).append(r)
+        changes, rule_by_nid = [], {}
+        for (account_id, device), rs in groups.items():
+            try:
+                est = _client(db, workspace_id, account_id).estimate_bids(
+                    device, [(kws[r.keyword_id].naver_id, r.target_rank) for r in rs])
+            except NaverApiError as e:
+                for r in rs:
+                    r.last_result = f"예상 입찰가 조회 실패: {e}"[:300]
+                continue
+            lo = BID_RANGE["WEB_SITE"][0]
+            for r in rs:
+                kw, bid = kws[r.keyword_id], est.get(kws[r.keyword_id].naver_id)
+                if not bid:
+                    r.last_result = "예상 입찰가가 없습니다 (노출 데이터 부족)"
+                    continue
+                target = max(lo, min(bid, r.max_bid) // 10 * 10)
+                r.last_result = f"{r.target_rank}위 예상 {bid:,}원" + (f" > 최대 {r.max_bid:,}원" if bid > r.max_bid else "")
+                if target == kw.bid_amt and not kw.use_group_bid:
+                    r.last_result += " · 변경 없음"
+                    continue
+                r.last_result += f" · {kw.bid_amt:,}원 → {target:,}원"
+                changes.append({"entity_type": "keyword", "naver_id": kw.naver_id, "field": "bid_amt", "value": str(target)})
+                rule_by_nid[kw.naver_id] = r
+        db.commit()
+        if not changes:
+            continue
+        job = execute_job(db, m, create_job(db, m, changes, "AUTO_BID"))
+        for row in db.scalars(select(BulkJobRow).where(BulkJobRow.job_id == job.id, BulkJobRow.status != "SUCCESS")):
+            rule_by_nid[row.naver_id].last_result = f"{rule_by_nid[row.naver_id].last_result} 실패: {row.error}"[:300]
+        db.commit()
+        jobs.append(job)
+    return jobs
+
+
+def run_all_auto_bids(db: Session):
+    """크론용: 규칙이 있는 모든 조직. 한 조직이 실패해도 나머지는 돈다."""
+    for ws_id in set(db.scalars(select(AutoBidRule.workspace_id).where(AutoBidRule.enabled.is_(True)))):
+        try:
+            run_auto_bids(db, ws_id)
+        except Exception as e:  # noqa: BLE001
+            db.rollback()
+            print(f"자동입찰 실패 workspace={ws_id}: {e}")
 
 
 def parse_excel(data: bytes) -> list[dict]:
