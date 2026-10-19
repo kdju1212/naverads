@@ -327,11 +327,16 @@ class SubLinkIn(BaseModel):
 
 class ExtensionIn(BaseModel):
     adgroup_id: int
-    # 실데이터로 내용 구조를 확인한 유형만: DESCRIPTION {heading, description}, SUB_LINKS [{name, final}]
-    ext_type: Literal["DESCRIPTION", "SUB_LINKS"]
+    # 실데이터로 내용 구조를 확인한 유형만: DESCRIPTION(홍보문구) {heading: 구분, description}, HEADLINE(추가제목) {headline},
+    # DESCRIPTION_EXTRA(추가설명) {description}, SUB_LINKS [{name, final}]
+    ext_type: Literal["DESCRIPTION", "HEADLINE", "DESCRIPTION_EXTRA", "SUB_LINKS"]
     heading: str = ""
     description: str = ""
     links: list[SubLinkIn] = []
+
+
+PROMO_HEADINGS = ("할인", "사은품", "추가선물증정", "이벤트", "신상품")  # 네이버 화면의 홍보문구 구분
+TEXT_LIMITS = {"DESCRIPTION": ("홍보문구", 14), "HEADLINE": ("추가제목", 15), "DESCRIPTION_EXTRA": ("추가설명", 45)}
 
 
 @app.post("/workspaces/{ws_id}/ad-extensions")
@@ -339,10 +344,15 @@ async def create_ad_extension(body: ExtensionIn, m: Membership = Depends(members
     grp = db.get(AdGroup, body.adgroup_id)
     if not grp:
         raise HTTPException(404, "광고그룹을 찾을 수 없습니다")
-    if body.ext_type == "DESCRIPTION":
-        if not body.heading.strip() or not body.description.strip():
-            raise HTTPException(400, "추가설명은 제목과 설명을 모두 입력하세요")
-        content = {"heading": body.heading.strip(), "description": body.description.strip()}
+    if body.ext_type in TEXT_LIMITS:
+        label, limit = TEXT_LIMITS[body.ext_type]
+        text = (body.heading if body.ext_type == "HEADLINE" else body.description).strip()
+        if not text or len(text) > limit:
+            raise HTTPException(400, f"{label}는 1~{limit}자로 입력하세요")
+        if body.ext_type == "DESCRIPTION" and body.heading not in PROMO_HEADINGS:
+            raise HTTPException(400, f"홍보문구 구분은 {', '.join(PROMO_HEADINGS)} 중 하나")
+        content = {"DESCRIPTION": {"heading": body.heading, "description": text}, "HEADLINE": {"headline": text},
+                   "DESCRIPTION_EXTRA": {"description": text}}[body.ext_type]
     else:
         links = [{"name": x.name.strip(), "final": x.final.strip()} for x in body.links]
         if not links or any(not x["name"] or not x["final"].startswith(("http://", "https://")) for x in links):

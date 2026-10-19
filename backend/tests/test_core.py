@@ -98,9 +98,20 @@ def test_full_flow():
     assert c.post(url, headers=owner, json={"adgroup_id": grps["grp-1001-pl1"], "ext_type": "SUB_LINKS",
                                            "links": [{"name": "a", "final": "javascript:x"}]}).status_code == 400
     assert c.post(url, headers=owner, json={"adgroup_id": grps["grp-1001-sh1"], "ext_type": "DESCRIPTION",
-                                           "heading": "a", "description": "b"}).status_code == 400  # 쇼핑 그룹
+                                           "heading": "할인", "description": "b"}).status_code == 400  # 쇼핑 그룹
     assert c.post(url, headers=staff, json={"adgroup_id": grps["grp-1002-pl1"], "ext_type": "DESCRIPTION",
-                                           "heading": "a", "description": "b"}).status_code == 403  # VIEW 계정
+                                           "heading": "할인", "description": "b"}).status_code == 403  # VIEW 계정
+    g1 = grps["grp-1001-pl1"]
+    assert c.post(url, headers=owner, json={"adgroup_id": g1, "ext_type": "DESCRIPTION", "heading": "특가",
+                                           "description": "b"}).status_code == 400  # 홍보문구 구분 밖
+    assert c.post(url, headers=owner, json={"adgroup_id": g1, "ext_type": "DESCRIPTION", "heading": "할인",
+                                           "description": "가" * 15}).status_code == 400  # 14자 초과
+    assert c.post(url, headers=owner, json={"adgroup_id": g1, "ext_type": "HEADLINE", "heading": "가" * 16}).status_code == 400
+    for body, payload in [({"ext_type": "DESCRIPTION", "heading": "할인", "description": "가" * 14}, {"heading": "할인", "description": "가" * 14}),
+                          ({"ext_type": "HEADLINE", "heading": "공식몰"}, {"headline": "공식몰"}),
+                          ({"ext_type": "DESCRIPTION_EXTRA", "description": "가" * 45}, {"description": "가" * 45})]:
+        made = c.post(url, headers=owner, json={"adgroup_id": g1, **body}).json()
+        assert next(e for e in c.get(f"{url}?account_ids={a1}", headers=owner).json() if e["id"] == made["id"])["payload"] == payload
     new = c.post(url, headers=owner, json={"adgroup_id": grps["grp-1001-pl1"], "ext_type": "SUB_LINKS",
                                           "links": [{"name": "신상품", "final": "https://example.com/a"}]}).json()
     row = next(e for e in c.get(f"{url}?account_ids={a1}", headers=owner).json() if e["id"] == new["id"])

@@ -14,13 +14,15 @@ interface Extension {
 }
 
 const TYPE_LABEL: Record<string, string> = {
-  HEADLINE: "추가제목", DESCRIPTION: "추가설명", DESCRIPTION_EXTRA: "추가설명", SUB_LINKS: "서브링크", PRICE_LINKS: "가격링크",
+  HEADLINE: "추가제목", DESCRIPTION: "홍보문구", DESCRIPTION_EXTRA: "추가설명", SUB_LINKS: "서브링크", PRICE_LINKS: "가격링크",
   PROMOTION: "홍보문구", POWER_LINK_IMAGE: "파워링크 이미지", IMAGE_SUB_LINKS: "이미지 서브링크", PHONE: "전화번호",
   LOCATION: "위치정보", BOOKING: "예약", TALK: "톡톡", CALCULATION: "계산", PLACE: "플레이스", WEBSITE_INFO: "웹사이트 정보",
   NAVER_BLOG_REVIEW: "블로그 리뷰", NAVER_TV_VIDEO: "동영상", TALKTALK_CONSULTATION: "톡톡 상담",
 };
 
 interface AdGroup { id: number; ad_account_id: number; name: string }
+
+const PROMO_HEADINGS = ["할인", "사은품", "추가선물증정", "이벤트", "신상품"];
 
 // 확장소재 유형마다 구조가 달라 문자열 값만 모아 보여 준다
 const strings = (v: unknown): string[] =>
@@ -91,7 +93,7 @@ export default function ExtensionsPage() {
 function NewExtension({ wsId, groups, accountName, onCreated }: {
   wsId: number; groups: AdGroup[]; accountName: (id: number) => string; onCreated: () => Promise<void>;
 }) {
-  const [form, setForm] = useState({ adgroup_id: "", ext_type: "DESCRIPTION", heading: "", description: "", links: "" });
+  const [form, setForm] = useState({ adgroup_id: "", ext_type: "DESCRIPTION", heading: PROMO_HEADINGS[0], description: "", links: "" });
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -112,7 +114,7 @@ function NewExtension({ wsId, groups, accountName, onCreated }: {
         body: { adgroup_id: Number(form.adgroup_id), ext_type: form.ext_type, heading: form.heading, description: form.description, links },
       });
       setMsg(`만들었습니다 (검수 상태: ${r.inspect_status || "확인 중"}). 검수가 끝나야 노출됩니다.`);
-      setForm({ ...form, heading: "", description: "", links: "" });
+      setForm({ ...form, heading: form.ext_type === "DESCRIPTION" ? form.heading : "", description: "", links: "" });
       await onCreated();
     } catch (err) {
       setError((err as Error).message);
@@ -128,16 +130,26 @@ function NewExtension({ wsId, groups, accountName, onCreated }: {
             <option value="">광고그룹 선택</option>
             {groups.map((g) => <option key={g.id} value={g.id}>{accountName(g.ad_account_id)} · {g.name}</option>)}
           </select>
-          <select className={inputCls} value={form.ext_type} onChange={set("ext_type")} aria-label="유형">
-            <option value="DESCRIPTION">추가설명</option>
+          <select className={inputCls} value={form.ext_type} aria-label="유형"
+            onChange={(e) => setForm({ ...form, ext_type: e.target.value, heading: e.target.value === "DESCRIPTION" ? PROMO_HEADINGS[0] : "" })}>
+            <option value="DESCRIPTION">홍보문구</option>
+            <option value="HEADLINE">추가제목</option>
+            <option value="DESCRIPTION_EXTRA">추가설명</option>
             <option value="SUB_LINKS">서브링크</option>
           </select>
         </div>
         {form.ext_type === "DESCRIPTION" ? (
           <div className="flex flex-wrap gap-2">
-            <input className={inputCls} placeholder="제목 (예: 이벤트)" value={form.heading} onChange={set("heading")} required aria-label="제목" />
-            <input className={`${inputCls} min-w-64 flex-1`} placeholder="설명 (예: 신규가입시 3만원 쿠폰팩!)" value={form.description} onChange={set("description")} required aria-label="설명" />
+            <select className={inputCls} value={form.heading} onChange={set("heading")} aria-label="구분">
+              {PROMO_HEADINGS.map((h) => <option key={h} value={h}>{h}</option>)}
+            </select>
+            <input className={`${inputCls} min-w-64 flex-1`} placeholder="홍보문구 (최대 14자, 예: 3만원 쿠폰팩 증정)" maxLength={14}
+              value={form.description} onChange={set("description")} required aria-label="홍보문구" />
           </div>
+        ) : form.ext_type === "HEADLINE" ? (
+          <input className={inputCls} placeholder="추가제목 (최대 15자)" maxLength={15} value={form.heading} onChange={set("heading")} required aria-label="추가제목" />
+        ) : form.ext_type === "DESCRIPTION_EXTRA" ? (
+          <input className={inputCls} placeholder="추가설명 (최대 45자)" maxLength={45} value={form.description} onChange={set("description")} required aria-label="추가설명" />
         ) : (
           <textarea className={inputCls} rows={3} value={form.links} onChange={set("links")} required aria-label="서브링크"
             placeholder={"한 줄에 하나씩: 이름 | URL\n신제품 | https://example.com/new\n당일출고 | https://example.com/today"} />
