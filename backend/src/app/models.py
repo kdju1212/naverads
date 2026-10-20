@@ -97,6 +97,7 @@ class AdGroup(Base):
     adgroup_type: Mapped[str] = mapped_column(String(20))
     status: Mapped[str] = mapped_column(String(3))
     bid_amt: Mapped[int] = mapped_column(Integer)
+    daily_budget: Mapped[int | None] = mapped_column(Integer, nullable=True)  # None = 제한 없음
 
 
 class Keyword(Base):

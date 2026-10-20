@@ -8,7 +8,7 @@ export interface Account {
   last_sync: { status: "SUCCESS" | "FAILED"; error: string | null; at: string } | null;
 }
 export interface Campaign { id: number; ad_account_id: number; naver_id: string; name: string; campaign_tp: string; status: string; daily_budget: number }
-export interface AdGroup { id: number; ad_account_id: number; campaign_id: number; naver_id: string; name: string; adgroup_type: string; status: string; bid_amt: number }
+export interface AdGroup { id: number; ad_account_id: number; campaign_id: number; naver_id: string; name: string; adgroup_type: string; status: string; bid_amt: number; daily_budget: number | null }
 export interface Change { entity_type: string; naver_id: string; field: string; value: string }
 export interface JobRow {
   id: number; entity_type: string; naver_id: string; field: string; before: string | null; after: string;

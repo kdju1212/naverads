@@ -184,7 +184,8 @@ def _seed(cid: str) -> dict:
     s["campaigns"][sh] = {"nccCampaignId": sh, "name": "쇼핑검색_상품", "campaignTp": "SHOPPING", "userLock": False, "dailyBudget": 30000}
     for i in (1, 2):
         g = f"grp-{cid}-pl{i}"
-        s["adgroups"][g] = {"nccAdgroupId": g, "nccCampaignId": pl, "name": f"파워링크그룹{i}", "adgroupType": "WEB_SITE", "userLock": False, "bidAmt": 500}
+        s["adgroups"][g] = {"nccAdgroupId": g, "nccCampaignId": pl, "name": f"파워링크그룹{i}", "adgroupType": "WEB_SITE", "userLock": False, "bidAmt": 500,
+                           "useDailyBudget": i == 1, "dailyBudget": 20000}
         for k, kw in enumerate(["원피스", "여름 원피스", "롱 원피스"], 1):
             kid = f"kwd-{cid}-{i}{k}"
             s["keywords"][kid] = {"nccKeywordId": kid, "nccAdgroupId": g, "keyword": f"{kw}{i}", "userLock": False, "bidAmt": 300 * k, "useGroupBidAmt": False}

@@ -334,6 +334,8 @@ def test_sync_removes_stale():
     get = lambda p: {x["naver_id"] for x in c.get(f"/workspaces/{ws}/{p}", headers=owner).json()}  # noqa: E731
     assert "kwd-5005-11" not in get("keywords") and "kwd-5005-12" in get("keywords")
     assert get("ad-extensions") == {"ext-5005-pl2"}
+    budgets = {g["naver_id"]: g["daily_budget"] for g in c.get(f"/workspaces/{ws}/adgroups", headers=owner).json()}
+    assert budgets["grp-5005-pl1"] == 20000 and budgets["grp-5005-pl2"] is None  # useDailyBudget=false → 제한 없음
     assert get("campaigns") == {"cmp-5005-pl"}
     assert "grp-5005-sh1" not in get("adgroups") and not get("ads?ad_type=SHOPPING_PRODUCT_AD")
     assert c.get(f"/workspaces/{ws}/auto-bids", headers=owner).json() == []
