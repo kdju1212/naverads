@@ -352,3 +352,39 @@ def test_delete_extension_already_gone():
     ext = c.get(f"/workspaces/{ws}/ad-extensions", headers=owner).json()[0]
     _MOCK_STORE["3003"]["ad-extensions"].pop(ext["naver_id"])  # 네이버 화면에서 먼저 지워진 상황
     assert c.delete(f"/workspaces/{ws}/ad-extensions/{ext['id']}", headers=owner).json() == {"ok": True, "already_gone": True}
+
+
+def test_keyword_create_delete():
+    owner = user("kwc@a.com")
+    ws = c.post("/workspaces", json={"name": "K"}, headers=owner).json()["id"]
+    cred = c.post(f"/workspaces/{ws}/credentials", json={"label": "m", "api_key": "k", "secret_key": "s"}, headers=owner).json()["id"]
+    acc = c.post(f"/workspaces/{ws}/ad-accounts", json={"credential_id": cred, "customer_id": "6006", "name": "k"}, headers=owner).json()["id"]
+    c.post(f"/workspaces/{ws}/ad-accounts/{acc}/sync", headers=owner)
+    kws = lambda: {k["keyword"]: k for k in c.get(f"/workspaces/{ws}/keywords", headers=owner).json()}  # noqa: E731
+    old = kws()["원피스1"]
+    c.put(f"/workspaces/{ws}/auto-bids", headers=owner, json={"keyword_ids": [old["id"]], "device": "PC", "target_rank": 1, "max_bid": 500})
+
+    ch = lambda nid, field, value="": {"entity_type": "keyword", "naver_id": nid, "field": field, "value": value}  # noqa: E731
+    job = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [
+        ch("grp-6006-pl1", "create", "새 키워드|550"),
+        ch("grp-6006-pl1", "create", "그룹가 키워드"),
+        ch("grp-6006-pl1", "create", "새 키워드|600"),   # 같은 키워드 중복
+        ch("grp-6006-pl1", "create", "원피스1"),          # 이미 있음
+        ch("grp-6006-pl1", "create", "x|505"),            # 10원 단위 아님
+        ch("grp-6006-sh1", "create", "쇼핑"),             # 쇼핑 광고그룹
+        ch(old["naver_id"], "delete"),
+    ]}).json()
+    rows = [r for a in job["accounts"] for r in a["rows"]]
+    assert [r["status"] for r in rows] == ["VALID", "VALID", "INVALID", "INVALID", "INVALID", "INVALID", "VALID"]
+    assert rows[-1]["before"] == "원피스1"
+
+    assert c.post(f"/workspaces/{ws}/bulk-jobs/{job['id']}/execute", headers=owner).json()["status"] == "DONE"
+    now = kws()
+    assert "원피스1" not in now and now["새 키워드"]["bid_amt"] == 550 and not now["새 키워드"]["use_group_bid"]
+    assert now["그룹가 키워드"]["use_group_bid"] and now["그룹가 키워드"]["bid_amt"] == 500
+    assert c.get(f"/workspaces/{ws}/auto-bids", headers=owner).json() == []
+    # 동기화해도 그대로 (Mock 네이버에도 반영됨)
+    c.post(f"/workspaces/{ws}/ad-accounts/{acc}/sync", headers=owner)
+    assert set(kws()) == set(now)
+    acts = {(h["action"], h["field"]) for h in c.get(f"/workspaces/{ws}/audit-logs", headers=owner).json()}
+    assert {("CREATE", "keyword"), ("DELETE", "keyword")} <= acts

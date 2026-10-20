@@ -4,7 +4,7 @@ import io
 
 from fastapi import HTTPException
 from openpyxl import Workbook, load_workbook
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from .access import accessible_account_ids
@@ -18,7 +18,7 @@ ENTITY_MODELS = {"campaign": Campaign, "adgroup": AdGroup, "keyword": Keyword, "
 ALLOWED_FIELDS = {
     "campaign": {"status", "daily_budget"},
     "adgroup": {"status", "bid_amt"},
-    "keyword": {"status", "bid_amt"},
+    "keyword": {"status", "bid_amt", "create", "delete"},  # create: naver_id는 광고그룹, value는 "키워드" 또는 "키워드|입찰가"
     "ad": {"status", "bid_amt"},
     "ad_extension": {"status"},  # 파워링크 확장소재: ON/OFF만 (내용 수정은 유형별 구조 확인 후)
 }
@@ -38,10 +38,32 @@ def _product(entity_type: str, obj) -> str:
     return "SHOPPING" if obj.ad_type == "SHOPPING_PRODUCT_AD" else "WEB_SITE"
 
 
+def _split_new_keyword(value: str) -> tuple[str, str]:
+    kw, _, bid = value.partition("|")
+    return kw.strip(), bid.strip()
+
+
+def _validate_new_keyword(grp: AdGroup, value: str) -> str | None:
+    kw, bid = _split_new_keyword(value)
+    if grp.adgroup_type != "WEB_SITE":
+        return "키워드는 파워링크 광고그룹에만 등록할 수 있습니다"
+    if not kw:
+        return "키워드를 입력하세요"
+    if bid:
+        lo, hi = BID_RANGE["WEB_SITE"]
+        if not bid.isdigit() or int(bid) % 10 or not lo <= int(bid) <= hi:
+            return f"입찰가는 {lo:,}~{hi:,}원, 10원 단위 (비우면 광고그룹 입찰가)"
+    return None
+
+
 def _validate(entity_type: str, obj, field: str, value: str) -> tuple[str | None, str | None]:
     """(before, error) 반환."""
     if field not in ALLOWED_FIELDS[entity_type]:
         return None, f"{entity_type}에서 수정할 수 없는 항목: {field}"
+    if field == "create":
+        return None, _validate_new_keyword(obj, value)
+    if field == "delete":
+        return obj.keyword, None
     before = getattr(obj, field)
     if field == "status":
         if value not in ("ON", "OFF"):
@@ -76,19 +98,23 @@ def create_job(db: Session, m: Membership, changes: list[dict], source: str, par
     for ch in changes:
         etype, nid, field, value = (str(ch.get(k, "")).strip() for k in EXCEL_HEADER)
         row = BulkJobRow(job_id=job.id, entity_type=etype, naver_id=nid, field=field, after=value, status="INVALID")
-        model = ENTITY_MODELS.get(etype)
+        model = AdGroup if (etype, field) == ("keyword", "create") else ENTITY_MODELS.get(etype)
         obj = db.scalar(select(model).where(model.naver_id == nid)) if model else None
+        key = (nid, field, _split_new_keyword(value)[0] if field == "create" else "")
         if model is None:
             row.error = f"알 수 없는 유형: {etype}"
         elif obj is None or obj.ad_account_id not in allowed:
             row.error = "대상이 없거나 수정 권한이 없습니다"  # 다른 조직 객체의 존재 여부를 노출하지 않는다
-        elif (nid, field) in seen:
+        elif key in seen:
             row.ad_account_id, row.error = obj.ad_account_id, "같은 대상·항목이 중복되었습니다"
         else:
-            seen.add((nid, field))
+            seen.add(key)
             row.ad_account_id = obj.ad_account_id
             before, row.error = _validate(etype, obj, field, value)
             row.before = None if before is None else str(before)
+            if row.error is None and field == "create" and db.scalar(select(Keyword.id).where(
+                    Keyword.adgroup_id == obj.id, Keyword.keyword == key[2])):
+                row.error = "이미 등록된 키워드입니다"
             if row.error is None:
                 row.status = "VALID"
         db.add(row)
@@ -119,19 +145,38 @@ def execute_job(db: Session, m: Membership, job: BulkJob) -> BulkJob:
         try:
             if row.ad_account_id not in clients:
                 clients[row.ad_account_id] = _client(db, m.workspace_id, row.ad_account_id)
-            clients[row.ad_account_id].update(row.entity_type, row.naver_id, row.field, row.after)
+            client = clients[row.ad_account_id]
+            if row.field == "create":
+                kw, bid = _split_new_keyword(row.after)
+                created = client.create_keyword(row.naver_id, kw, int(bid) if bid else None)
+            elif row.field == "delete":
+                client.delete_keyword(row.naver_id)
+            else:
+                client.update(row.entity_type, row.naver_id, row.field, row.after)
         except NaverApiError as e:
             row.status, row.error = "FAILED", str(e)[:300]
             continue
-        model = ENTITY_MODELS[row.entity_type]
-        obj = db.scalar(select(model).where(model.naver_id == row.naver_id))
-        setattr(obj, row.field, row.after if row.field == "status" else int(row.after))
-        if row.field == "bid_amt" and hasattr(obj, "use_group_bid"):
-            obj.use_group_bid = False
+        audit = dict(action="UPDATE", naver_id=row.naver_id, field=row.field, before=row.before, after=row.after)
+        if row.field == "create":
+            grp = db.scalar(select(AdGroup).where(AdGroup.naver_id == row.naver_id))
+            db.add(Keyword(ad_account_id=grp.ad_account_id, adgroup_id=grp.id, naver_id=created["nccKeywordId"],
+                           keyword=created.get("keyword", kw), status=_status(created),
+                           bid_amt=created.get("bidAmt") or (int(bid) if bid else grp.bid_amt), use_group_bid=created.get("useGroupBidAmt", not bid)))
+            audit.update(action="CREATE", naver_id=created["nccKeywordId"], field="keyword", after=kw)
+        elif row.field == "delete":
+            obj = db.scalar(select(Keyword).where(Keyword.naver_id == row.naver_id))
+            db.execute(delete(AutoBidRule).where(AutoBidRule.keyword_id == obj.id))
+            db.delete(obj)
+            audit.update(action="DELETE", field="keyword", after=None)
+        else:
+            model = ENTITY_MODELS[row.entity_type]
+            obj = db.scalar(select(model).where(model.naver_id == row.naver_id))
+            setattr(obj, row.field, row.after if row.field == "status" else int(row.after))
+            if row.field == "bid_amt" and hasattr(obj, "use_group_bid"):
+                obj.use_group_bid = False
         row.status = "SUCCESS"
         db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=row.ad_account_id, job_id=job.id,
-                        action="UPDATE", entity_type=row.entity_type, naver_id=row.naver_id, field=row.field,
-                        before=row.before, after=row.after))
+                        entity_type=row.entity_type, **audit))
         db.commit()  # 행 단위 커밋: 중간에 죽어도 성공한 변경과 감사 로그는 남는다
     results = {r.status for r in rows}
     job.status = "DONE" if results == {"SUCCESS"} else "FAILED" if "SUCCESS" not in results else "PARTIAL"
@@ -275,10 +320,14 @@ def excel_template() -> bytes:
     ws.append(["campaign", "cmp-...", "status", "OFF"])
     ws.append(["adgroup", "grp-...", "bid_amt", "500"])
     ws.append(["ad", "ad-...(쇼핑 상품소재)", "bid_amt", "300"])
+    ws.append(["keyword", "grp-...(광고그룹)", "create", "여름 원피스|500"])
+    ws.append(["keyword", "kwd-...", "delete", ""])
     guide = wb.create_sheet("guide")
     for line in [["entity_type", "campaign | adgroup | keyword(파워링크) | ad | ad_extension(파워링크 확장소재)"],
                  ["field", "status(ON/OFF), daily_budget(캠페인), bid_amt(광고그룹·키워드·쇼핑 상품소재), 확장소재는 status만"],
-                 ["value", "10원 단위 숫자 또는 ON/OFF"]]:
+                 ["value", "10원 단위 숫자 또는 ON/OFF"],
+                 ["키워드 등록", "entity_type=keyword, naver_id=광고그룹 ID(grp-...), field=create, value=키워드|입찰가 (입찰가 비우면 광고그룹 입찰가)"],
+                 ["키워드 삭제", "entity_type=keyword, naver_id=키워드 ID(kwd-...), field=delete, value 비움"]]:
         guide.append(line)
     buf = io.BytesIO()
     wb.save(buf)

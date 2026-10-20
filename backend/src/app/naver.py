@@ -110,6 +110,16 @@ class RealNaverClient:
         # 명세의 /ncc/ad-extensions/{id}는 실계정에서 404, 공식 샘플(AdExtensions.java)처럼 ids 쿼리로 지운다
         self._req("DELETE", "/ncc/ad-extensions", params={"ids": ext_id})
 
+    def create_keyword(self, adgroup_id, keyword, bid):
+        # 명세(ncc-heroes-ncc.json): POST /ncc/keywords?nccAdgroupId= 본문은 KeywordRequest 배열. bid가 None이면 그룹 입찰가
+        body = {"keyword": keyword, "useGroupBidAmt": bid is None, **({"bidAmt": bid} if bid else {})}
+        r = self._req("POST", "/ncc/keywords", params={"nccAdgroupId": adgroup_id}, json=[body])
+        return r[0] if isinstance(r, list) else r
+
+    def delete_keyword(self, keyword_id):
+        # 확장소재처럼 /{id} 경로 대신 명세의 ids 쿼리 방식
+        self._req("DELETE", "/ncc/keywords", params={"ids": keyword_id})
+
     def stats(self, campaign_ids, since: date, until: date):
         # 명세(gh-pages assets/json/ncc-report.json): 일별(timeIncrement=1)은 단일 id만 지원, salesAmt는 VAT 포함
         fields = json.dumps(["impCnt", "clkCnt", "salesAmt", "ccnt", "convAmt"])
@@ -217,6 +227,20 @@ class MockNaverClient:
     def delete_ad_extension(self, ext_id):
         if self.s.get("ad-extensions", {}).pop(ext_id, None) is None:
             raise NaverApiError("대상 확장소재가 존재하지 않습니다")
+
+    def create_keyword(self, adgroup_id, keyword, bid):
+        if adgroup_id not in self.s["adgroups"]:
+            raise NaverApiError("대상 광고그룹이 존재하지 않습니다")
+        kid = f"kwd-mock-{len(self.s['keywords']) + 1}-{random.randint(1000, 9999)}"
+        g = self.s["adgroups"][adgroup_id]
+        k = {"nccKeywordId": kid, "nccAdgroupId": adgroup_id, "keyword": keyword, "userLock": False,
+             "bidAmt": bid or g["bidAmt"], "useGroupBidAmt": bid is None}
+        self.s["keywords"][kid] = k
+        return dict(k)
+
+    def delete_keyword(self, keyword_id):
+        if keyword_id in MOCK_FAIL_IDS or self.s["keywords"].pop(keyword_id, None) is None:
+            raise NaverApiError("대상 키워드가 존재하지 않습니다")
 
     def stats(self, campaign_ids, since: date, until: date):
         out, d = [], since

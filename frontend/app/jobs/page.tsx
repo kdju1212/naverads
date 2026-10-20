@@ -9,7 +9,7 @@ import { useApp } from "@/lib/store";
 import { useFetch } from "@/lib/useFetch";
 
 const SOURCE: Record<string, string> = { UI: "화면", EXCEL: "엑셀", RETRY: "재실행", AUTO_BID: "자동입찰" };
-const value = (field: string, v: string | null) => (v == null ? "-" : field === "status" ? v : fmt(Number(v), "원"));
+const value = (field: string, v: string | null) => (v == null || v === "" ? "-" : field === "bid_amt" || field === "daily_budget" ? fmt(Number(v), "원") : v);
 
 export default function JobsPage() {
   // 정적 내보내기에서 useSearchParams는 Suspense 경계가 필요하다

@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { BulkBar } from "@/components/BulkBar";
 import { Col, DataTable } from "@/components/DataTable";
 import { Badge, Button, Card, ErrorText, inputCls, PageTitle } from "@/components/ui";
-import { AdGroup, api, fmt } from "@/lib/api";
+import { AdGroup, api, Change, fmt, Job } from "@/lib/api";
 import { useApp } from "@/lib/store";
 import { useFetch } from "@/lib/useFetch";
 
@@ -62,6 +62,48 @@ function AutoBidBar({ ids, onDone }: { ids: number[]; onDone: () => void }) {
   );
 }
 
+/** 광고그룹 하나에 여러 키워드를 붙여넣어 등록 작업을 만든다. 미리보기 화면에서 확인 후 실행. */
+function KeywordAddBar({ groups }: { groups: AdGroup[] }) {
+  const { ws } = useApp();
+  const router = useRouter();
+  const [grp, setGrp] = useState("");
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+
+  const submit = async () => {
+    if (!ws) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const changes: Change[] = lines.map((value) => ({ entity_type: "keyword", naver_id: grp, field: "create", value }));
+      const job = await api<Job>(`/workspaces/${ws.id}/bulk-jobs`, { body: { changes } });
+      router.push(`/jobs?id=${job.id}`);
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card title="키워드 등록">
+      <div className="flex flex-col gap-2">
+        <select className={inputCls} aria-label="광고그룹" value={grp} onChange={(e) => setGrp(e.target.value)}>
+          <option value="">광고그룹 선택</option>
+          {groups.map((g) => <option key={g.id} value={g.naver_id}>{g.name}</option>)}
+        </select>
+        <textarea className={`${inputCls} h-28`} aria-label="키워드 목록" value={text} onChange={(e) => setText(e.target.value)}
+          placeholder={"한 줄에 하나씩. 입찰가는 | 뒤에 (비우면 광고그룹 입찰가)\n여름 원피스|500\n린넨 원피스"} />
+        <div className="flex items-center gap-2">
+          <Button disabled={busy || !grp || lines.length === 0} onClick={submit}>{lines.length}개 등록 미리보기</Button>
+          <ErrorText error={error} />
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 export default function KeywordsPage() {
   const { ws, query, product, accountName } = useApp();
   const shoppingOnly = product === "SHOPPING";
@@ -105,12 +147,13 @@ export default function KeywordsPage() {
   const selected = rows.filter((r) => sel.has(r.id));
   return (
     <>
-      <PageTitle desc="파워링크 키워드의 ON/OFF·입찰가를 대량 변경합니다. 자동입찰은 네이버 '순위별 예상 입찰가'로 매시 정각에 입찰가를 맞추며 최대 입찰가를 넘지 않습니다.">키워드 (파워링크)</PageTitle>
+      <PageTitle desc="파워링크 키워드를 대량 등록·삭제하고 ON/OFF·입찰가를 대량 변경합니다. 자동입찰은 네이버 '순위별 예상 입찰가'로 매시 정각에 입찰가를 맞추며 최대 입찰가를 넘지 않습니다.">키워드 (파워링크)</PageTitle>
       <ErrorText error={kws.error ?? autoBids.error} />
+      <KeywordAddBar groups={groups.data ?? []} />
       <DataTable rows={rows} cols={cols} selected={sel} onSelect={setSel} loading={kws.loading}
         toolbar={
           <div className="flex flex-col gap-2">
-            <BulkBar entityType="keyword" rows={selected} numberField={{ field: "bid_amt", label: "입찰가" }} />
+            <BulkBar entityType="keyword" rows={selected} numberField={{ field: "bid_amt", label: "입찰가" }} deletable />
             <AutoBidBar ids={selected.map((r) => r.id)} onDone={() => { autoBids.reload(); kws.reload(); }} />
           </div>
         } />

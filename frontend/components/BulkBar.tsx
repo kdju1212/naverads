@@ -7,10 +7,11 @@ import { useApp } from "@/lib/store";
 import { Button, inputCls } from "./ui";
 
 /** 선택한 행에 같은 변경을 적용하는 대량 작업을 만들고 미리보기 화면으로 이동한다. 즉시 반영하지 않는다. */
-export function BulkBar({ entityType, rows, numberField }: {
+export function BulkBar({ entityType, rows, numberField, deletable }: {
   entityType: string;
   rows: { naver_id: string }[];
   numberField?: { field: "daily_budget" | "bid_amt"; label: string };
+  deletable?: boolean;
 }) {
   const { ws } = useApp();
   const router = useRouter();
@@ -45,6 +46,7 @@ export function BulkBar({ entityType, rows, numberField }: {
           <Button disabled={disabled || !value} onClick={() => create(numberField.field, value)}>{numberField.label} 변경</Button>
         </>
       )}
+      {deletable && <Button variant="danger" disabled={disabled} onClick={() => create("delete", "")}>삭제</Button>}
     </div>
   );
 }
