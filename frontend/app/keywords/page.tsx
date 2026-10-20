@@ -72,6 +72,7 @@ function KeywordAddBar({ groups, campaignName }: { groups: AdGroup[]; campaignNa
   const router = useRouter();
   const [grp, setGrp] = useState("");
   const [text, setText] = useState("");
+  const [bid, setBid] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState("");
@@ -106,7 +107,9 @@ function KeywordAddBar({ groups, campaignName }: { groups: AdGroup[]; campaignNa
     setBusy(true);
     setError(null);
     try {
-      const changes: Change[] = lines.map((value) => ({ entity_type: "keyword", naver_id: grp.trim(), field: "create", value }));
+      // 줄에 "|입찰가"가 없으면 입찰가 칸 값을 쓴다(그것도 비면 광고그룹 입찰가)
+      const changes: Change[] = lines.map((l) => ({ entity_type: "keyword", naver_id: grp.trim(), field: "create",
+        value: l.includes("|") || !bid ? l : `${l}|${bid}` }));
       const job = await api<Job>(`/workspaces/${ws.id}/bulk-jobs`, { body: { changes } });
       router.push(`/jobs?id=${job.id}`);
     } catch (e) {
@@ -165,8 +168,10 @@ function KeywordAddBar({ groups, campaignName }: { groups: AdGroup[]; campaignNa
           </div>
         )}
         <textarea className={`${inputCls} h-28`} aria-label="키워드 목록" value={text} onChange={(e) => setText(e.target.value)}
-          placeholder={"한 줄에 하나씩. 입찰가는 | 뒤에 (비우면 광고그룹 입찰가)\n여름 원피스|500\n린넨 원피스"} />
-        <div className="flex items-center gap-2">
+          placeholder={"한 줄에 하나씩. 키워드마다 입찰가를 다르게 하려면 | 뒤에\n여름 원피스|500\n린넨 원피스"} />
+        <div className="flex flex-wrap items-center gap-2">
+          <input className={`${inputCls} w-56`} inputMode="numeric" aria-label="입찰가" placeholder={`입찰가(원) · 비우면 광고그룹 ${group ? fmt(group.bid_amt, "원") : "입찰가"}`}
+            value={bid} onChange={(e) => setBid(e.target.value.replace(/[^0-9]/g, ""))} />
           <Button disabled={busy || !group || lines.length === 0} onClick={submit}>{lines.length}개 등록 미리보기</Button>
           <ErrorText error={error} />
         </div>
