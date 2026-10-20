@@ -114,7 +114,11 @@ class RealNaverClient:
         # 명세(ncc-heroes-ncc.json): POST /ncc/keywords?nccAdgroupId= 본문은 KeywordRequest 배열. bid가 None이면 그룹 입찰가
         body = {"keyword": keyword, "useGroupBidAmt": bid is None, **({"bidAmt": bid} if bid else {})}
         r = self._req("POST", "/ncc/keywords", params={"nccAdgroupId": adgroup_id}, json=[body])
-        return r[0] if isinstance(r, list) else r
+        k = r[0] if isinstance(r, list) and r else r
+        # 실계정에서 200인데 nccKeywordId 없는 응답이 왔다(10/20) → 실패 행 사유에 응답을 남겨 원인 확인
+        if not isinstance(k, dict) or "nccKeywordId" not in k:
+            raise NaverApiError(f"등록 응답에 키워드 ID가 없습니다: {json.dumps(r, ensure_ascii=False)[:250]}")
+        return k
 
     def keyword_tool(self, hints):
         """연관 키워드 + 최근 30일 월 검색량. 명세(gh-pages assets/json/ncc-keywordstool.json)."""
