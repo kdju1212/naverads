@@ -9,6 +9,13 @@ import { useApp } from "@/lib/store";
 import { useFetch } from "@/lib/useFetch";
 
 
+// 광고그룹을 끈 경우 네이버는 PAUSED만 주거나 캠페인 쪽 이유를 줄 수 있어, 앱의 ON/OFF를 함께 보여 준다
+const serving = (r: AdGroup) => {
+  const reason = servingLabel(r.serving);
+  if (r.status !== "OFF") return reason;
+  return ["광고그룹 OFF", "중지", "-"].includes(reason) ? "광고그룹 OFF" : `광고그룹 OFF · ${reason}`;
+};
+
 export default function AdGroupsPage() {
   const { ws, query, product, accountName } = useApp();
   const groups = useFetch<AdGroup[]>(ws && `/workspaces/${ws.id}/adgroups${query({ product })}`);
@@ -21,7 +28,7 @@ export default function AdGroupsPage() {
   const download = () => downloadCsv([
     ["광고주", "유형", "캠페인명", "캠페인 ID", "광고그룹명", "광고그룹 ID", "상태", "운영 상태", "하루예산"],
     ...rows.map((r) => [accountName(r.ad_account_id), PRODUCT_LABEL[r.adgroup_type] ?? r.adgroup_type, campById.get(r.campaign_id)?.name ?? "",
-      campById.get(r.campaign_id)?.naver_id ?? "", r.name, r.naver_id, r.status, servingLabel(r.serving), r.daily_budget ?? "제한 없음"]),
+      campById.get(r.campaign_id)?.naver_id ?? "", r.name, r.naver_id, r.status, serving(r), r.daily_budget ?? "제한 없음"]),
   ], "adgroups.csv");
 
   const cols: Col<AdGroup>[] = [
@@ -30,8 +37,8 @@ export default function AdGroupsPage() {
     { key: "camp", label: "캠페인", value: (r) => campName.get(r.campaign_id) ?? null },
     { key: "name", label: "광고그룹", value: (r) => r.name },
     { key: "status", label: "상태", value: (r) => r.status, render: (r) => <Badge value={r.status} /> },
-    { key: "serving", label: "운영 상태", value: (r) => servingLabel(r.serving),
-      render: (r) => <span className={r.serving && r.serving !== "ELIGIBLE" ? "text-amber-700" : ""}>{servingLabel(r.serving)}</span> },
+    { key: "serving", label: "운영 상태", value: serving,
+      render: (r) => <span className={r.status === "OFF" || (r.serving && r.serving !== "ELIGIBLE") ? "text-amber-700" : ""}>{serving(r)}</span> },
     { key: "budget", label: "하루예산", num: true, value: (r) => r.daily_budget, render: (r) => (r.daily_budget == null ? "제한 없음" : fmt(r.daily_budget, "원")) },
     { key: "bid", label: "기본 입찰가", num: true, value: (r) => r.bid_amt, render: (r) => fmt(r.bid_amt, "원") },
   ];
