@@ -155,7 +155,8 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
             client = clients[row.ad_account_id]
             if row.field == "create":
                 kw, bid = _split_new_keyword(row.after)
-                created = client.create_keyword(row.naver_id, kw, int(bid) if bid else None)
+                grp = db.scalar(select(AdGroup).where(AdGroup.naver_id == row.naver_id))
+                created = client.create_keyword(row.naver_id, kw, int(bid) if bid else grp.bid_amt, not bid)
             elif row.field == "delete":
                 client.delete_keyword(row.naver_id)
             else:
@@ -165,7 +166,6 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
             continue
         audit = dict(action="UPDATE", naver_id=row.naver_id, field=row.field, before=row.before, after=row.after)
         if row.field == "create":
-            grp = db.scalar(select(AdGroup).where(AdGroup.naver_id == row.naver_id))
             db.add(Keyword(ad_account_id=grp.ad_account_id, adgroup_id=grp.id, naver_id=created["nccKeywordId"],
                            keyword=created.get("keyword", kw), status=_status(created),
                            bid_amt=created.get("bidAmt") or (int(bid) if bid else grp.bid_amt), use_group_bid=created.get("useGroupBidAmt", not bid)))

@@ -110,14 +110,16 @@ class RealNaverClient:
         # 명세의 /ncc/ad-extensions/{id}는 실계정에서 404, 공식 샘플(AdExtensions.java)처럼 ids 쿼리로 지운다
         self._req("DELETE", "/ncc/ad-extensions", params={"ids": ext_id})
 
-    def create_keyword(self, adgroup_id, keyword, bid):
-        # 명세(ncc-heroes-ncc.json): POST /ncc/keywords?nccAdgroupId= 본문은 KeywordRequest 배열. bid가 None이면 그룹 입찰가
-        body = {"keyword": keyword, "useGroupBidAmt": bid is None, **({"bidAmt": bid} if bid else {})}
+    def create_keyword(self, adgroup_id, keyword, bid, use_group_bid):
+        # 명세(ncc-heroes-ncc.json): POST /ncc/keywords?nccAdgroupId= 본문은 KeywordRequest 배열.
+        # 그룹 입찰가를 써도 bidAmt가 없으면 3916 "No value is entered in the default bid or bid amount field." (실계정 10/20)
+        body = {"keyword": keyword, "bidAmt": bid, "useGroupBidAmt": use_group_bid}
         r = self._req("POST", "/ncc/keywords", params={"nccAdgroupId": adgroup_id}, json=[body])
         k = r[0] if isinstance(r, list) and r else r
-        # 실계정에서 200인데 nccKeywordId 없는 응답이 왔다(10/20) → 실패 행 사유에 응답을 남겨 원인 확인
+        # 항목별 실패는 200 응답에 nccKeywordId 없이 resultStatus로 온다
         if not isinstance(k, dict) or "nccKeywordId" not in k:
-            raise NaverApiError(f"등록 응답에 키워드 ID가 없습니다: {json.dumps(r, ensure_ascii=False)[:250]}")
+            rs = k.get("resultStatus") if isinstance(k, dict) else None
+            raise NaverApiError(f"{rs['code']} {rs['message']}" if rs else f"등록 응답에 키워드 ID가 없습니다: {json.dumps(r, ensure_ascii=False)[:250]}")
         return k
 
     def keyword_tool(self, hints):
@@ -246,13 +248,14 @@ class MockNaverClient:
         if self.s.get("ad-extensions", {}).pop(ext_id, None) is None:
             raise NaverApiError("대상 확장소재가 존재하지 않습니다")
 
-    def create_keyword(self, adgroup_id, keyword, bid):
+    def create_keyword(self, adgroup_id, keyword, bid, use_group_bid):
         if adgroup_id not in self.s["adgroups"]:
             raise NaverApiError("대상 광고그룹이 존재하지 않습니다")
+        if not bid:
+            raise NaverApiError("3916 No value is entered in the default bid or bid amount field.")
         kid = f"kwd-mock-{len(self.s['keywords']) + 1}-{random.randint(1000, 9999)}"
-        g = self.s["adgroups"][adgroup_id]
         k = {"nccKeywordId": kid, "nccAdgroupId": adgroup_id, "keyword": keyword, "userLock": False,
-             "bidAmt": bid or g["bidAmt"], "useGroupBidAmt": bid is None}
+             "bidAmt": bid, "useGroupBidAmt": use_group_bid}
         self.s["keywords"][kid] = k
         return dict(k)
 
