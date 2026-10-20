@@ -441,6 +441,9 @@ async def retry_bulk_job(job_id: int, m: Membership = Depends(membership), db: S
 
 
 # ---------- 자동입찰 (목표 순위) ----------
+AUTO_BID_LIMIT = 20
+
+
 class AutoBidIn(BaseModel):
     keyword_ids: list[int]
     device: Literal["PC", "MOBILE"]
@@ -475,7 +478,13 @@ async def set_auto_bids(body: AutoBidIn, m: Membership = Depends(membership), db
     lo, hi = bulk.BID_RANGE["WEB_SITE"]
     if not lo <= body.max_bid <= hi or body.max_bid % 10:
         raise HTTPException(400, f"최대 입찰가는 {lo:,}~{hi:,}원, 10원 단위")
-    for k in _editable_keywords(db, m, body.keyword_ids):
+    kws = _editable_keywords(db, m, body.keyword_ids)
+    on = set(db.scalars(select(AutoBidRule.keyword_id).where(AutoBidRule.workspace_id == m.workspace_id,
+                                                             AutoBidRule.enabled.is_(True))))
+    # 무료 플랜은 크론 1회당 외부 호출 수 한도가 있어 키워드가 많으면 실행이 끊긴다
+    if body.enabled and len(on | {k.id for k in kws}) > AUTO_BID_LIMIT:
+        raise HTTPException(400, f"자동입찰은 조직당 {AUTO_BID_LIMIT}개까지입니다 (지금 {len(on)}개 사용 중)")
+    for k in kws:
         r = db.scalar(select(AutoBidRule).where(AutoBidRule.keyword_id == k.id))
         if r is None:
             r = AutoBidRule(workspace_id=m.workspace_id, keyword_id=k.id)

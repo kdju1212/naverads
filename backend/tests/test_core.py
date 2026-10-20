@@ -298,6 +298,19 @@ def test_auto_bid():
     assert c.post(f"{url}/delete", headers=owner, json={"keyword_ids": [k1["id"], k2["id"]]}).json() == {"ok": True}
     assert c.get(url, headers=owner).json() == []
 
+    # 조직당 개수 제한: 한도를 1로 낮춰 2번째 키워드는 거절, 같은 키워드 덮어쓰기·중지는 허용
+    from app import main
+    main.AUTO_BID_LIMIT = 1
+    try:
+        body = {"device": "PC", "target_rank": 1, "max_bid": 500}
+        assert c.put(url, headers=owner, json={**body, "keyword_ids": [k1["id"]]}).status_code == 200
+        assert c.put(url, headers=owner, json={**body, "keyword_ids": [k1["id"]]}).status_code == 200
+        r = c.put(url, headers=owner, json={**body, "keyword_ids": [k2["id"]]})
+        assert r.status_code == 400 and "1개까지" in r.json()["detail"]
+        assert c.put(url, headers=owner, json={**body, "keyword_ids": [k2["id"]], "enabled": False}).status_code == 200
+    finally:
+        main.AUTO_BID_LIMIT = 20
+
 
 def test_sync_removes_stale():
     from app.naver import _MOCK_STORE
