@@ -408,3 +408,22 @@ def test_keyword_tool():
     outsider = user("kt2@b.com")
     ws_b = c.post("/workspaces", json={"name": "T2"}, headers=outsider).json()["id"]
     assert c.get(f"/workspaces/{ws_b}/keyword-tool", params={"account_id": acc, "hint": "a"}, headers=outsider).status_code == 403
+
+
+def test_execute_in_chunks():
+    from app import bulk
+
+    owner = user("chunk@a.com")
+    ws = c.post("/workspaces", json={"name": "C"}, headers=owner).json()["id"]
+    cred = c.post(f"/workspaces/{ws}/credentials", json={"label": "m", "api_key": "k", "secret_key": "s"}, headers=owner).json()["id"]
+    acc = c.post(f"/workspaces/{ws}/ad-accounts", json={"credential_id": cred, "customer_id": "8008", "name": "c"}, headers=owner).json()["id"]
+    c.post(f"/workspaces/{ws}/ad-accounts/{acc}/sync", headers=owner)
+    n = bulk.EXECUTE_CHUNK + 2
+    job = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [
+        {"entity_type": "keyword", "naver_id": "grp-8008-pl1", "field": "create", "value": f"묶음{i}"} for i in range(n)]}).json()
+    url = f"/workspaces/{ws}/bulk-jobs/{job['id']}/execute"
+    first = c.post(url, headers=owner).json()  # 요청이 끊긴 RUNNING 작업도 이렇게 이어 간다
+    assert first["status"] == "RUNNING" and first["counts"]["SUCCESS"] == bulk.EXECUTE_CHUNK and first["counts"]["VALID"] == 2
+    last = c.post(url, headers=owner).json()
+    assert last["status"] == "DONE" and last["counts"]["SUCCESS"] == n and last["executed_at"]
+    assert c.post(url, headers=owner).status_code == 409

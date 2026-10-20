@@ -446,7 +446,8 @@ async def get_bulk_job(job_id: int, m: Membership = Depends(membership), db: Ses
 
 @app.post("/workspaces/{ws_id}/bulk-jobs/{job_id}/execute")
 async def execute_bulk_job(job_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
-    return _job_out(db, bulk.execute_job(db, m, _job(db, m, job_id)))
+    """최대 EXECUTE_CHUNK행씩 실행. 응답 status가 RUNNING이면 화면이 다시 호출한다."""
+    return _job_out(db, bulk.execute_job(db, m, _job(db, m, job_id), bulk.EXECUTE_CHUNK))
 
 
 @app.post("/workspaces/{ws_id}/bulk-jobs/{job_id}/retry-failed")

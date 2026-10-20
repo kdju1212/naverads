@@ -65,7 +65,12 @@ function JobDetail({ id }: { id: string }) {
     setBusy(true);
     setError(null);
     try {
-      const j = await api<Job>(`/workspaces/${ws.id}/bulk-jobs/${id}/${path}`, { method: "POST" });
+      let j = await api<Job>(`/workspaces/${ws.id}/bulk-jobs/${id}/${path}`, { method: "POST" });
+      // 실행은 서버가 몇 건씩 나눠 처리한다(무료 플랜 요청당 호출 한도). RUNNING이면 남은 건을 이어서 요청
+      while (path === "execute" && j.status === "RUNNING") {
+        setJob(j);
+        j = await api<Job>(`/workspaces/${ws.id}/bulk-jobs/${id}/execute`, { method: "POST" });
+      }
       if (String(j.id) !== id) router.push(`/jobs?id=${j.id}`); else setJob(j);
     } catch (e) { setError((e as Error).message); }
     setBusy(false);
@@ -99,6 +104,10 @@ function JobDetail({ id }: { id: string }) {
             <Button disabled={busy || c.VALID === 0} onClick={() => act("execute", `광고주 ${job.accounts?.length}개, ${c.VALID}건을 실제로 변경합니다. 실행할까요?`)}>
               {busy ? "실행 중…" : `${c.VALID}건 실행`}
             </Button>
+          )}
+          {job.status === "RUNNING" && (
+            busy ? <span className="text-gray-500">실행 중… 남은 {c.VALID}건</span>
+              : <Button onClick={() => act("execute")}>남은 {c.VALID}건 이어서 실행</Button>
           )}
           {c.FAILED > 0 && <Button variant="danger" disabled={busy} onClick={() => act("retry-failed")}>실패 {c.FAILED}건만 재실행 준비</Button>}
         </div>

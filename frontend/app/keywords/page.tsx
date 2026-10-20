@@ -157,7 +157,12 @@ function KeywordAddBar({ groups, campaignName }: { groups: AdGroup[]; campaignNa
           </div>
         )}
         {rel && rel.length > 0 && (
-          <div><Button variant="secondary" disabled={pick.size === 0} onClick={addPicked}>선택한 {pick.size}개 아래 목록에 추가</Button></div>
+          <div className="flex gap-2">
+            <Button variant="secondary" onClick={() => setPick(pick.size === Math.min(rel.length, 100) ? new Set() : new Set(rel.slice(0, 100).map((r) => r.keyword)))}>
+              {pick.size === Math.min(rel.length, 100) ? "전체 해제" : "전체 선택"}
+            </Button>
+            <Button variant="secondary" disabled={pick.size === 0} onClick={addPicked}>선택한 {pick.size}개 아래 목록에 추가</Button>
+          </div>
         )}
         <textarea className={`${inputCls} h-28`} aria-label="키워드 목록" value={text} onChange={(e) => setText(e.target.value)}
           placeholder={"한 줄에 하나씩. 입찰가는 | 뒤에 (비우면 광고그룹 입찰가)\n여름 원피스|500\n린넨 원피스"} />

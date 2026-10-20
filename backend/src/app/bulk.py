@@ -128,11 +128,18 @@ def _client(db: Session, workspace_id: int, account_id: int):
     return client_for(db.get(NaverApiCredential, link.credential_id), db.get(AdAccount, account_id).customer_id, decrypt)
 
 
-def execute_job(db: Session, m: Membership, job: BulkJob) -> BulkJob:
-    if job.status != "PREVIEW":
+# 무료 플랜은 요청 1번에 D1 쿼리+외부 호출 50번까지라, 화면 실행은 몇 행씩 나눠 여러 번 요청한다(행마다 약 5번 + 고정 약 15번)
+EXECUTE_CHUNK = 3
+
+
+def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = None) -> BulkJob:
+    """VALID 행을 최대 limit개 실행. 남은 행이 있으면 RUNNING으로 두고 반환하니 다시 호출하면 이어서 실행한다
+    (중간에 요청이 끊긴 RUNNING 작업도 같은 방법으로 이어 간다)."""
+    if job.status not in ("PREVIEW", "RUNNING"):
         raise HTTPException(409, "이미 실행된 작업입니다")
-    rows = db.scalars(select(BulkJobRow).where(BulkJobRow.job_id == job.id, BulkJobRow.status == "VALID")).all()
-    if not rows:
+    q = select(BulkJobRow).where(BulkJobRow.job_id == job.id, BulkJobRow.status == "VALID").order_by(BulkJobRow.id)
+    rows = db.scalars(q.limit(limit) if limit else q).all()
+    if not rows and job.status == "PREVIEW":
         raise HTTPException(400, "실행할 수 있는 행이 없습니다")
     job.status = "RUNNING"
     db.commit()
@@ -178,7 +185,10 @@ def execute_job(db: Session, m: Membership, job: BulkJob) -> BulkJob:
         db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=row.ad_account_id, job_id=job.id,
                         entity_type=row.entity_type, **audit))
         db.commit()  # 행 단위 커밋: 중간에 죽어도 성공한 변경과 감사 로그는 남는다
-    results = {r.status for r in rows}
+    db.commit()
+    results = set(db.scalars(select(BulkJobRow.status).where(BulkJobRow.job_id == job.id, BulkJobRow.status != "INVALID")))
+    if "VALID" in results:
+        return job
     job.status = "DONE" if results == {"SUCCESS"} else "FAILED" if "SUCCESS" not in results else "PARTIAL"
     job.executed_at = now()
     db.commit()
