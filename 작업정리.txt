@@ -16,7 +16,7 @@ API:     https://naverads-api.djkim0509.workers.dev/docs
 - 백엔드 Secret APP_SECRET 설정 확인됨 (네이버 비밀키 암호화 저장에 사용)
 - DB 스키마 변경은 자동 배포되지 않음 → push 전에 직접 실행 (backend 폴더에서)
   npx wrangler d1 migrations apply naverads --remote
-  (0003_auto_bid_rules 적용 완료, 0004_adgroup_daily_budget 적용 완료 10/20, 0005_adgroup_serving 적용 필요 — push 전에)
+  (0003_auto_bid_rules 적용 완료, 0004_adgroup_daily_budget 적용 완료 10/20, 0005_adgroup_serving 적용 완료 10/20)
 
 [계정 연결]
 - 네이버 검색광고 API 키 등록 + 실계정(CUSTOMER_ID) 연결·동기화 성공
