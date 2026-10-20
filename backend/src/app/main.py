@@ -294,7 +294,7 @@ async def list_adgroups(account_ids: str | None = None, product: ProductType = N
     if q:
         s = s.where(AdGroup.name.contains(q))
     return _rows(db.scalars(s.order_by(AdGroup.ad_account_id, AdGroup.id)),
-                 "id", "ad_account_id", "campaign_id", "naver_id", "name", "adgroup_type", "status", "bid_amt", "daily_budget")
+                 "id", "ad_account_id", "campaign_id", "naver_id", "name", "adgroup_type", "status", "bid_amt", "daily_budget", "serving")
 
 
 @app.get("/workspaces/{ws_id}/keywords")

@@ -8,7 +8,7 @@ export interface Account {
   last_sync: { status: "SUCCESS" | "FAILED"; error: string | null; at: string } | null;
 }
 export interface Campaign { id: number; ad_account_id: number; naver_id: string; name: string; campaign_tp: string; status: string; daily_budget: number }
-export interface AdGroup { id: number; ad_account_id: number; campaign_id: number; naver_id: string; name: string; adgroup_type: string; status: string; bid_amt: number; daily_budget: number | null }
+export interface AdGroup { id: number; ad_account_id: number; campaign_id: number; naver_id: string; name: string; adgroup_type: string; status: string; bid_amt: number; daily_budget: number | null; serving: string | null }
 export interface Change { entity_type: string; naver_id: string; field: string; value: string }
 export interface JobRow {
   id: number; entity_type: string; naver_id: string; field: string; before: string | null; after: string;
@@ -80,5 +80,17 @@ export function downloadCsv(rows: (string | number | null)[][], filename: string
 export const fmt = (n: number | null | undefined, suffix = "") => (n == null ? "-" : n.toLocaleString("ko-KR") + suffix);
 
 export const PRODUCT_LABEL: Record<string, string> = { WEB_SITE: "파워링크", SHOPPING: "쇼핑검색" };
+// 네이버 광고그룹 statusReason/status (공식 명세 enum). 동기화 시점 기준
+export const SERVING_LABEL: Record<string, string> = {
+  ELIGIBLE: "노출 가능", LIMITED_ELIGIBLE: "일부 제한", PAUSED: "중지", DELETED: "삭제됨",
+  CAMPAIGN_PAUSED: "캠페인 OFF", CAMPAIGN_PENDING: "캠페인 시작 전", CAMPAIGN_ENDED: "캠페인 종료",
+  CAMPAIGN_LIMITED_BY_BUDGET: "캠페인 예산 소진", GROUP_PAUSED: "광고그룹 OFF", GROUP_LIMITED_BY_BUDGET: "광고그룹 예산 소진",
+  GROUP_DELETED: "광고그룹 삭제됨", BUSINESS_CHANNEL_PAUSED: "비즈채널 중지", BUSINESS_CHANNEL_DISAPPROVED: "비즈채널 반려",
+  BUSINESS_CHANNEL_UNDER_REVIEW: "비즈채널 검수 중", PC_BUSINESS_CHANNEL_APPROVED: "PC 비즈채널 승인",
+  PC_BUSINESS_CHANNEL_DISAPPROVED: "PC 비즈채널 반려", PC_BUSINESS_CHANNEL_UNDER_REVIEW: "PC 비즈채널 검수 중",
+  MOBILE_BUSINESS_CHANNEL_APPROVED: "모바일 비즈채널 승인", MOBILE_BUSINESS_CHANNEL_DISAPPROVED: "모바일 비즈채널 반려",
+  MOBILE_BUSINESS_CHANNEL_UNDER_REVIEW: "모바일 비즈채널 검수 중",
+};
+export const servingLabel = (v: string | null) => (v ? SERVING_LABEL[v] ?? v : "-");
 export const FIELD_LABEL: Record<string, string> = { status: "상태", daily_budget: "일예산", bid_amt: "입찰가", create: "등록", delete: "삭제", keyword: "키워드" };
 export const ENTITY_LABEL: Record<string, string> = { campaign: "캠페인", adgroup: "광고그룹", keyword: "키워드", ad: "소재", ad_extension: "확장소재" };

@@ -97,7 +97,8 @@ def sync_account(db: Session, account: AdAccount, client) -> SyncRun:
                 grp = _upsert(AdGroup, g["nccAdgroupId"], ad_account_id=aid, campaign_id=camp.id, name=g["name"],
                               adgroup_type=g["adgroupType"], status=_status(g), bid_amt=g["bidAmt"],
                               # shortcut: 공유예산(sharedBudgetId) 그룹은 반영 안 함, 쓰는 계정이 생기면 sharedDailyBudget 표시
-                              daily_budget=g.get("dailyBudget") if g.get("useDailyBudget") else None)
+                              daily_budget=g.get("dailyBudget") if g.get("useDailyBudget") else None,
+                              serving=g.get("statusReason") or g.get("status"))
                 db.flush()
                 if grp.adgroup_type == "WEB_SITE":
                     _sync_extensions(_upsert, client, grp.naver_id)

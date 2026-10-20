@@ -98,6 +98,7 @@ class AdGroup(Base):
     status: Mapped[str] = mapped_column(String(3))
     bid_amt: Mapped[int] = mapped_column(Integer)
     daily_budget: Mapped[int | None] = mapped_column(Integer, nullable=True)  # None = 제한 없음
+    serving: Mapped[str | None] = mapped_column(String(40), nullable=True)  # 네이버 statusReason 또는 status (동기화 시점)
 
 
 class Keyword(Base):
