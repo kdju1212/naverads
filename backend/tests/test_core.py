@@ -388,3 +388,19 @@ def test_keyword_create_delete():
     assert set(kws()) == set(now)
     acts = {(h["action"], h["field"]) for h in c.get(f"/workspaces/{ws}/audit-logs", headers=owner).json()}
     assert {("CREATE", "keyword"), ("DELETE", "keyword")} <= acts
+
+
+def test_keyword_tool():
+    owner = user("kt@a.com")
+    ws = c.post("/workspaces", json={"name": "T"}, headers=owner).json()["id"]
+    cred = c.post(f"/workspaces/{ws}/credentials", json={"label": "m", "api_key": "k", "secret_key": "s"}, headers=owner).json()["id"]
+    acc = c.post(f"/workspaces/{ws}/ad-accounts", json={"credential_id": cred, "customer_id": "7007", "name": "t"}, headers=owner).json()["id"]
+    url = f"/workspaces/{ws}/keyword-tool"
+    rows = c.get(url, params={"account_id": acc, "hint": "린넨 원피스, 린넨원피스,"}, headers=owner).json()
+    assert len(rows) == 5 and rows[0]["keyword"].startswith("린넨원피스")  # 띄어쓰기 제거·중복 제거
+    assert [r["pc"] + r["mobile"] for r in rows] == sorted((r["pc"] + r["mobile"] for r in rows), reverse=True)
+    assert next(r for r in rows if r["keyword"] == "린넨원피스")["pc"] == 0  # "< 10"
+    assert c.get(url, params={"account_id": acc, "hint": " , "}, headers=owner).status_code == 400
+    outsider = user("kt2@b.com")
+    ws_b = c.post("/workspaces", json={"name": "T2"}, headers=outsider).json()["id"]
+    assert c.get(f"/workspaces/{ws_b}/keyword-tool", params={"account_id": acc, "hint": "a"}, headers=outsider).status_code == 403

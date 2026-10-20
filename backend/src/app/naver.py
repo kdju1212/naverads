@@ -116,6 +116,11 @@ class RealNaverClient:
         r = self._req("POST", "/ncc/keywords", params={"nccAdgroupId": adgroup_id}, json=[body])
         return r[0] if isinstance(r, list) else r
 
+    def keyword_tool(self, hints):
+        """연관 키워드 + 최근 30일 월 검색량. 명세(gh-pages assets/json/ncc-keywordstool.json)."""
+        r = self._req("GET", "/keywordstool", params={"hintKeywords": ",".join(hints), "showDetail": "1"})
+        return [_kwd_stat(k) for k in r.get("keywordList", [])]
+
     def delete_keyword(self, keyword_id):
         # 확장소재처럼 /{id} 경로 대신 명세의 ids 쿼리 방식
         self._req("DELETE", "/ncc/keywords", params={"ids": keyword_id})
@@ -158,6 +163,13 @@ class RealNaverClient:
         got = {k: out.get(k) for k in want}
         if got != want:
             raise NaverApiError(f"네이버에 반영되지 않았습니다 (요청 {want}, 응답 {got})")
+
+
+def _kwd_stat(k):
+    # 검색량이 적으면 숫자 대신 "< 10" 문자열이 온다 → 0 (화면에서 "10 미만")
+    n = lambda v: int(v) if str(v).isdigit() else 0  # noqa: E731
+    return {"keyword": k["relKeyword"], "pc": n(k.get("monthlyPcQcCnt")), "mobile": n(k.get("monthlyMobileQcCnt")),
+            "comp": k.get("compIdx", "")}
 
 
 # ---- Mock ----
@@ -237,6 +249,12 @@ class MockNaverClient:
              "bidAmt": bid or g["bidAmt"], "useGroupBidAmt": bid is None}
         self.s["keywords"][kid] = k
         return dict(k)
+
+    def keyword_tool(self, hints):
+        r = random.Random(",".join(hints))
+        return [_kwd_stat({"relKeyword": f"{h}{s}", "monthlyPcQcCnt": str(r.randint(0, 5000)) if s else "< 10",
+                           "monthlyMobileQcCnt": str(r.randint(0, 20000)), "compIdx": r.choice(["낮음", "중간", "높음"])})
+                for h in hints for s in ("", " 추천", " 가격", " 후기", " 할인")]
 
     def delete_keyword(self, keyword_id):
         if keyword_id in MOCK_FAIL_IDS or self.s["keywords"].pop(keyword_id, None) is None:

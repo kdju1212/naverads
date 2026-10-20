@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { BulkBar } from "@/components/BulkBar";
 import { Col, DataTable } from "@/components/DataTable";
 import { Badge, Button, Card, ErrorText, inputCls, PageTitle } from "@/components/ui";
-import { AdGroup, api, Change, fmt, Job } from "@/lib/api";
+import { AdGroup, api, Campaign, Change, fmt, Job } from "@/lib/api";
 import { useApp } from "@/lib/store";
 import { useFetch } from "@/lib/useFetch";
 
@@ -62,22 +62,51 @@ function AutoBidBar({ ids, onDone }: { ids: number[]; onDone: () => void }) {
   );
 }
 
-/** 광고그룹 하나에 여러 키워드를 붙여넣어 등록 작업을 만든다. 미리보기 화면에서 확인 후 실행. */
-function KeywordAddBar({ groups }: { groups: AdGroup[] }) {
-  const { ws } = useApp();
+interface RelKeyword { keyword: string; pc: number; mobile: number; comp: string }
+const qc = (n: number) => (n ? fmt(n) : "10 미만");
+
+/** 광고그룹 하나에 여러 키워드를 붙여넣어 등록 작업을 만든다. 미리보기 화면에서 확인 후 실행.
+ * 광고그룹 이름은 캠페인마다 겹칠 수 있어 ID로 지정한다. */
+function KeywordAddBar({ groups, campaignName }: { groups: AdGroup[]; campaignName: Map<number, string> }) {
+  const { ws, accountName } = useApp();
   const router = useRouter();
   const [grp, setGrp] = useState("");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState("");
+  const [rel, setRel] = useState<RelKeyword[] | null>(null);
+  const [pick, setPick] = useState<Set<string>>(new Set());
   const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  const group = groups.find((g) => g.naver_id === grp.trim());
+  const label = (g: AdGroup) => `${accountName(g.ad_account_id)} · ${campaignName.get(g.campaign_id) ?? "-"} > ${g.name}`;
+
+  const searchRel = async () => {
+    if (!ws || !group) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setRel(await api<RelKeyword[]>(`/workspaces/${ws.id}/keyword-tool?account_id=${group.ad_account_id}&hint=${encodeURIComponent(hint)}`));
+      setPick(new Set());
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const addPicked = () => {
+    const have = new Set(lines.map((l) => l.split("|")[0].trim()));
+    setText([...lines, ...[...pick].filter((k) => !have.has(k))].join("\n"));
+    setPick(new Set());
+  };
 
   const submit = async () => {
     if (!ws) return;
     setBusy(true);
     setError(null);
     try {
-      const changes: Change[] = lines.map((value) => ({ entity_type: "keyword", naver_id: grp, field: "create", value }));
+      const changes: Change[] = lines.map((value) => ({ entity_type: "keyword", naver_id: grp.trim(), field: "create", value }));
       const job = await api<Job>(`/workspaces/${ws.id}/bulk-jobs`, { body: { changes } });
       router.push(`/jobs?id=${job.id}`);
     } catch (e) {
@@ -89,14 +118,51 @@ function KeywordAddBar({ groups }: { groups: AdGroup[] }) {
   return (
     <Card title="키워드 등록">
       <div className="flex flex-col gap-2">
-        <select className={inputCls} aria-label="광고그룹" value={grp} onChange={(e) => setGrp(e.target.value)}>
-          <option value="">광고그룹 선택</option>
-          {groups.map((g) => <option key={g.id} value={g.naver_id}>{g.name}</option>)}
-        </select>
+        <input className={inputCls} aria-label="광고그룹 ID" list="adgroup-ids" placeholder="광고그룹 ID (grp-...) 붙여넣기 또는 선택"
+          value={grp} onChange={(e) => setGrp(e.target.value)} />
+        <datalist id="adgroup-ids">
+          {groups.map((g) => <option key={g.id} value={g.naver_id}>{label(g)}</option>)}
+        </datalist>
+        {grp.trim() && (
+          <p className={`text-xs ${group ? "text-gray-600" : "text-red-600"}`}>
+            {group ? label(group) : "목록에 없는 광고그룹 ID입니다 (파워링크 광고그룹 ID인지, 동기화했는지 확인)"}
+          </p>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <input className={`${inputCls} w-64`} aria-label="연관 키워드 검색어" placeholder="연관 키워드 찾기 (쉼표로 최대 5개)"
+            value={hint} onChange={(e) => setHint(e.target.value)} onKeyDown={(e) => e.key === "Enter" && hint.trim() && searchRel()} />
+          <Button variant="secondary" disabled={busy || !group || !hint.trim()} onClick={searchRel}>연관 키워드</Button>
+          {!group && <span className="text-xs text-gray-500">광고그룹을 먼저 지정하세요</span>}
+        </div>
+        {rel && (
+          <div className="max-h-72 overflow-auto rounded border border-gray-200">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-gray-50 text-left text-xs text-gray-500">
+                <tr><th className="w-8 px-2 py-1.5" /><th>키워드</th><th className="text-right">PC 월 검색</th><th className="text-right">모바일 월 검색</th><th className="px-2 text-right">경쟁</th></tr>
+              </thead>
+              <tbody>
+                {rel.slice(0, 100).map((r) => (
+                  <tr key={r.keyword} className="border-t border-gray-100">
+                    <td className="px-2 py-1"><input type="checkbox" aria-label={r.keyword} checked={pick.has(r.keyword)}
+                      onChange={() => setPick((p) => { const n = new Set(p); if (n.has(r.keyword)) n.delete(r.keyword); else n.add(r.keyword); return n; })} /></td>
+                    <td>{r.keyword}</td>
+                    <td className="text-right tabular-nums">{qc(r.pc)}</td>
+                    <td className="text-right tabular-nums">{qc(r.mobile)}</td>
+                    <td className="px-2 text-right">{r.comp}</td>
+                  </tr>
+                ))}
+                {rel.length === 0 && <tr><td colSpan={5} className="py-3 text-center text-gray-500">연관 키워드가 없습니다</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {rel && rel.length > 0 && (
+          <div><Button variant="secondary" disabled={pick.size === 0} onClick={addPicked}>선택한 {pick.size}개 아래 목록에 추가</Button></div>
+        )}
         <textarea className={`${inputCls} h-28`} aria-label="키워드 목록" value={text} onChange={(e) => setText(e.target.value)}
           placeholder={"한 줄에 하나씩. 입찰가는 | 뒤에 (비우면 광고그룹 입찰가)\n여름 원피스|500\n린넨 원피스"} />
         <div className="flex items-center gap-2">
-          <Button disabled={busy || !grp || lines.length === 0} onClick={submit}>{lines.length}개 등록 미리보기</Button>
+          <Button disabled={busy || !group || lines.length === 0} onClick={submit}>{lines.length}개 등록 미리보기</Button>
           <ErrorText error={error} />
         </div>
       </div>
@@ -110,6 +176,8 @@ export default function KeywordsPage() {
   const kws = useFetch<Keyword[]>(ws && !shoppingOnly ? `/workspaces/${ws.id}/keywords${query()}` : null);
   const groups = useFetch<AdGroup[]>(ws && !shoppingOnly ? `/workspaces/${ws.id}/adgroups${query({ product: "WEB_SITE" })}` : null);
   const autoBids = useFetch<AutoBid[]>(ws && !shoppingOnly ? `/workspaces/${ws.id}/auto-bids` : null);
+  const camps = useFetch<Campaign[]>(ws && !shoppingOnly ? `/workspaces/${ws.id}/campaigns${query({ product: "WEB_SITE" })}` : null);
+  const campaignName = useMemo(() => new Map((camps.data ?? []).map((c) => [c.id, c.name])), [camps.data]);
   const [sel, setSel] = useState<Set<number>>(new Set());
   const rows = useMemo(() => kws.data ?? [], [kws.data]);
   const groupName = useMemo(() => new Map((groups.data ?? []).map((g) => [g.id, g.name])), [groups.data]);
@@ -149,7 +217,7 @@ export default function KeywordsPage() {
     <>
       <PageTitle desc="파워링크 키워드를 대량 등록·삭제하고 ON/OFF·입찰가를 대량 변경합니다. 자동입찰은 네이버 '순위별 예상 입찰가'로 매시 정각에 입찰가를 맞추며 최대 입찰가를 넘지 않습니다.">키워드 (파워링크)</PageTitle>
       <ErrorText error={kws.error ?? autoBids.error} />
-      <KeywordAddBar groups={groups.data ?? []} />
+      <KeywordAddBar groups={groups.data ?? []} campaignName={campaignName} />
       <DataTable rows={rows} cols={cols} selected={sel} onSelect={setSel} loading={kws.loading}
         toolbar={
           <div className="flex flex-col gap-2">

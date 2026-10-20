@@ -251,6 +251,20 @@ async def sync(account_id: int, m: Membership = Depends(membership), db: Session
     return {"status": run.status, "error": run.error}
 
 
+@app.get("/workspaces/{ws_id}/keyword-tool")
+async def keyword_tool(account_id: int, hint: str, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    """연관 키워드. 네이버 키워드 도구는 띄어쓰기 없는 키워드 최대 5개까지 받는다."""
+    resolve_account_ids(db, m, [account_id])
+    hints = list(dict.fromkeys(h.replace(" ", "") for h in hint.split(",") if h.strip()))[:5]
+    if not hints:
+        raise HTTPException(400, "키워드를 입력하세요")
+    try:
+        rows = bulk._client(db, m.workspace_id, account_id).keyword_tool(hints)
+    except NaverApiError as e:
+        raise HTTPException(400, f"연관 키워드 조회 실패: {e}")
+    return sorted(rows, key=lambda r: -(r["pc"] + r["mobile"]))
+
+
 # ---------- 다계정 통합 조회 ----------
 ProductType = Literal["WEB_SITE", "SHOPPING"] | None
 
