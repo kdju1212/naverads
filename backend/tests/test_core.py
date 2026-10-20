@@ -371,7 +371,7 @@ def test_keyword_create_delete():
     ch = lambda nid, field, value="": {"entity_type": "keyword", "naver_id": nid, "field": field, "value": value}  # noqa: E731
     job = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [
         ch("grp-6006-pl1", "create", "새 키워드|550"),
-        ch("grp-6006-pl1", "create", "그룹가 키워드"),
+        ch("grp-6006-pl1", "create", "기본가 키워드"),
         ch("grp-6006-pl1", "create", "새 키워드|600"),   # 같은 키워드 중복
         ch("grp-6006-pl1", "create", "원피스1"),          # 이미 있음
         ch("grp-6006-pl1", "create", "x|505"),            # 10원 단위 아님
@@ -385,7 +385,7 @@ def test_keyword_create_delete():
     assert c.post(f"/workspaces/{ws}/bulk-jobs/{job['id']}/execute", headers=owner).json()["status"] == "DONE"
     now = kws()
     assert "원피스1" not in now and now["새 키워드"]["bid_amt"] == 550 and not now["새 키워드"]["use_group_bid"]
-    assert now["그룹가 키워드"]["use_group_bid"] and now["그룹가 키워드"]["bid_amt"] == 500
+    assert not now["기본가 키워드"]["use_group_bid"] and now["기본가 키워드"]["bid_amt"] == 70  # 입찰가 비우면 70원
     assert c.get(f"/workspaces/{ws}/auto-bids", headers=owner).json() == []
     # 동기화해도 그대로 (Mock 네이버에도 반영됨)
     c.post(f"/workspaces/{ws}/ad-accounts/{acc}/sync", headers=owner)

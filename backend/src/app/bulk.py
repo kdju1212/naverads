@@ -52,7 +52,7 @@ def _validate_new_keyword(grp: AdGroup, value: str) -> str | None:
     if bid:
         lo, hi = BID_RANGE["WEB_SITE"]
         if not bid.isdigit() or int(bid) % 10 or not lo <= int(bid) <= hi:
-            return f"입찰가는 {lo:,}~{hi:,}원, 10원 단위 (비우면 광고그룹 입찰가)"
+            return f"입찰가는 {lo:,}~{hi:,}원, 10원 단위 (비우면 {lo}원)"
     return None
 
 
@@ -156,7 +156,8 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
             if row.field == "create":
                 kw, bid = _split_new_keyword(row.after)
                 grp = db.scalar(select(AdGroup).where(AdGroup.naver_id == row.naver_id))
-                created = client.create_keyword(row.naver_id, kw, int(bid) if bid else grp.bid_amt, not bid)
+                bid_amt = int(bid) if bid else BID_RANGE["WEB_SITE"][0]  # 비우면 최저 입찰가(사용자 요청 10/20)
+                created = client.create_keyword(row.naver_id, kw, bid_amt, False)
             elif row.field == "delete":
                 client.delete_keyword(row.naver_id)
             else:
@@ -168,7 +169,7 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
         if row.field == "create":
             db.add(Keyword(ad_account_id=grp.ad_account_id, adgroup_id=grp.id, naver_id=created["nccKeywordId"],
                            keyword=created.get("keyword", kw), status=_status(created),
-                           bid_amt=created.get("bidAmt") or (int(bid) if bid else grp.bid_amt), use_group_bid=created.get("useGroupBidAmt", not bid)))
+                           bid_amt=created.get("bidAmt") or bid_amt, use_group_bid=created.get("useGroupBidAmt", False)))
             audit.update(action="CREATE", naver_id=created["nccKeywordId"], field="keyword", after=kw)
         elif row.field == "delete":
             obj = db.scalar(select(Keyword).where(Keyword.naver_id == row.naver_id))
@@ -336,7 +337,7 @@ def excel_template() -> bytes:
     for line in [["entity_type", "campaign | adgroup | keyword(파워링크) | ad | ad_extension(파워링크 확장소재)"],
                  ["field", "status(ON/OFF), daily_budget(캠페인), bid_amt(광고그룹·키워드·쇼핑 상품소재), 확장소재는 status만"],
                  ["value", "10원 단위 숫자 또는 ON/OFF"],
-                 ["키워드 등록", "entity_type=keyword, naver_id=광고그룹 ID(grp-...), field=create, value=키워드|입찰가 (입찰가 비우면 광고그룹 입찰가)"],
+                 ["키워드 등록", "entity_type=keyword, naver_id=광고그룹 ID(grp-...), field=create, value=키워드|입찰가 (입찰가 비우면 70원)"],
                  ["키워드 삭제", "entity_type=keyword, naver_id=키워드 ID(kwd-...), field=delete, value 비움"]]:
         guide.append(line)
     buf = io.BytesIO()

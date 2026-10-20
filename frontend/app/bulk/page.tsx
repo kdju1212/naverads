@@ -36,7 +36,7 @@ export default function BulkPage() {
           <p className="mb-3 text-sm text-gray-600">
             열: <code>entity_type</code>(campaign·adgroup·keyword·ad), <code>naver_id</code>, <code>field</code>(status·daily_budget·bid_amt), <code>value</code>.
             네이버 ID는 각 목록 화면에서 확인할 수 있습니다.
-            키워드 등록은 <code>keyword</code> · 광고그룹 ID · <code>create</code> · <code>키워드|입찰가</code>(입찰가 비우면 광고그룹 입찰가),
+            키워드 등록은 <code>keyword</code> · 광고그룹 ID · <code>create</code> · <code>키워드|입찰가</code>(입찰가 비우면 70원),
             삭제는 <code>keyword</code> · 키워드 ID · <code>delete</code> · 빈칸.
           </p>
           <Button variant="secondary" onClick={async () => {
