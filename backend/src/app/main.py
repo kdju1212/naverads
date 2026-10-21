@@ -280,7 +280,8 @@ async def master_report_check(account_id: int, item: MasterItem, job_id: str | N
     text = job.pop("text", None)
     if text is not None:
         lines = text.splitlines()
-        job.update(line_count=len(lines), head=lines[:50])
+        # shortcut: 전체 파일을 JSON에 그대로 담는다(파일 받기용), 큰 계정에서 쓰게 되면 따로 내려주기
+        job.update(line_count=len(lines), head=lines[:50], text=text)
     return job
 
 

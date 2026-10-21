@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Badge, Button, Card, ErrorText, inputCls, PageTitle } from "@/components/ui";
-import { api, fmt } from "@/lib/api";
+import { api, downloadCsv, fmt } from "@/lib/api";
 import { useApp } from "@/lib/store";
 import { useFetch } from "@/lib/useFetch";
 
@@ -124,7 +124,7 @@ function Accounts({ isAdmin }: { isAdmin: boolean }) {
   );
 }
 
-interface MasterJob { id: string; status: string; line_count?: number; head?: string[] }
+interface MasterJob { id: string; status: string; line_count?: number; head?: string[]; text?: string }
 const MASTER_ITEMS = ["Campaign", "Adgroup", "Keyword", "Ad", "RsaAd", "AdExtension", "Asset", "AdAssetLink"];
 
 // 임시: 마스터 보고서 파일 칸 구성 확인용 (동기화를 마스터 보고서로 바꾸기 전)
@@ -161,7 +161,8 @@ function MasterReportCheck() {
         </select>
         <Button disabled={busy || !form.account_id} onClick={check}>{busy ? "보고서 만드는 중…" : "보고서 받아 보기"}</Button>
       </div>
-      {job && <p className="text-sm">상태: {job.status}{job.line_count != null && ` · 전체 ${fmt(job.line_count, "줄")} (앞 50줄 표시)`}</p>}
+      {job && <p className="text-sm">상태: {job.status}{job.line_count != null && ` · 전체 ${fmt(job.line_count, "줄")} (앞 50줄 표시)`}
+        {job.text != null && <Button variant="secondary" className="ml-2" onClick={() => downloadCsv(job.text!.split(/\r?\n/).map((l) => l.split("\t")), `마스터보고서_${form.item}.csv`)}>파일 받기</Button>}</p>}
       {job?.head && <pre className="mt-2 max-h-96 overflow-auto rounded bg-gray-50 p-2 text-xs">{job.head.join("\n")}</pre>}
       <p className="mt-3 text-xs text-gray-400">네이버에서 읽기만 하며 계정에는 변경이 없습니다.</p>
     </Card>
