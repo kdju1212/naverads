@@ -1,7 +1,7 @@
 """DB 모델. 설계는 docs/DB_SCHEMA.md."""
 from datetime import date, datetime, timezone
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -75,79 +75,14 @@ class AccountAccess(Base):
     level: Mapped[str] = mapped_column(String(5))  # VIEW | EDIT
 
 
-# ---- 광고 데이터 (네이버 동기화 사본) ----
-class Campaign(Base):
-    __tablename__ = "campaigns"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    ad_account_id: Mapped[int] = mapped_column(ForeignKey("ad_accounts.id"), index=True)
-    naver_id: Mapped[str] = mapped_column(String(50), unique=True)
-    name: Mapped[str] = mapped_column(String(200))
-    campaign_tp: Mapped[str] = mapped_column(String(20))  # WEB_SITE | SHOPPING
-    status: Mapped[str] = mapped_column(String(3))  # ON | OFF
-    daily_budget: Mapped[int] = mapped_column(Integer, default=0)
-
-
-class AdGroup(Base):
-    __tablename__ = "adgroups"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    ad_account_id: Mapped[int] = mapped_column(ForeignKey("ad_accounts.id"), index=True)
-    campaign_id: Mapped[int] = mapped_column(ForeignKey("campaigns.id"))
-    naver_id: Mapped[str] = mapped_column(String(50), unique=True)
-    name: Mapped[str] = mapped_column(String(200))
-    adgroup_type: Mapped[str] = mapped_column(String(20))
-    status: Mapped[str] = mapped_column(String(3))
-    bid_amt: Mapped[int] = mapped_column(Integer)
-    daily_budget: Mapped[int | None] = mapped_column(Integer, nullable=True)  # None = 제한 없음
-    serving: Mapped[str | None] = mapped_column(String(40), nullable=True)  # 네이버 statusReason 또는 status (동기화 시점)
-
-
-class Keyword(Base):
-    """파워링크 전용."""
-    __tablename__ = "keywords"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    ad_account_id: Mapped[int] = mapped_column(ForeignKey("ad_accounts.id"), index=True)
-    adgroup_id: Mapped[int] = mapped_column(ForeignKey("adgroups.id"))
-    naver_id: Mapped[str] = mapped_column(String(50), unique=True)
-    keyword: Mapped[str] = mapped_column(String(100))
-    status: Mapped[str] = mapped_column(String(3))
-    bid_amt: Mapped[int] = mapped_column(Integer)
-    use_group_bid: Mapped[bool] = mapped_column(Boolean, default=False)
-
-
-class Ad(Base):
-    """TEXT_45(파워링크 소재) | SHOPPING_PRODUCT_AD(쇼핑 상품소재, 소재 단위 입찰가)."""
-    __tablename__ = "ads"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    ad_account_id: Mapped[int] = mapped_column(ForeignKey("ad_accounts.id"), index=True)
-    adgroup_id: Mapped[int] = mapped_column(ForeignKey("adgroups.id"))
-    naver_id: Mapped[str] = mapped_column(String(50), unique=True)
-    ad_type: Mapped[str] = mapped_column(String(30))
-    status: Mapped[str] = mapped_column(String(3))
-    inspect_status: Mapped[str] = mapped_column(String(20))
-    bid_amt: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    use_group_bid: Mapped[bool] = mapped_column(Boolean, default=True)
-    payload: Mapped[dict] = mapped_column(JSON, default=dict)
-
-
-class AdExtension(Base):
-    """파워링크 확장소재. 소유자는 캠페인 또는 광고그룹(네이버 ID). 현재는 조회 전용."""
-    __tablename__ = "ad_extensions"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    ad_account_id: Mapped[int] = mapped_column(ForeignKey("ad_accounts.id"), index=True)
-    naver_id: Mapped[str] = mapped_column(String(50), unique=True)
-    owner_naver_id: Mapped[str] = mapped_column(String(50))
-    ext_type: Mapped[str] = mapped_column(String(40))
-    status: Mapped[str] = mapped_column(String(3))
-    inspect_status: Mapped[str] = mapped_column(String(20))
-    payload: Mapped[dict | list] = mapped_column(JSON, default=dict)
-
-
+# ---- 광고 데이터 사본(캠페인~확장소재)은 서버에 두지 않는다: 브라우저가 마스터 보고서로 받아 보관(frontend/lib/naverData.ts) ----
 class PerformanceDaily(Base):
     __tablename__ = "performance_daily"
-    __table_args__ = (UniqueConstraint("campaign_id", "date"),)
+    __table_args__ = (UniqueConstraint("campaign_naver_id", "date"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     ad_account_id: Mapped[int] = mapped_column(ForeignKey("ad_accounts.id"), index=True)
-    campaign_id: Mapped[int] = mapped_column(ForeignKey("campaigns.id"))
+    campaign_naver_id: Mapped[str] = mapped_column(String(50))
+    campaign_tp: Mapped[str] = mapped_column(String(20))  # WEB_SITE | SHOPPING
     date: Mapped[date] = mapped_column(Date)
     impressions: Mapped[int] = mapped_column(Integer)
     clicks: Mapped[int] = mapped_column(Integer)
@@ -160,8 +95,11 @@ class AutoBidRule(Base):
     """키워드 자동입찰: 목표 순위의 예상 입찰가로 맞추되 최대 입찰가를 넘지 않는다. 실행은 만든 사람 권한으로."""
     __tablename__ = "auto_bid_rules"
     id: Mapped[int] = mapped_column(primary_key=True)
+    __table_args__ = (UniqueConstraint("workspace_id", "keyword_naver_id"),)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
-    keyword_id: Mapped[int] = mapped_column(ForeignKey("keywords.id"), unique=True)
+    ad_account_id: Mapped[int] = mapped_column(ForeignKey("ad_accounts.id"))
+    keyword_naver_id: Mapped[str] = mapped_column(String(50))
+    keyword: Mapped[str] = mapped_column(String(100))  # 화면 표시용(설정 시점)
     device: Mapped[str] = mapped_column(String(6))  # PC | MOBILE
     target_rank: Mapped[int] = mapped_column(Integer)
     max_bid: Mapped[int] = mapped_column(Integer)

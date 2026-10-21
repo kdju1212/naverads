@@ -12,9 +12,8 @@ from sqlalchemy.orm import Session
 from . import bulk, naver
 from .access import admin_membership, current_user, membership, membership_of, resolve_account_ids, user_from_header
 from .db import Base, engine, get_db
-from .models import (AccountAccess, Ad, AdAccount, AdExtension, AdGroup, AuditLog, AutoBidRule, BulkJob, BulkJobRow, Campaign, Keyword, Membership,
-                     NaverApiCredential, PerformanceDaily, Plan, Subscription, SyncRun, User, Workspace, WorkspaceAdAccount,
-                     now)
+from .models import (AccountAccess, AdAccount, AuditLog, AutoBidRule, BulkJob, BulkJobRow, Membership, NaverApiCredential,
+                     PerformanceDaily, Plan, Subscription, SyncRun, User, Workspace, WorkspaceAdAccount, now)
 from .naver import NaverApiError, client_for
 from .security import decrypt, encrypt, hash_password, make_token, verify_password
 from .sync import sync_account
@@ -210,7 +209,7 @@ async def connect_account(body: ConnectIn, m: Membership = Depends(admin_members
         db.add(WorkspaceAdAccount(workspace_id=m.workspace_id, ad_account_id=acc.id, credential_id=cred.id, connected_by=m.user_id))
     db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=acc.id, action="ACCOUNT_CONNECT"))
     db.commit()
-    # 동기화는 별도 요청(POST .../sync): 무료 플랜 CPU 한도로 끊겨도 연결은 유지되고 동기화만 재시도하면 된다
+    # 성과 통계 동기화는 별도 요청(POST .../sync). 광고 데이터는 화면이 마스터 보고서로 받는다
     return {"id": acc.id, "customer_id": acc.customer_id, "name": acc.name}
 
 
@@ -321,82 +320,18 @@ async def naver_objects(account_id: int, kind: Literal["campaigns", "adgroups", 
     return [ROW_OF[kind](account_id, o) for o in _naver(db, m, account_id, lambda c: c.get_many(kind, id_list))]
 
 
-# ---------- 다계정 통합 조회 ----------
 ProductType = Literal["WEB_SITE", "SHOPPING"] | None
 
 
-@app.get("/workspaces/{ws_id}/campaigns")
-async def list_campaigns(account_ids: str | None = None, product: ProductType = None, q: str | None = None,
-                   m: Membership = Depends(membership), db: Session = Depends(get_db)):
-    ids = resolve_account_ids(db, m, _ids(account_ids))
-    s = select(Campaign).where(Campaign.ad_account_id.in_(ids))
-    if product:
-        s = s.where(Campaign.campaign_tp == product)
-    if q:
-        s = s.where(Campaign.name.contains(q))
-    return _rows(db.scalars(s.order_by(Campaign.ad_account_id, Campaign.id)),
-                 "id", "ad_account_id", "naver_id", "name", "campaign_tp", "status", "daily_budget")
-
-
-@app.get("/workspaces/{ws_id}/adgroups")
-async def list_adgroups(account_ids: str | None = None, product: ProductType = None, campaign_id: int | None = None,
-                  q: str | None = None, m: Membership = Depends(membership), db: Session = Depends(get_db)):
-    ids = resolve_account_ids(db, m, _ids(account_ids))
-    s = select(AdGroup).where(AdGroup.ad_account_id.in_(ids))
-    if product:
-        s = s.where(AdGroup.adgroup_type == product)
-    if campaign_id:
-        s = s.where(AdGroup.campaign_id == campaign_id)
-    if q:
-        s = s.where(AdGroup.name.contains(q))
-    return _rows(db.scalars(s.order_by(AdGroup.ad_account_id, AdGroup.id)),
-                 "id", "ad_account_id", "campaign_id", "naver_id", "name", "adgroup_type", "status", "bid_amt", "daily_budget", "serving")
-
-
-@app.get("/workspaces/{ws_id}/keywords")
-async def list_keywords(account_ids: str | None = None, adgroup_id: int | None = None, q: str | None = None,
-                  m: Membership = Depends(membership), db: Session = Depends(get_db)):
-    ids = resolve_account_ids(db, m, _ids(account_ids))
-    s = select(Keyword).where(Keyword.ad_account_id.in_(ids))
-    if adgroup_id:
-        s = s.where(Keyword.adgroup_id == adgroup_id)
-    if q:
-        s = s.where(Keyword.keyword.contains(q))
-    return _rows(db.scalars(s.order_by(Keyword.ad_account_id, Keyword.id)),
-                 "id", "ad_account_id", "adgroup_id", "naver_id", "keyword", "status", "bid_amt", "use_group_bid")
-
-
-@app.get("/workspaces/{ws_id}/ads")
-async def list_ads(ad_type: Literal["TEXT_45", "SHOPPING_PRODUCT_AD"], account_ids: str | None = None, adgroup_id: int | None = None,
-             m: Membership = Depends(membership), db: Session = Depends(get_db)):
-    ids = resolve_account_ids(db, m, _ids(account_ids))
-    # 파워링크 소재 탭에는 반응형 검색광고(RSA_AD)도 함께 보여 준다
-    types = ["TEXT_45", "RSA_AD"] if ad_type == "TEXT_45" else [ad_type]
-    s = select(Ad).where(Ad.ad_account_id.in_(ids), Ad.ad_type.in_(types))
-    if adgroup_id:
-        s = s.where(Ad.adgroup_id == adgroup_id)
-    return _rows(db.scalars(s.order_by(Ad.ad_account_id, Ad.id)), "id", "ad_account_id", "adgroup_id", "naver_id", "ad_type",
-                 "status", "inspect_status", "bid_amt", "use_group_bid", "payload")
-
-
-@app.get("/workspaces/{ws_id}/ad-extensions")
-async def list_ad_extensions(account_ids: str | None = None, m: Membership = Depends(membership), db: Session = Depends(get_db)):
-    ids = resolve_account_ids(db, m, _ids(account_ids))
-    owners = {o.naver_id: o.name for model in (Campaign, AdGroup)
-              for o in db.scalars(select(model).where(model.ad_account_id.in_(ids)))}
-    exts = db.scalars(select(AdExtension).where(AdExtension.ad_account_id.in_(ids))
-                      .order_by(AdExtension.ad_account_id, AdExtension.id))
-    return [{**r, "owner_name": owners.get(r["owner_naver_id"])} for r in _rows(
-        exts, "id", "ad_account_id", "naver_id", "owner_naver_id", "ext_type", "status", "inspect_status", "payload")]
-
-
+# ---------- 확장소재 ----------
 class SubLinkIn(BaseModel):
     name: str
     final: str
 
 
 class ExtensionIn(BaseModel):
-    adgroup_id: int
+    ad_account_id: int
+    adgroup_naver_id: str
     # 실데이터로 내용 구조를 확인한 유형만: DESCRIPTION(홍보문구) {heading: 구분, description}, HEADLINE(추가제목) {headline},
     # DESCRIPTION_EXTRA(추가설명) {description}, SUB_LINKS [{name, final}]
     ext_type: Literal["DESCRIPTION", "HEADLINE", "DESCRIPTION_EXTRA", "SUB_LINKS"]
@@ -411,9 +346,7 @@ TEXT_LIMITS = {"DESCRIPTION": ("홍보문구", 14), "HEADLINE": ("추가제목",
 
 @app.post("/workspaces/{ws_id}/ad-extensions")
 async def create_ad_extension(body: ExtensionIn, m: Membership = Depends(membership), db: Session = Depends(get_db)):
-    grp = db.get(AdGroup, body.adgroup_id)
-    if not grp:
-        raise HTTPException(404, "광고그룹을 찾을 수 없습니다")
+    """화면 보관본에 넣을 행을 돌려준다. 쇼핑 광고그룹 등은 화면이 고르지 못하게 하고, 네이버도 거부한다."""
     if body.ext_type in TEXT_LIMITS:
         label, limit = TEXT_LIMITS[body.ext_type]
         text = (body.heading if body.ext_type == "HEADLINE" else body.description).strip()
@@ -428,28 +361,32 @@ async def create_ad_extension(body: ExtensionIn, m: Membership = Depends(members
         if not links or any(not x["name"] or not x["final"].startswith(("http://", "https://")) for x in links):
             raise HTTPException(400, "서브링크는 이름과 http(s):// 로 시작하는 URL을 입력하세요")
         content = links
-    ext = bulk.create_extension(db, m, grp, body.ext_type, content)
-    return {"id": ext.id, "naver_id": ext.naver_id, "inspect_status": ext.inspect_status}
+    return bulk.create_extension(db, m, body.ad_account_id, body.adgroup_naver_id, body.ext_type, content)
 
 
-@app.delete("/workspaces/{ws_id}/ad-extensions/{ext_id}")
-async def delete_ad_extension(ext_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
-    ext = db.get(AdExtension, ext_id)
-    if not ext:
-        raise HTTPException(404, "확장소재를 찾을 수 없습니다")
-    return {"ok": True, "already_gone": bulk.delete_extension(db, m, ext)}
+@app.delete("/workspaces/{ws_id}/ad-extensions/{naver_id}")
+async def delete_ad_extension(naver_id: str, account_id: int, owner_naver_id: str, ext_type: str | None = None,
+                              m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    return {"ok": True, "already_gone": bulk.delete_extension(db, m, account_id, naver_id, owner_naver_id, ext_type)}
 
 
 # ---------- 대량 작업 ----------
 class ChangeIn(BaseModel):
+    """광고 데이터 사본이 서버에 없어 화면(브라우저 보관본)이 대상의 계정·이전 값·유형을 같이 보낸다."""
     entity_type: str
     naver_id: str
     field: str
     value: str
+    ad_account_id: int | None = None
+    before: str | None = None
+    product: Literal["WEB_SITE", "SHOPPING"] | None = None  # 키워드 등록은 광고그룹 유형
+    ad_type: str | None = None
+    invalid: str | None = None  # 화면이 찾은 오류(없는 ID, 이미 있는 키워드 등) → 그 행은 실행하지 않음
 
 
 class BulkIn(BaseModel):
     changes: list[ChangeIn]
+    source: Literal["UI", "EXCEL"] = "UI"
 
 
 def _job(db: Session, m: Membership, job_id: int) -> BulkJob:
@@ -475,12 +412,13 @@ def _job_out(db: Session, job: BulkJob):
 
 @app.post("/workspaces/{ws_id}/bulk-jobs")
 async def create_bulk_job(body: BulkIn, m: Membership = Depends(membership), db: Session = Depends(get_db)):
-    return _job_out(db, bulk.create_job(db, m, [c.model_dump() for c in body.changes], "UI"))
+    return _job_out(db, bulk.create_job(db, m, [c.model_dump() for c in body.changes], body.source))
 
 
-@app.post("/workspaces/{ws_id}/bulk-jobs/excel")
-async def create_bulk_job_excel(file: UploadFile, m: Membership = Depends(membership), db: Session = Depends(get_db)):
-    return _job_out(db, bulk.create_job(db, m, bulk.parse_excel(await file.read()), "EXCEL"))
+@app.post("/workspaces/{ws_id}/bulk-jobs/excel/parse")
+async def parse_bulk_excel(file: UploadFile, m: Membership = Depends(membership)):
+    """엑셀 → 변경 목록. 화면이 보관본으로 계정·이전 값을 채워 POST /bulk-jobs(source=EXCEL)로 미리보기를 만든다."""
+    return bulk.parse_excel(await file.read())
 
 
 @app.get("/bulk-jobs/excel-template")
@@ -515,29 +453,41 @@ async def retry_bulk_job(job_id: int, m: Membership = Depends(membership), db: S
 AUTO_BID_LIMIT = 20
 
 
+class KeywordRef(BaseModel):
+    ad_account_id: int
+    naver_id: str
+    keyword: str = ""
+
+
 class AutoBidIn(BaseModel):
-    keyword_ids: list[int]
+    keywords: list[KeywordRef]
     device: Literal["PC", "MOBILE"]
     target_rank: int
     max_bid: int
     enabled: bool = True
 
 
-def _editable_keywords(db: Session, m: Membership, ids: list[int]) -> list[Keyword]:
+class AutoBidKeysIn(BaseModel):
+    keywords: list[KeywordRef]
+
+
+def _editable(db: Session, m: Membership, refs: list[KeywordRef]) -> list[KeywordRef]:
     allowed = resolve_account_ids(db, m, None, edit=True)
-    kws = db.scalars(select(Keyword).where(Keyword.id.in_(ids))).all()
-    if not ids or len(kws) != len(set(ids)) or any(k.ad_account_id not in allowed for k in kws):
+    if not refs or any(k.ad_account_id not in allowed for k in refs):
         raise HTTPException(403, "키워드가 없거나 수정 권한이 없습니다")
-    return kws
+    return refs
+
+
+def _rule(db: Session, m: Membership, naver_id: str) -> AutoBidRule | None:
+    return db.scalar(select(AutoBidRule).where(AutoBidRule.workspace_id == m.workspace_id, AutoBidRule.keyword_naver_id == naver_id))
 
 
 @app.get("/workspaces/{ws_id}/auto-bids")
 async def list_auto_bids(m: Membership = Depends(membership), db: Session = Depends(get_db)):
     ids = resolve_account_ids(db, m, None)
-    q = (select(AutoBidRule, Keyword).join(Keyword, Keyword.id == AutoBidRule.keyword_id)
-         .where(AutoBidRule.workspace_id == m.workspace_id, Keyword.ad_account_id.in_(ids)).order_by(AutoBidRule.id))
-    return [{**_rows([r], "id", "keyword_id", "device", "target_rank", "max_bid", "enabled", "last_run_at", "last_result")[0],
-             "keyword": k.keyword, "ad_account_id": k.ad_account_id, "bid_amt": k.bid_amt} for r, k in db.execute(q)]
+    q = select(AutoBidRule).where(AutoBidRule.workspace_id == m.workspace_id, AutoBidRule.ad_account_id.in_(ids)).order_by(AutoBidRule.id)
+    return _rows(db.scalars(q), "id", "ad_account_id", "keyword_naver_id", "keyword", "device", "target_rank", "max_bid", "enabled",
+                 "last_run_at", "last_result")
 
 
 @app.put("/workspaces/{ws_id}/auto-bids")
@@ -549,17 +499,18 @@ async def set_auto_bids(body: AutoBidIn, m: Membership = Depends(membership), db
     lo, hi = bulk.BID_RANGE["WEB_SITE"]
     if not lo <= body.max_bid <= hi or body.max_bid % 10:
         raise HTTPException(400, f"최대 입찰가는 {lo:,}~{hi:,}원, 10원 단위")
-    kws = _editable_keywords(db, m, body.keyword_ids)
-    on = set(db.scalars(select(AutoBidRule.keyword_id).where(AutoBidRule.workspace_id == m.workspace_id,
-                                                             AutoBidRule.enabled.is_(True))))
+    kws = _editable(db, m, body.keywords)
+    on = set(db.scalars(select(AutoBidRule.keyword_naver_id).where(AutoBidRule.workspace_id == m.workspace_id,
+                                                                   AutoBidRule.enabled.is_(True))))
     # 무료 플랜은 크론 1회당 외부 호출 수 한도가 있어 키워드가 많으면 실행이 끊긴다
-    if body.enabled and len(on | {k.id for k in kws}) > AUTO_BID_LIMIT:
+    if body.enabled and len(on | {k.naver_id for k in kws}) > AUTO_BID_LIMIT:
         raise HTTPException(400, f"자동입찰은 조직당 {AUTO_BID_LIMIT}개까지입니다 (지금 {len(on)}개 사용 중)")
     for k in kws:
-        r = db.scalar(select(AutoBidRule).where(AutoBidRule.keyword_id == k.id))
+        r = _rule(db, m, k.naver_id)
         if r is None:
-            r = AutoBidRule(workspace_id=m.workspace_id, keyword_id=k.id)
+            r = AutoBidRule(workspace_id=m.workspace_id, keyword_naver_id=k.naver_id)
             db.add(r)
+        r.ad_account_id, r.keyword = k.ad_account_id, k.keyword[:100]
         r.device, r.target_rank, r.max_bid, r.enabled, r.created_by = (body.device, body.target_rank, body.max_bid,
                                                                        body.enabled, m.user_id)
         db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=k.ad_account_id, action="AUTO_BID_SET",
@@ -569,14 +520,10 @@ async def set_auto_bids(body: AutoBidIn, m: Membership = Depends(membership), db
     return {"ok": True}
 
 
-class AutoBidIdsIn(BaseModel):
-    keyword_ids: list[int]
-
-
 @app.post("/workspaces/{ws_id}/auto-bids/delete")
-async def delete_auto_bids(body: AutoBidIdsIn, m: Membership = Depends(membership), db: Session = Depends(get_db)):
-    for k in _editable_keywords(db, m, body.keyword_ids):
-        r = db.scalar(select(AutoBidRule).where(AutoBidRule.keyword_id == k.id))
+async def delete_auto_bids(body: AutoBidKeysIn, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    for k in _editable(db, m, body.keywords):
+        r = _rule(db, m, k.naver_id)
         if r:
             db.delete(r)
             db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=k.ad_account_id,
@@ -586,12 +533,13 @@ async def delete_auto_bids(body: AutoBidIdsIn, m: Membership = Depends(membershi
 
 
 @app.post("/workspaces/{ws_id}/auto-bids/run")
-async def run_auto_bids(body: AutoBidIdsIn | None = None, m: Membership = Depends(membership), db: Session = Depends(get_db)):
-    """지금 실행. keyword_ids를 주면 그 키워드 규칙만."""
+async def run_auto_bids(body: AutoBidKeysIn | None = None, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    """지금 실행. keywords를 주면 그 키워드 규칙만."""
     rule_ids = None
-    if body and body.keyword_ids:
-        kids = [k.id for k in _editable_keywords(db, m, body.keyword_ids)]
-        rule_ids = list(db.scalars(select(AutoBidRule.id).where(AutoBidRule.keyword_id.in_(kids))))
+    if body and body.keywords:
+        nids = [k.naver_id for k in _editable(db, m, body.keywords)]
+        rule_ids = list(db.scalars(select(AutoBidRule.id).where(AutoBidRule.workspace_id == m.workspace_id,
+                                                                AutoBidRule.keyword_naver_id.in_(nids))))
     jobs = bulk.run_auto_bids(db, m.workspace_id, rule_ids)
     return {"job_ids": [j.id for j in jobs]}
 
@@ -609,12 +557,11 @@ async def audit_logs(user_id: int | None = None, account_id: int | None = None, 
 
 
 def _account_performance(db: Session, ids: set[int], since: date, until: date):
-    q = (select(PerformanceDaily.ad_account_id, Campaign.campaign_tp, func.sum(PerformanceDaily.impressions),
+    q = (select(PerformanceDaily.ad_account_id, PerformanceDaily.campaign_tp, func.sum(PerformanceDaily.impressions),
                 func.sum(PerformanceDaily.clicks), func.sum(PerformanceDaily.cost), func.sum(PerformanceDaily.conversions),
                 func.sum(PerformanceDaily.revenue))
-         .join(Campaign, Campaign.id == PerformanceDaily.campaign_id)
          .where(PerformanceDaily.ad_account_id.in_(ids), PerformanceDaily.date.between(since, until))
-         .group_by(PerformanceDaily.ad_account_id, Campaign.campaign_tp))
+         .group_by(PerformanceDaily.ad_account_id, PerformanceDaily.campaign_tp))
     names = dict(db.execute(select(AdAccount.id, AdAccount.name).where(AdAccount.id.in_(ids))).all())
     out = {i: {"ad_account_id": i, "name": names[i], "WEB_SITE": None, "SHOPPING": None} for i in ids}
     for acc, tp, imp, clk, cost, conv, rev in db.execute(q):
@@ -642,11 +589,10 @@ async def performance_daily(since: date, until: date, account_ids: str | None = 
     ids = resolve_account_ids(db, m, _ids(account_ids))
     q = (select(PerformanceDaily.date, func.sum(PerformanceDaily.impressions), func.sum(PerformanceDaily.clicks),
                 func.sum(PerformanceDaily.cost), func.sum(PerformanceDaily.conversions), func.sum(PerformanceDaily.revenue))
-         .join(Campaign, Campaign.id == PerformanceDaily.campaign_id)
          .where(PerformanceDaily.ad_account_id.in_(ids), PerformanceDaily.date.between(since, until))
          .group_by(PerformanceDaily.date))
     if product:
-        q = q.where(Campaign.campaign_tp == product)
+        q = q.where(PerformanceDaily.campaign_tp == product)
     # D1은 날짜를 문자열로 돌려줄 수 있어 문자열 키로 맞춘다
     by_day = {str(d)[:10]: (imp, clk, cost, conv, rev) for d, imp, clk, cost, conv, rev in db.execute(q)}
     out, d = [], since
@@ -655,16 +601,6 @@ async def performance_daily(since: date, until: date, account_ids: str | None = 
         out.append({"date": d.isoformat(), "impressions": imp, "clicks": clk, "cost": cost, "conversions": conv, "revenue": rev})
         d += timedelta(days=1)
     return out
-
-
-def _ops_summary(db: Session, ids: set[int]):
-    def count(model, col):
-        return dict(db.execute(select(col, func.count()).where(model.ad_account_id.in_(ids)).group_by(col)).all())
-    return {"campaign": count(Campaign, Campaign.status), "adgroup": count(AdGroup, AdGroup.status),
-            "keyword": count(Keyword, Keyword.status), "ad_inspect": count(Ad, Ad.inspect_status),
-            "ext_inspect": count(AdExtension, AdExtension.inspect_status),
-            "auto_bids": db.scalar(select(func.count()).select_from(AutoBidRule).join(Keyword, Keyword.id == AutoBidRule.keyword_id)
-                                   .where(Keyword.ad_account_id.in_(ids), AutoBidRule.enabled.is_(True)))}
 
 
 @app.get("/workspaces/{ws_id}/dashboard")
@@ -685,7 +621,8 @@ async def dashboard(account_ids: str | None = None, m: Membership = Depends(memb
         "recent_jobs": [_job_out(db, j) | {"accounts": None} for j in jobs],
         "failed_jobs": [j.id for j in jobs if j.status in ("PARTIAL", "FAILED")],
         "sync_errors": failed_syncs,
-        "ops": _ops_summary(db, selected),
+        "auto_bids": db.scalar(select(func.count()).select_from(AutoBidRule).where(
+            AutoBidRule.workspace_id == m.workspace_id, AutoBidRule.ad_account_id.in_(selected), AutoBidRule.enabled.is_(True))),
     }
 
 

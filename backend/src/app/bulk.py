@@ -1,5 +1,9 @@
 """대량 작업 엔진: 미리보기(검증) → 실행(권한 재검증) → 행별 결과 + 감사 로그.
-모든 광고 데이터 쓰기는 이 모듈만 사용한다(확장소재 생성·삭제도 여기서 권한 확인·감사 로그)."""
+모든 광고 데이터 쓰기는 이 모듈만 사용한다(확장소재 생성·삭제도 여기서 권한 확인·감사 로그).
+
+광고 데이터 사본은 서버에 없다: 화면(브라우저 보관본)이 변경마다 광고주 계정·이전 값·유형을 같이 보낸다.
+서버는 그 계정의 수정 권한만 믿을 근거로 삼고, 실제 대상은 그 계정 API(X-Customer)로만 바꾸므로
+다른 광고주의 ID를 섞어 보내도 네이버가 거부한다."""
 import io
 
 from fastapi import HTTPException
@@ -8,12 +12,10 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from .access import accessible_account_ids
-from .models import (Ad, AdAccount, AdExtension, AdGroup, AuditLog, AutoBidRule, BulkJob, BulkJobRow, Campaign, Keyword, Membership,
-                     NaverApiCredential, WorkspaceAdAccount, now)
-from .naver import NaverApiError, _json, _status, client_for
+from .models import AdAccount, AuditLog, AutoBidRule, BulkJob, BulkJobRow, Membership, NaverApiCredential, WorkspaceAdAccount, now
+from .naver import NaverApiError, client_for, extension_row
 from .security import decrypt
 
-ENTITY_MODELS = {"campaign": Campaign, "adgroup": AdGroup, "keyword": Keyword, "ad": Ad, "ad_extension": AdExtension}
 ALLOWED_FIELDS = {
     "campaign": {"status", "daily_budget"},
     "adgroup": {"status", "bid_amt"},
@@ -27,66 +29,53 @@ MIN_BUDGET = 50
 EXCEL_HEADER = ["entity_type", "naver_id", "field", "value"]
 
 
-def _product(entity_type: str, obj) -> str:
-    if entity_type == "campaign":
-        return obj.campaign_tp
-    if entity_type == "adgroup":
-        return obj.adgroup_type
-    if entity_type == "keyword":
-        return "WEB_SITE"
-    return "SHOPPING" if obj.ad_type == "SHOPPING_PRODUCT_AD" else "WEB_SITE"
-
-
 def _split_new_keyword(value: str) -> tuple[str, str]:
     kw, _, bid = value.partition("|")
     return kw.strip(), bid.strip()
 
 
-def _validate_new_keyword(grp: AdGroup, value: str) -> str | None:
-    kw, bid = _split_new_keyword(value)
-    if grp.adgroup_type != "WEB_SITE":
-        return "키워드는 파워링크 광고그룹에만 등록할 수 있습니다"
-    if not kw:
-        return "키워드를 입력하세요"
-    if bid:
+def _validate(ch: dict) -> str | None:
+    """ch: entity_type, field, value, before, product(WEB_SITE|SHOPPING, 키워드 등록은 광고그룹 유형), ad_type.
+    product·ad_type이 없으면(실패 행 재실행) 그 검사는 건너뛴다 — 처음 미리보기에서 이미 통과한 행이다."""
+    etype, field, value, before, product = ch["entity_type"], ch["field"], ch["value"], ch.get("before"), ch.get("product")
+    if field not in ALLOWED_FIELDS[etype]:
+        return f"{etype}에서 수정할 수 없는 항목: {field}"
+    if field == "delete":
+        return None
+    if field == "create":
+        kw, bid = _split_new_keyword(value)
+        if product and product != "WEB_SITE":
+            return "키워드는 파워링크 광고그룹에만 등록할 수 있습니다"
+        if not kw:
+            return "키워드를 입력하세요"
         lo, hi = BID_RANGE["WEB_SITE"]
-        if not bid.isdigit() or int(bid) % 10 or not lo <= int(bid) <= hi:
+        if bid and (not bid.isdigit() or int(bid) % 10 or not lo <= int(bid) <= hi):
             return f"입찰가는 {lo:,}~{hi:,}원, 10원 단위 (비우면 {lo}원)"
+        return None
+    if field == "status":
+        if value not in ("ON", "OFF"):
+            return "상태는 ON 또는 OFF"
+    else:
+        if etype == "ad" and ch.get("ad_type") not in (None, "SHOPPING_PRODUCT_AD"):
+            return "입찰가는 쇼핑 상품소재에만 설정할 수 있습니다"
+        if not value.isdigit():
+            return "숫자만 입력하세요"
+        n = int(value)
+        if n % 10:
+            return "10원 단위로 입력하세요"
+        if field == "daily_budget" and n < MIN_BUDGET:
+            return f"일예산은 {MIN_BUDGET}원 이상"
+        if field == "bid_amt":
+            lo, hi = BID_RANGE["WEB_SITE" if etype == "keyword" else product or "SHOPPING"]
+            if not lo <= n <= hi:
+                return f"입찰가는 {lo:,}~{hi:,}원"
+    if before is not None and str(before) == value:
+        return "현재 값과 동일합니다"
     return None
 
 
-def _validate(entity_type: str, obj, field: str, value: str) -> tuple[str | None, str | None]:
-    """(before, error) 반환."""
-    if field not in ALLOWED_FIELDS[entity_type]:
-        return None, f"{entity_type}에서 수정할 수 없는 항목: {field}"
-    if field == "create":
-        return None, _validate_new_keyword(obj, value)
-    if field == "delete":
-        return obj.keyword, None
-    before = getattr(obj, field)
-    if field == "status":
-        if value not in ("ON", "OFF"):
-            return before, "상태는 ON 또는 OFF"
-    else:
-        if entity_type == "ad" and obj.ad_type != "SHOPPING_PRODUCT_AD":
-            return before, "입찰가는 쇼핑 상품소재에만 설정할 수 있습니다"
-        if not value.isdigit():
-            return before, "숫자만 입력하세요"
-        n = int(value)
-        if n % 10:
-            return before, "10원 단위로 입력하세요"
-        if field == "daily_budget" and n < MIN_BUDGET:
-            return before, f"일예산은 {MIN_BUDGET}원 이상"
-        if field == "bid_amt":
-            lo, hi = BID_RANGE[_product(entity_type, obj)]
-            if not lo <= n <= hi:
-                return before, f"입찰가는 {lo:,}~{hi:,}원"
-    if str(before) == value:
-        return before, "현재 값과 동일합니다"
-    return before, None
-
-
 def create_job(db: Session, m: Membership, changes: list[dict], source: str, parent_job_id: int | None = None) -> BulkJob:
+    """changes: entity_type, naver_id, field, value, ad_account_id, before?, product?, ad_type?, invalid?(화면이 찾은 오류)"""
     if not changes:
         raise HTTPException(400, "변경 내용이 없습니다")
     allowed = accessible_account_ids(db, m, edit=True)
@@ -94,29 +83,28 @@ def create_job(db: Session, m: Membership, changes: list[dict], source: str, par
     db.add(job)
     db.flush()
     seen = set()
+    rows = []
     for ch in changes:
-        etype, nid, field, value = (str(ch.get(k, "")).strip() for k in EXCEL_HEADER)
-        row = BulkJobRow(job_id=job.id, entity_type=etype, naver_id=nid, field=field, after=value, status="INVALID")
-        model = AdGroup if (etype, field) == ("keyword", "create") else ENTITY_MODELS.get(etype)
-        obj = db.scalar(select(model).where(model.naver_id == nid)) if model else None
+        etype, nid, field, value = (str(ch.get(k) or "").strip() for k in EXCEL_HEADER)
+        ch = {**ch, "entity_type": etype, "naver_id": nid, "field": field, "value": value}
+        before = ch.get("before")
+        row = BulkJobRow(job_id=job.id, entity_type=etype, naver_id=nid, field=field, after=value, status="INVALID",
+                         before=None if before is None else str(before)[:50])
         key = (nid, field, _split_new_keyword(value)[0] if field == "create" else "")
-        if model is None:
+        if etype not in ALLOWED_FIELDS:
             row.error = f"알 수 없는 유형: {etype}"
-        elif obj is None or obj.ad_account_id not in allowed:
-            row.error = "대상이 없거나 수정 권한이 없습니다"  # 다른 조직 객체의 존재 여부를 노출하지 않는다
+        elif not nid or ch.get("ad_account_id") not in allowed:
+            row.error = "대상이 없거나 수정 권한이 없습니다"  # 권한 없는 계정 이름을 노출하지 않는다
         elif key in seen:
-            row.ad_account_id, row.error = obj.ad_account_id, "같은 대상·항목이 중복되었습니다"
+            row.ad_account_id, row.error = ch["ad_account_id"], "같은 대상·항목이 중복되었습니다"
         else:
             seen.add(key)
-            row.ad_account_id = obj.ad_account_id
-            before, row.error = _validate(etype, obj, field, value)
-            row.before = None if before is None else str(before)
-            if row.error is None and field == "create" and db.scalar(select(Keyword.id).where(
-                    Keyword.adgroup_id == obj.id, Keyword.keyword == key[2])):
-                row.error = "이미 등록된 키워드입니다"
+            row.ad_account_id = ch["ad_account_id"]
+            row.error = str(ch["invalid"])[:300] if ch.get("invalid") else _validate(ch)
             if row.error is None:
                 row.status = "VALID"
-        db.add(row)
+        rows.append(row)
+    db.add_all(rows)  # 행마다 INSERT를 따로 보내지 않게 한 번에(무료 플랜 요청당 쿼리 한도)
     db.commit()
     return job
 
@@ -127,8 +115,8 @@ def _client(db: Session, workspace_id: int, account_id: int):
     return client_for(db.get(NaverApiCredential, link.credential_id), db.get(AdAccount, account_id).customer_id, decrypt)
 
 
-# 무료 플랜은 요청 1번에 D1 쿼리+외부 호출 50번까지라, 화면 실행은 몇 행씩 나눠 여러 번 요청한다(행마다 약 5번 + 고정 약 15번)
-EXECUTE_CHUNK = 3
+# 무료 플랜은 요청 1번에 D1 쿼리+외부 호출 50번까지라, 화면 실행은 몇 행씩 나눠 여러 번 요청한다(행마다 약 4번 + 고정 약 10번)
+EXECUTE_CHUNK = 5
 
 
 def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = None) -> BulkJob:
@@ -154,7 +142,6 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
             client = clients[row.ad_account_id]
             if row.field == "create":
                 kw, bid = _split_new_keyword(row.after)
-                grp = db.scalar(select(AdGroup).where(AdGroup.naver_id == row.naver_id))
                 bid_amt = int(bid) if bid else BID_RANGE["WEB_SITE"][0]  # 비우면 최저 입찰가(사용자 요청 10/20)
                 created = client.create_keyword(row.naver_id, kw, bid_amt, False)
             elif row.field == "delete":
@@ -166,21 +153,10 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
             continue
         audit = dict(action="UPDATE", naver_id=row.naver_id, field=row.field, before=row.before, after=row.after)
         if row.field == "create":
-            db.add(Keyword(ad_account_id=grp.ad_account_id, adgroup_id=grp.id, naver_id=created["nccKeywordId"],
-                           keyword=created.get("keyword", kw), status=_status(created),
-                           bid_amt=created.get("bidAmt") or bid_amt, use_group_bid=created.get("useGroupBidAmt", False)))
             audit.update(action="CREATE", naver_id=created["nccKeywordId"], field="keyword", after=kw)
         elif row.field == "delete":
-            obj = db.scalar(select(Keyword).where(Keyword.naver_id == row.naver_id))
-            db.execute(delete(AutoBidRule).where(AutoBidRule.keyword_id == obj.id))
-            db.delete(obj)
+            db.execute(delete(AutoBidRule).where(AutoBidRule.workspace_id == m.workspace_id, AutoBidRule.keyword_naver_id == row.naver_id))
             audit.update(action="DELETE", field="keyword", after=None)
-        else:
-            model = ENTITY_MODELS[row.entity_type]
-            obj = db.scalar(select(model).where(model.naver_id == row.naver_id))
-            setattr(obj, row.field, row.after if row.field == "status" else int(row.after))
-            if row.field == "bid_amt" and hasattr(obj, "use_group_bid"):
-                obj.use_group_bid = False
         row.status = "SUCCESS"
         db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=row.ad_account_id, job_id=job.id,
                         entity_type=row.entity_type, **audit))
@@ -199,13 +175,14 @@ def retry_failed(db: Session, m: Membership, job: BulkJob) -> BulkJob:
     failed = db.scalars(select(BulkJobRow).where(BulkJobRow.job_id == job.id, BulkJobRow.status == "FAILED")).all()
     if not failed:
         raise HTTPException(400, "재실행할 실패 행이 없습니다")
-    changes = [{"entity_type": r.entity_type, "naver_id": r.naver_id, "field": r.field, "value": r.after} for r in failed]
+    changes = [{"entity_type": r.entity_type, "naver_id": r.naver_id, "field": r.field, "value": r.after,
+                "ad_account_id": r.ad_account_id, "before": r.before} for r in failed]
     return create_job(db, m, changes, "RETRY", parent_job_id=job.id)
 
 
 def run_auto_bids(db: Session, workspace_id: int, rule_ids: list[int] | None = None) -> list[BulkJob]:
     """자동입찰 규칙 실행: 목표 순위 예상 입찰가(최대 입찰가 이하)로 바꿀 키워드를 모아 만든 사람별 대량 작업으로 실행한다.
-    권한 확인·네이버 반영 검증·감사 로그는 일반 대량 작업과 같다."""
+    현재 입찰가는 네이버에서 키워드 ID로 조회한다. 권한 확인·네이버 반영 검증·감사 로그는 일반 대량 작업과 같다."""
     s = select(AutoBidRule).where(AutoBidRule.workspace_id == workspace_id, AutoBidRule.enabled.is_(True))
     if rule_ids is not None:
         s = s.where(AutoBidRule.id.in_(rule_ids))
@@ -213,40 +190,48 @@ def run_auto_bids(db: Session, workspace_id: int, rule_ids: list[int] | None = N
     for r in db.scalars(s):
         by_user.setdefault(r.created_by, []).append(r)
     jobs = []
+    lo = BID_RANGE["WEB_SITE"][0]
     for user_id, rules in by_user.items():
         m = db.scalar(select(Membership).where(Membership.workspace_id == workspace_id, Membership.user_id == user_id))
         allowed = accessible_account_ids(db, m, edit=True) if m else set()
-        kws = {k.id: k for k in db.scalars(select(Keyword).where(Keyword.id.in_([r.keyword_id for r in rules])))}
-        groups: dict[tuple, list[AutoBidRule]] = {}
+        by_account: dict[int, list[AutoBidRule]] = {}
         for r in rules:
             r.last_run_at = now()
-            if kws[r.keyword_id].ad_account_id not in allowed:
+            if r.ad_account_id not in allowed:
                 r.last_result = "규칙을 만든 사람에게 이 계정 수정 권한이 없습니다"
             else:
-                groups.setdefault((kws[r.keyword_id].ad_account_id, r.device), []).append(r)
+                by_account.setdefault(r.ad_account_id, []).append(r)
         changes, rule_by_nid = [], {}
-        for (account_id, device), rs in groups.items():
+        for account_id, rs in by_account.items():
             try:
-                est = _client(db, workspace_id, account_id).estimate_bids(
-                    device, [(kws[r.keyword_id].naver_id, r.target_rank) for r in rs])
+                client = _client(db, workspace_id, account_id)
+                current = {k["nccKeywordId"]: k for k in client.get_many("keywords", [r.keyword_naver_id for r in rs])}
+                est = {}
+                for device in {r.device for r in rs}:
+                    est[device] = client.estimate_bids(device, [(r.keyword_naver_id, r.target_rank) for r in rs
+                                                                if r.device == device and r.keyword_naver_id in current])
             except NaverApiError as e:
                 for r in rs:
-                    r.last_result = f"예상 입찰가 조회 실패: {e}"[:300]
+                    r.last_result = f"네이버 조회 실패: {e}"[:300]
                 continue
-            lo = BID_RANGE["WEB_SITE"][0]
             for r in rs:
-                kw, bid = kws[r.keyword_id], est.get(kws[r.keyword_id].naver_id)
+                kw = current.get(r.keyword_naver_id)
+                if kw is None:
+                    r.last_result = "네이버에 키워드가 없습니다 (삭제되었으면 규칙을 해제하세요)"
+                    continue
+                bid = est[r.device].get(r.keyword_naver_id)
                 if not bid:
                     r.last_result = "예상 입찰가가 없습니다 (노출 데이터 부족)"
                     continue
                 target = max(lo, min(bid, r.max_bid) // 10 * 10)
                 r.last_result = f"{r.target_rank}위 예상 {bid:,}원" + (f" > 최대 {r.max_bid:,}원" if bid > r.max_bid else "")
-                if target == kw.bid_amt and not kw.use_group_bid:
+                if target == kw["bidAmt"] and not kw.get("useGroupBidAmt"):
                     r.last_result += " · 변경 없음"
                     continue
-                r.last_result += f" · {kw.bid_amt:,}원 → {target:,}원"
-                changes.append({"entity_type": "keyword", "naver_id": kw.naver_id, "field": "bid_amt", "value": str(target)})
-                rule_by_nid[kw.naver_id] = r
+                r.last_result += f" · {kw['bidAmt']:,}원 → {target:,}원"
+                changes.append({"entity_type": "keyword", "naver_id": r.keyword_naver_id, "field": "bid_amt", "value": str(target),
+                                "ad_account_id": account_id, "before": kw["bidAmt"], "product": "WEB_SITE"})
+                rule_by_nid[r.keyword_naver_id] = r
         db.commit()
         if not changes:
             continue
@@ -268,6 +253,48 @@ def run_all_auto_bids(db: Session):
             print(f"자동입찰 실패 workspace={ws_id}: {e}")
 
 
+def _check_edit(db: Session, m: Membership, account_id: int):
+    if account_id not in accessible_account_ids(db, m, edit=True):
+        raise HTTPException(403, "이 광고 계정을 수정할 권한이 없습니다")
+
+
+def create_extension(db: Session, m: Membership, account_id: int, adgroup_naver_id: str, ext_type: str, content) -> dict:
+    """확장소재 생성은 행 단위 미리보기 없이 바로 실행하되, 권한 확인과 감사 로그는 같은 규칙을 따른다. 화면 보관본용 행을 돌려준다."""
+    _check_edit(db, m, account_id)
+    try:
+        e = _client(db, m.workspace_id, account_id).create_ad_extension(adgroup_naver_id, ext_type, content)
+    except NaverApiError as err:
+        raise HTTPException(400, f"네이버 확장소재 생성 실패: {err}")
+    row = extension_row(account_id, {"type": ext_type, **e})
+    if not e.get("adExtension"):
+        row["payload"] = content
+    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=account_id, action="CREATE",
+                    entity_type="ad_extension", naver_id=row["naver_id"], field="ext_type", after=row["ext_type"]))
+    db.commit()
+    return row
+
+
+def delete_extension(db: Session, m: Membership, account_id: int, ext_naver_id: str, owner_naver_id: str, ext_type: str | None) -> bool:
+    _check_edit(db, m, account_id)
+    client = _client(db, m.workspace_id, account_id)
+    gone = False
+    try:
+        client.delete_ad_extension(ext_naver_id)
+    except NaverApiError as err:
+        # 네이버에서 이미 지워진 확장소재는 404가 난다(보관본에는 남아 있을 수 있다): 소유자 목록으로 실제 존재 여부를 확인
+        try:
+            gone = all(e["nccAdExtensionId"] != ext_naver_id for e in client.list_ad_extensions(owner_naver_id))
+        except NaverApiError:
+            gone = False
+        if not gone:
+            raise HTTPException(400, f"네이버 확장소재 삭제 실패: {err}")
+    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=account_id, action="DELETE",
+                    entity_type="ad_extension", naver_id=ext_naver_id, field="ext_type", before=ext_type,
+                    after="네이버에 이미 없음" if gone else None))
+    db.commit()
+    return gone
+
+
 def parse_excel(data: bytes) -> list[dict]:
     try:
         ws = load_workbook(io.BytesIO(data), read_only=True).active
@@ -277,49 +304,6 @@ def parse_excel(data: bytes) -> list[dict]:
     if not rows or [str(c or "").strip() for c in rows[0][:4]] != EXCEL_HEADER:
         raise HTTPException(400, f"첫 행은 {EXCEL_HEADER} 이어야 합니다")
     return [dict(zip(EXCEL_HEADER, ("" if c is None else str(c) for c in r[:4]))) for r in rows[1:] if any(r[:4])]
-
-
-def create_extension(db: Session, m: Membership, grp: AdGroup, ext_type: str, content) -> AdExtension:
-    """확장소재 생성은 행 단위 미리보기 없이 바로 실행하되, 권한 확인과 감사 로그는 같은 규칙을 따른다."""
-    if grp.ad_account_id not in accessible_account_ids(db, m, edit=True):
-        raise HTTPException(403, "이 광고 계정을 수정할 권한이 없습니다")
-    if grp.adgroup_type != "WEB_SITE":
-        raise HTTPException(400, "확장소재는 파워링크 광고그룹에만 만들 수 있습니다")
-    try:
-        e = _client(db, m.workspace_id, grp.ad_account_id).create_ad_extension(grp.naver_id, ext_type, content)
-    except NaverApiError as err:
-        raise HTTPException(400, f"네이버 확장소재 생성 실패: {err}")
-    ext = AdExtension(ad_account_id=grp.ad_account_id, naver_id=e["nccAdExtensionId"], owner_naver_id=grp.naver_id,
-                      ext_type=e.get("type", ext_type), status=_status(e), inspect_status=e.get("inspectStatus", ""),
-                      payload=_json(e["adExtension"]) if e.get("adExtension") else content)
-    db.add(ext)
-    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=grp.ad_account_id, action="CREATE",
-                    entity_type="ad_extension", naver_id=ext.naver_id, field="ext_type", after=ext.ext_type))
-    db.commit()
-    return ext
-
-
-def delete_extension(db: Session, m: Membership, ext: AdExtension):
-    if ext.ad_account_id not in accessible_account_ids(db, m, edit=True):
-        raise HTTPException(403, "이 광고 계정을 수정할 권한이 없습니다")
-    client = _client(db, m.workspace_id, ext.ad_account_id)
-    gone = False
-    try:
-        client.delete_ad_extension(ext.naver_id)
-    except NaverApiError as err:
-        # 네이버에서 이미 지워진 확장소재는 404가 난다(다음 동기화 전까지는 앱에 남아 있다): 소유자 목록으로 실제 존재 여부를 확인
-        try:
-            gone = all(e["nccAdExtensionId"] != ext.naver_id for e in client.list_ad_extensions(ext.owner_naver_id))
-        except NaverApiError:
-            gone = False
-        if not gone:
-            raise HTTPException(400, f"네이버 확장소재 삭제 실패: {err}")
-    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=ext.ad_account_id, action="DELETE",
-                    entity_type="ad_extension", naver_id=ext.naver_id, field="ext_type", before=ext.ext_type,
-                    after="네이버에 이미 없음" if gone else None))
-    db.delete(ext)
-    db.commit()
-    return gone
 
 
 def excel_template() -> bytes:
