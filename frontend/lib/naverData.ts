@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useSyncExternalStore } from "react";
-import { api } from "./api";
+import { api, Job } from "./api";
 import { loadLocal, localKeys, removeLocal, saveLocal } from "./localData";
 import { idsFrom, Keyword, keywordsFrom, parseTsv } from "./masterReport";
 import { useApp } from "./store";
@@ -24,6 +24,7 @@ export interface NExtension {
   inspect_status: string; payload: unknown;
 }
 export interface AccountData { fetchedAt: number; campaigns: NCampaign[]; adgroups: NAdGroup[]; keywords: Keyword[]; ads: NAd[]; extensions: NExtension[] }
+export type NaverData = Omit<AccountData, "fetchedAt">;
 
 const MAX_AGE = 7 * 24 * 3600_000;
 const POLL_MS = 2000;
@@ -119,12 +120,51 @@ async function pruneAccounts(wsId: number, allowed: number[]) {
   }
 }
 
-const empty: Omit<AccountData, "fetchedAt"> = { campaigns: [], adgroups: [], keywords: [], ads: [], extensions: [] };
+const empty: NaverData = { campaigns: [], adgroups: [], keywords: [], ads: [], extensions: [] };
 
-/** 상단에서 선택한 계정(없으면 접근 가능한 전체)의 데이터를 합쳐서 준다. */
-export function useNaverData() {
+/** 보관본을 바로 고친다(네이버에 반영한 변경을 다시 받지 않고 화면에 보이게). */
+export async function patchAccount(wsId: number, accountId: number, fn: (d: AccountData) => AccountData) {
+  const k = keyOf(wsId, accountId);
+  const cur = entries.get(k)?.data;
+  if (!cur) return;
+  const data = fn(cur);
+  setEntry(k, { data });
+  await saveLocal(k, data);
+}
+
+const LIST_OF: Record<string, keyof NaverData> = { campaign: "campaigns", adgroup: "adgroups", keyword: "keywords", ad: "ads", ad_extension: "extensions" };
+
+/** 실행이 끝난 작업의 성공 행을 보관본에 반영. 키워드 등록은 새 ID를 알아야 해서 그 계정을 다시 받는다. */
+export async function applyJob(wsId: number, job: Job) {
+  for (const acc of job.accounts ?? []) {
+    const ok = acc.rows.filter((r) => r.status === "SUCCESS");
+    if (acc.ad_account_id == null || !ok.length) continue;
+    if (ok.some((r) => r.field === "create")) {
+      await ensureAccount(wsId, acc.ad_account_id, true);
+      continue;
+    }
+    await patchAccount(wsId, acc.ad_account_id, (d) => {
+      const next = { ...d };
+      for (const r of ok) {
+        const key = LIST_OF[r.entity_type];
+        const list = next[key] as unknown as Record<string, unknown>[];
+        (next[key] as unknown) = r.field === "delete" ? list.filter((x) => x.naver_id !== r.naver_id)
+          : list.map((x) => x.naver_id !== r.naver_id ? x : {
+            ...x, [r.field]: r.field === "status" ? r.after : Number(r.after), ...(r.field === "bid_amt" && "use_group_bid" in x ? { use_group_bid: false } : {}),
+          });
+      }
+      return next;
+    });
+  }
+}
+
+/** 작업 실행 후 등: 그 계정들을 네이버에서 다시 받는다. */
+export const refreshAccounts = (wsId: number, accountIds: number[]) => Promise.all(accountIds.map((id) => ensureAccount(wsId, id, true)));
+
+/** 상단에서 선택한 계정(없으면 접근 가능한 전체)의 데이터를 합쳐서 준다. all이면 선택과 상관없이 전체(엑셀 대조용). */
+export function useNaverData({ all = false } = {}) {
   const { ws, accounts, selected } = useApp();
-  const ids = useMemo(() => (selected.length ? selected : accounts.map((a) => a.id)), [selected, accounts]);
+  const ids = useMemo(() => (selected.length && !all ? selected : accounts.map((a) => a.id)), [selected, accounts, all]);
   const v = useSyncExternalStore((l) => { listeners.add(l); return () => listeners.delete(l); }, () => version, () => 0);
 
   useEffect(() => {
@@ -147,7 +187,7 @@ export function useNaverData() {
       loading: list.some(({ e }) => !e || e.loading),
       errors: list.filter(({ e }) => e?.error).map(({ id, e }) => ({ ad_account_id: id, error: e!.error! })),
       fetchedAt: list.map(({ e }) => e?.data?.fetchedAt ?? 0).filter(Boolean).reduce((a, b) => Math.min(a, b), Infinity),
-      refresh: (accountIds: number[] = ids) => Promise.all(accountIds.map((id) => ensureAccount(ws!.id, id, true))),
+      refresh: (accountIds: number[] = ids) => refreshAccounts(ws!.id, accountIds),
     };
     // v: 다른 화면에서 받은 데이터가 바뀌면 다시 합친다
     // eslint-disable-next-line react-hooks/exhaustive-deps

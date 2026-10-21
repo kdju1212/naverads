@@ -2,14 +2,15 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { api, Change, Job } from "@/lib/api";
+import { api, Job } from "@/lib/api";
+import { changeFor, Target } from "@/lib/changes";
 import { useApp } from "@/lib/store";
 import { Button, inputCls } from "./ui";
 
 /** 선택한 행에 같은 변경을 적용하는 대량 작업을 만들고 미리보기 화면으로 이동한다. 즉시 반영하지 않는다. */
 export function BulkBar({ entityType, rows, numberField, deletable }: {
   entityType: string;
-  rows: { naver_id: string }[];
+  rows: Target[];
   numberField?: { field: "daily_budget" | "bid_amt"; label: string };
   deletable?: boolean;
 }) {
@@ -24,7 +25,7 @@ export function BulkBar({ entityType, rows, numberField, deletable }: {
     setBusy(true);
     setError(null);
     try {
-      const changes: Change[] = rows.map((r) => ({ entity_type: entityType, naver_id: r.naver_id, field, value: v }));
+      const changes = rows.map((r) => changeFor(entityType, r, field, v));
       const job = await api<Job>(`/workspaces/${ws.id}/bulk-jobs`, { body: { changes } });
       router.push(`/jobs?id=${job.id}`);
     } catch (e) {

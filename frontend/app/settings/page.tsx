@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Badge, Button, Card, ErrorText, inputCls, PageTitle } from "@/components/ui";
 import { api, fmt } from "@/lib/api";
+import { refreshAccounts } from "@/lib/naverData";
 import { useApp } from "@/lib/store";
 import { useFetch } from "@/lib/useFetch";
 
@@ -51,6 +52,7 @@ function Accounts({ isAdmin }: { isAdmin: boolean }) {
     try {
       const r = await api<{ status: string; error: string | null }>(`/workspaces/${ws!.id}/ad-accounts/${id}/sync`, { method: "POST" });
       if (r.status === "FAILED") throw new Error(`동기화 실패: ${r.error}`);
+      await refreshAccounts(ws!.id, [id]); // 광고 데이터는 브라우저 보관본을 새로 받는다(서버는 성과 통계만)
     } finally {
       setSyncing(null);
       await reloadAccounts();

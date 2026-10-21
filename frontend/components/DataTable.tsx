@@ -11,11 +11,11 @@ export interface Col<T> {
   num?: boolean;
 }
 
-export function DataTable<T extends { id: number }>({ rows, cols, selected, onSelect, loading, empty = "데이터가 없습니다", toolbar }: {
+export function DataTable<T extends { id: string | number }>({ rows, cols, selected, onSelect, loading, empty = "데이터가 없습니다", toolbar }: {
   rows: T[];
   cols: Col<T>[];
-  selected?: Set<number>;
-  onSelect?: (ids: Set<number>) => void;
+  selected?: Set<T["id"]>;
+  onSelect?: (ids: Set<T["id"]>) => void;
   loading?: boolean;
   empty?: string;
   toolbar?: ReactNode;
@@ -45,7 +45,7 @@ export function DataTable<T extends { id: number }>({ rows, cols, selected, onSe
     view.forEach((r) => (allChecked ? next.delete(r.id) : next.add(r.id)));
     onSelect(next);
   };
-  const toggle = (id: number) => {
+  const toggle = (id: T["id"]) => {
     if (!selected || !onSelect) return;
     const next = new Set(selected);
     if (next.has(id)) next.delete(id); else next.add(id);

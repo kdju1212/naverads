@@ -3,15 +3,11 @@
 import { useState } from "react";
 import { BulkBar } from "@/components/BulkBar";
 import { Col, DataTable } from "@/components/DataTable";
+import { DataStatus } from "@/components/DataStatus";
 import { Badge, Button, Card, ErrorText, inputCls, PageTitle } from "@/components/ui";
 import { api } from "@/lib/api";
+import { NAdGroup, NExtension as Extension, patchAccount, useNaverData } from "@/lib/naverData";
 import { useApp } from "@/lib/store";
-import { useFetch } from "@/lib/useFetch";
-
-interface Extension {
-  id: number; ad_account_id: number; naver_id: string; owner_naver_id: string; owner_name: string | null;
-  ext_type: string; status: string; inspect_status: string; payload: unknown;
-}
 
 const TYPE_LABEL: Record<string, string> = {
   HEADLINE: "추가제목", DESCRIPTION: "홍보문구", DESCRIPTION_EXTRA: "추가설명", SUB_LINKS: "서브링크", PRICE_LINKS: "가격링크",
@@ -20,8 +16,6 @@ const TYPE_LABEL: Record<string, string> = {
   NAVER_BLOG_REVIEW: "블로그 리뷰", NAVER_TV_VIDEO: "동영상", TALKTALK_CONSULTATION: "톡톡 상담",
 };
 
-interface AdGroup { id: number; ad_account_id: number; name: string }
-
 const PROMO_HEADINGS = ["할인", "사은품", "추가선물증정", "이벤트", "신상품"];
 
 // 확장소재 유형마다 구조가 달라 문자열 값만 모아 보여 준다
@@ -29,14 +23,18 @@ const strings = (v: unknown): string[] =>
   typeof v === "string" ? [v] : Array.isArray(v) ? v.flatMap(strings) : v && typeof v === "object" ? Object.values(v).flatMap(strings) : [];
 
 export default function ExtensionsPage() {
-  const { ws, query, product, accountName } = useApp();
+  const { ws, product, accountName } = useApp();
   const shoppingOnly = product === "SHOPPING";
-  const { data, error, loading, reload } = useFetch<Extension[]>(ws && !shoppingOnly ? `/workspaces/${ws.id}/ad-extensions${query()}` : null);
-  const groups = useFetch<AdGroup[]>(ws && !shoppingOnly ? `/workspaces/${ws.id}/adgroups${query({ product: "WEB_SITE" })}` : null);
-  const [sel, setSel] = useState<Set<number>>(new Set());
+  const data = useNaverData();
+  const [sel, setSel] = useState<Set<string>>(new Set());
   const [delError, setDelError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const rows = data ?? [];
+  const rows = data.extensions;
+  const groups = data.adgroups.filter((g) => g.adgroup_type === "WEB_SITE");
+  const ownerName = new Map([...data.campaigns, ...data.adgroups].map((o) => [o.naver_id, o.name]));
+  // 네이버에 반영한 생성·삭제를 보관본에도 바로 반영(계정 전체를 다시 받지 않는다)
+  const patch = (accountId: number, fn: (list: Extension[]) => Extension[]) =>
+    ws ? patchAccount(ws.id, accountId, (d) => ({ ...d, extensions: fn(d.extensions) })) : Promise.resolve();
   const picked = rows.filter((r) => sel.has(r.id));
 
   const remove = async () => {
@@ -46,7 +44,9 @@ export default function ExtensionsPage() {
     const failed: string[] = [];
     for (const r of picked) {
       try {
-        await api(`/workspaces/${ws.id}/ad-extensions/${r.id}`, { method: "DELETE" });
+        const q = new URLSearchParams({ account_id: String(r.ad_account_id), owner_naver_id: r.owner_naver_id, ext_type: r.ext_type });
+        await api(`/workspaces/${ws.id}/ad-extensions/${r.naver_id}?${q}`, { method: "DELETE" });
+        await patch(r.ad_account_id, (list) => list.filter((x) => x.naver_id !== r.naver_id));
       } catch (e) {
         failed.push(`${TYPE_LABEL[r.ext_type] ?? r.ext_type}: ${(e as Error).message}`);
       }
@@ -54,7 +54,6 @@ export default function ExtensionsPage() {
     setDelError(failed.length ? failed.join(" / ") : null);
     setSel(new Set());
     setDeleting(false);
-    await reload();
   };
 
   if (shoppingOnly) {
@@ -68,7 +67,7 @@ export default function ExtensionsPage() {
 
   const cols: Col<Extension>[] = [
     { key: "acc", label: "광고주", value: (r) => accountName(r.ad_account_id) },
-    { key: "owner", label: "연결 대상", value: (r) => r.owner_name ?? r.owner_naver_id },
+    { key: "owner", label: "연결 대상", value: (r) => ownerName.get(r.owner_naver_id) ?? r.owner_naver_id },
     { key: "type", label: "유형", value: (r) => TYPE_LABEL[r.ext_type] ?? r.ext_type },
     { key: "content", label: "내용", value: (r) => strings(r.payload).join(" · ").slice(0, 120) || null },
     { key: "status", label: "상태", value: (r) => r.status, render: (r) => <Badge value={r.status} /> },
@@ -78,10 +77,11 @@ export default function ExtensionsPage() {
   return (
     <>
       <PageTitle desc="파워링크 확장소재를 조회·생성·삭제하고 ON/OFF를 대량 변경합니다. 네이버 API는 내용 수정을 지원하지 않아, 내용을 바꾸려면 새로 만들고 기존 것을 삭제하세요.">확장소재 (파워링크)</PageTitle>
-      {ws && <NewExtension wsId={ws.id} groups={groups.data ?? []} accountName={accountName} onCreated={reload} />}
-      <ErrorText error={error ?? delError} />
-      <DataTable rows={rows} cols={cols} selected={sel} onSelect={setSel} loading={loading}
-        empty="확장소재가 없습니다. 설정에서 동기화하면 불러옵니다."
+      {ws && <NewExtension wsId={ws.id} groups={groups} accountName={accountName} onCreated={(e) => patch(e.ad_account_id, (list) => [...list, { ...e, id: e.naver_id }])} />}
+      <DataStatus data={data} />
+      <ErrorText error={delError} />
+      <DataTable rows={rows} cols={cols} selected={sel} onSelect={setSel} loading={data.loading && !rows.length}
+        empty="확장소재가 없습니다."
         toolbar={<div className="flex flex-wrap items-center gap-2">
           <BulkBar entityType="ad_extension" rows={picked} />
           <Button variant="danger" disabled={!picked.length || deleting} onClick={remove}>{deleting ? "삭제 중…" : "선택 삭제"}</Button>
@@ -91,7 +91,7 @@ export default function ExtensionsPage() {
 }
 
 function NewExtension({ wsId, groups, accountName, onCreated }: {
-  wsId: number; groups: AdGroup[]; accountName: (id: number) => string; onCreated: () => Promise<void>;
+  wsId: number; groups: NAdGroup[]; accountName: (id: number) => string; onCreated: (e: Extension) => Promise<unknown>;
 }) {
   const [form, setForm] = useState({ adgroup_id: "", ext_type: "DESCRIPTION", heading: PROMO_HEADINGS[0], description: "", links: "" });
   const [error, setError] = useState<string | null>(null);
@@ -110,12 +110,13 @@ function NewExtension({ wsId, groups, accountName, onCreated }: {
       return { name: name.trim(), final: rest.join("|").trim() };
     });
     try {
-      const r = await api<{ inspect_status: string }>(`/workspaces/${wsId}/ad-extensions`, {
-        body: { adgroup_id: Number(form.adgroup_id), ext_type: form.ext_type, heading: form.heading, description: form.description, links },
+      const g = groups.find((x) => x.naver_id === form.adgroup_id)!;
+      const r = await api<Extension>(`/workspaces/${wsId}/ad-extensions`, {
+        body: { ad_account_id: g.ad_account_id, adgroup_naver_id: g.naver_id, ext_type: form.ext_type, heading: form.heading, description: form.description, links },
       });
       setMsg(`만들었습니다 (검수 상태: ${r.inspect_status || "확인 중"}). 검수가 끝나야 노출됩니다.`);
       setForm({ ...form, heading: form.ext_type === "DESCRIPTION" ? form.heading : "", description: "", links: "" });
-      await onCreated();
+      await onCreated(r);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -128,7 +129,7 @@ function NewExtension({ wsId, groups, accountName, onCreated }: {
         <div className="flex flex-wrap gap-2">
           <select className={inputCls} value={form.adgroup_id} onChange={set("adgroup_id")} required aria-label="광고그룹">
             <option value="">광고그룹 선택</option>
-            {groups.map((g) => <option key={g.id} value={g.id}>{accountName(g.ad_account_id)} · {g.name}</option>)}
+            {groups.map((g) => <option key={g.id} value={g.naver_id}>{accountName(g.ad_account_id)} · {g.name}</option>)}
           </select>
           <select className={inputCls} value={form.ext_type} aria-label="유형"
             onChange={(e) => setForm({ ...form, ext_type: e.target.value, heading: e.target.value === "DESCRIPTION" ? PROMO_HEADINGS[0] : "" })}>

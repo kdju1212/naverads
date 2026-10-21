@@ -9,9 +9,11 @@ export interface Account {
   id: number; customer_id: string; name: string; is_mock: boolean;
   last_sync: { status: "SUCCESS" | "FAILED"; error: string | null; at: string } | null;
 }
-export interface Campaign { id: number; ad_account_id: number; naver_id: string; name: string; campaign_tp: string; status: string; daily_budget: number }
-export interface AdGroup { id: number; ad_account_id: number; campaign_id: number; naver_id: string; name: string; adgroup_type: string; status: string; bid_amt: number; daily_budget: number | null; serving: string | null }
-export interface Change { entity_type: string; naver_id: string; field: string; value: string }
+export interface Change {
+  entity_type: string; naver_id: string; field: string; value: string;
+  // 서버에 광고 데이터 사본이 없어 화면이 같이 보낸다(lib/changes.ts)
+  ad_account_id?: number; before?: string; product?: string; ad_type?: string; invalid?: string;
+}
 export interface JobRow {
   id: number; entity_type: string; naver_id: string; field: string; before: string | null; after: string;
   status: "VALID" | "INVALID" | "SUCCESS" | "FAILED"; error: string | null;

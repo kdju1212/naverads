@@ -5,15 +5,14 @@ import { useMemo, useState } from "react";
 import { TrendChart } from "@/components/TrendChart";
 import { Badge, Button, Card, ErrorText, inputCls, PageTitle } from "@/components/ui";
 import { fmt, Job } from "@/lib/api";
+import { NaverData, useNaverData } from "@/lib/naverData";
 import { useApp } from "@/lib/store";
 import { useFetch } from "@/lib/useFetch";
 
 interface Perf { impressions: number; clicks: number; cost: number; conversions: number | null; revenue: number | null; ctr: number | null; cpc: number | null; roas: number | null }
 interface AccountPerf { ad_account_id: number; name: string; WEB_SITE: Perf | null; SHOPPING: Perf | null }
 interface Daily { date: string; impressions: number; clicks: number; cost: number; conversions: number | null; revenue: number | null }
-type Counts = Record<string, number>;
-interface Ops { campaign: Counts; adgroup: Counts; keyword: Counts; ad_inspect: Counts; ext_inspect: Counts; auto_bids: number }
-interface Dashboard { connected_accounts: number; recent_jobs: Job[]; failed_jobs: number[]; sync_errors: { ad_account_id: number; error: string; at: string }[]; ops: Ops }
+interface Dashboard { connected_accounts: number; recent_jobs: Job[]; failed_jobs: number[]; sync_errors: { ad_account_id: number; error: string; at: string }[]; auto_bids: number }
 
 const DAY = 86400000;
 const day = (d: Date) => d.toISOString().slice(0, 10);
@@ -57,6 +56,7 @@ export default function DashboardPage() {
   const prev = useFetch<AccountPerf[]>(ws && `/workspaces/${ws.id}/performance/accounts${query({ since: day(prevSince), until: day(prevUntil) })}`);
   const daily = useFetch<Daily[]>(ws && `/workspaces/${ws.id}/performance/daily${query({ since: day(since), until: day(until), product })}`);
   const dash = useFetch<Dashboard>(ws && `/workspaces/${ws.id}/dashboard${query()}`);
+  const naver = useNaverData();
 
   const pick = useMemo(() => (list: AccountPerf[] | null) => (list ?? []).map((a) => {
     const pl = product === "SHOPPING" ? null : a.WEB_SITE, sh = product === "WEB_SITE" ? null : a.SHOPPING;
@@ -126,7 +126,7 @@ export default function DashboardPage() {
         )}
       </Card>
 
-      <OpsSummary ops={dash.data?.ops} connected={dash.data?.connected_accounts} />
+      <OpsSummary data={naver.loading ? null : naver} autoBids={dash.data?.auto_bids} connected={dash.data?.connected_accounts} />
 
       <Card title="광고주별 성과">
         <div className="overflow-auto">
@@ -193,18 +193,20 @@ export default function DashboardPage() {
 }
 
 const REVIEW = ["UNDER_REVIEW", "PENDING"], REJECTED = ["DENIED", "REJECTED", "DISAPPROVED"];
-const pickSum = (c: Counts | undefined, keys: string[]) => keys.reduce((s, k) => s + (c?.[k] ?? 0), 0);
 
-function OpsSummary({ ops, connected }: { ops?: Ops; connected?: number }) {
-  const onOff = (c?: Counts) => (c ? `${fmt(c.ON ?? 0)} / ${fmt(c.OFF ?? 0)}` : "-");
+/** 광고 데이터 개수는 브라우저 보관본으로 센다(서버에는 사본이 없다). */
+function OpsSummary({ data, autoBids, connected }: { data: NaverData | null; autoBids?: number; connected?: number }) {
+  const onOff = (list?: { status: string }[]) => (list ? `${fmt(list.filter((x) => x.status === "ON").length)} / ${fmt(list.filter((x) => x.status === "OFF").length)}` : "-");
+  const inspect = (list?: { inspect_status: string }[]) => (list
+    ? `${list.filter((x) => REVIEW.includes(x.inspect_status)).length} · ${list.filter((x) => REJECTED.includes(x.inspect_status)).length}` : "-");
   const items: [string, string, string][] = [
     ["연결된 광고 계정", fmt(connected, "개"), "/settings"],
-    ["캠페인 ON / OFF", onOff(ops?.campaign), "/campaigns"],
-    ["광고그룹 ON / OFF", onOff(ops?.adgroup), "/adgroups"],
-    ["키워드 ON / OFF", onOff(ops?.keyword), "/keywords"],
-    ["소재 검수 중 · 반려", ops ? `${pickSum(ops.ad_inspect, REVIEW)} · ${pickSum(ops.ad_inspect, REJECTED)}` : "-", "/ads"],
-    ["확장소재 검수 중 · 반려", ops ? `${pickSum(ops.ext_inspect, REVIEW)} · ${pickSum(ops.ext_inspect, REJECTED)}` : "-", "/extensions"],
-    ["자동입찰 키워드", fmt(ops?.auto_bids, "개"), "/keywords"],
+    ["캠페인 ON / OFF", onOff(data?.campaigns), "/campaigns"],
+    ["광고그룹 ON / OFF", onOff(data?.adgroups), "/adgroups"],
+    ["키워드 ON / OFF", onOff(data?.keywords), "/keywords"],
+    ["소재 검수 중 · 반려", inspect(data?.ads), "/ads"],
+    ["확장소재 검수 중 · 반려", inspect(data?.extensions), "/extensions"],
+    ["자동입찰 키워드", fmt(autoBids, "개"), "/keywords"],
   ];
   return (
     <Card title="운영 현황">

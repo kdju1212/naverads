@@ -3,28 +3,26 @@
 import { useMemo, useState } from "react";
 import { BulkBar } from "@/components/BulkBar";
 import { Col, DataTable } from "@/components/DataTable";
-import { Badge, ErrorText, PageTitle } from "@/components/ui";
+import { DataStatus } from "@/components/DataStatus";
+import { Badge, PageTitle } from "@/components/ui";
 import { fmt } from "@/lib/api";
+import { NAd as Ad, useNaverData } from "@/lib/naverData";
 import { useApp } from "@/lib/store";
-import { useFetch } from "@/lib/useFetch";
 
 type AdType = "TEXT_45" | "SHOPPING_PRODUCT_AD";
-interface Ad {
-  id: number; ad_account_id: number; adgroup_id: number; naver_id: string; ad_type: AdType | "RSA_AD"; status: string;
-  inspect_status: string; bid_amt: number | null; use_group_bid: boolean; payload: Record<string, unknown>;
-}
 const str = (v: unknown) => (typeof v === "string" ? v : null);
 // RSA_AD는 제목·설명이 여러 개(headlines/descriptions)로 온다
 const texts = (v: unknown) => (Array.isArray(v) && v.length ? v.join(" / ") : null);
 
 export default function AdsPage() {
-  const { ws, query, product, accountName } = useApp();
+  const { product, accountName } = useApp();
+  const data = useNaverData();
   const [picked, setTab] = useState<AdType>("TEXT_45");
   // 상단 광고 유형 필터가 한쪽이면 그 탭만 의미가 있다
   const tab: AdType = product === "SHOPPING" ? "SHOPPING_PRODUCT_AD" : product === "WEB_SITE" ? "TEXT_45" : picked;
-  const { data, error, loading } = useFetch<Ad[]>(ws && `/workspaces/${ws.id}/ads${query({ ad_type: tab })}`);
-  const [sel, setSel] = useState<Set<number>>(new Set());
-  const rows = useMemo(() => data ?? [], [data]);
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  // 파워링크 소재 탭에는 반응형 검색광고(RSA_AD)도 함께 보여 준다
+  const rows = useMemo(() => data.ads.filter((a) => (tab === "TEXT_45" ? a.ad_type !== "SHOPPING_PRODUCT_AD" : a.ad_type === tab)), [data.ads, tab]);
 
   const common: Col<Ad>[] = [
     { key: "acc", label: "광고주", value: (r) => accountName(r.ad_account_id) },
@@ -56,8 +54,8 @@ export default function AdsPage() {
             className={`rounded-md px-3 py-1.5 text-sm disabled:opacity-40 ${tab === v ? "bg-gray-900 text-white" : "bg-white border border-gray-300"}`}>{label}</button>
         ))}
       </div>
-      <ErrorText error={error} />
-      <DataTable key={tab} rows={rows} cols={cols} selected={sel} onSelect={setSel} loading={loading}
+      <DataStatus data={data} />
+      <DataTable key={tab} rows={rows} cols={cols} selected={sel} onSelect={setSel} loading={data.loading && !rows.length}
         toolbar={<BulkBar entityType="ad" rows={rows.filter((r) => sel.has(r.id))}
           numberField={tab === "SHOPPING_PRODUCT_AD" ? { field: "bid_amt", label: "입찰가" } : undefined} />} />
     </>

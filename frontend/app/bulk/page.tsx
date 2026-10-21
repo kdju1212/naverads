@@ -2,8 +2,11 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { DataStatus } from "@/components/DataStatus";
 import { Button, Card, ErrorText, PageTitle } from "@/components/ui";
-import { api, downloadBlob, Job } from "@/lib/api";
+import { api, Change, downloadBlob, Job } from "@/lib/api";
+import { enrichExcel } from "@/lib/changes";
+import { useNaverData } from "@/lib/naverData";
 import { useApp } from "@/lib/store";
 
 export default function BulkPage() {
@@ -12,6 +15,8 @@ export default function BulkPage() {
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // 엑셀의 ID가 어느 광고주 것인지 보관본으로 찾는다(서버에는 광고 데이터 사본이 없다)
+  const data = useNaverData({ all: true });
 
   const upload = async () => {
     if (!ws || !file) return;
@@ -20,7 +25,8 @@ export default function BulkPage() {
     const form = new FormData();
     form.append("file", file);
     try {
-      const job = await api<Job>(`/workspaces/${ws.id}/bulk-jobs/excel`, { form });
+      const rows = await api<Change[]>(`/workspaces/${ws.id}/bulk-jobs/excel/parse`, { form });
+      const job = await api<Job>(`/workspaces/${ws.id}/bulk-jobs`, { body: { source: "EXCEL", changes: enrichExcel(rows, data) } });
       router.push(`/jobs?id=${job.id}`);
     } catch (e) {
       setError((e as Error).message);
@@ -47,10 +53,10 @@ export default function BulkPage() {
         <Card title="2. 업로드 → 미리보기">
           <div className="flex flex-wrap items-center gap-3">
             <input type="file" accept=".xlsx" aria-label="엑셀 파일" onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="text-sm" />
-            <Button disabled={!file || busy} onClick={upload}>{busy ? "검증 중…" : "업로드하고 미리보기"}</Button>
+            <Button disabled={!file || busy || data.loading} onClick={upload}>{busy ? "검증 중…" : data.loading ? "광고 데이터 받는 중…" : "업로드하고 미리보기"}</Button>
           </div>
           <p className="mt-2 text-xs text-gray-500">업로드만으로는 아무것도 변경되지 않습니다. 다음 화면에서 광고주별 변경 전·후와 오류를 확인한 뒤 실행하세요.</p>
-          <div className="mt-3"><ErrorText error={error} /></div>
+          <div className="mt-3"><DataStatus data={data} /><ErrorText error={error} /></div>
         </Card>
       </div>
     </>

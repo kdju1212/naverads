@@ -3,38 +3,37 @@
 import { useMemo, useState } from "react";
 import { BulkBar } from "@/components/BulkBar";
 import { Col, DataTable } from "@/components/DataTable";
-import { Badge, Button, ErrorText, PageTitle } from "@/components/ui";
-import { AdGroup, Campaign, downloadCsv, fmt, PRODUCT_LABEL, servingLabel } from "@/lib/api";
+import { DataStatus } from "@/components/DataStatus";
+import { Badge, Button, PageTitle } from "@/components/ui";
+import { downloadCsv, fmt, PRODUCT_LABEL, servingLabel } from "@/lib/api";
+import { NAdGroup, useNaverData } from "@/lib/naverData";
 import { useApp } from "@/lib/store";
-import { useFetch } from "@/lib/useFetch";
 
 
 // 광고그룹을 끈 경우 네이버는 PAUSED만 주거나 캠페인 쪽 이유를 줄 수 있어, 앱의 ON/OFF를 함께 보여 준다
-const serving = (r: AdGroup) => {
+const serving = (r: NAdGroup) => {
   const reason = servingLabel(r.serving);
   if (r.status !== "OFF") return reason;
   return ["광고그룹 OFF", "중지", "-"].includes(reason) ? "광고그룹 OFF" : `광고그룹 OFF · ${reason}`;
 };
 
 export default function AdGroupsPage() {
-  const { ws, query, product, accountName } = useApp();
-  const groups = useFetch<AdGroup[]>(ws && `/workspaces/${ws.id}/adgroups${query({ product })}`);
-  const camps = useFetch<Campaign[]>(ws && `/workspaces/${ws.id}/campaigns${query({ product })}`);
-  const [sel, setSel] = useState<Set<number>>(new Set());
-  const rows = useMemo(() => groups.data ?? [], [groups.data]);
-  const campById = useMemo(() => new Map((camps.data ?? []).map((c) => [c.id, c])), [camps.data]);
-  const campName = useMemo(() => new Map([...campById].map(([id, c]) => [id, c.name])), [campById]);
+  const { product, accountName } = useApp();
+  const data = useNaverData();
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const rows = useMemo(() => data.adgroups.filter((g) => !product || g.adgroup_type === product), [data.adgroups, product]);
+  const campById = useMemo(() => new Map(data.campaigns.map((c) => [c.naver_id, c])), [data.campaigns]);
   // 키워드 등록 엑셀에 넣을 광고그룹 ID를 찾기 쉽게: 상단 계정·유형 필터가 적용된 전체 목록
   const download = () => downloadCsv([
     ["광고주", "유형", "캠페인명", "캠페인 ID", "광고그룹명", "광고그룹 ID", "상태", "운영 상태", "하루예산"],
-    ...rows.map((r) => [accountName(r.ad_account_id), PRODUCT_LABEL[r.adgroup_type] ?? r.adgroup_type, campById.get(r.campaign_id)?.name ?? "",
-      campById.get(r.campaign_id)?.naver_id ?? "", r.name, r.naver_id, r.status, serving(r), r.daily_budget ?? "제한 없음"]),
+    ...rows.map((r) => [accountName(r.ad_account_id), PRODUCT_LABEL[r.adgroup_type] ?? r.adgroup_type, campById.get(r.campaign_naver_id)?.name ?? "",
+      r.campaign_naver_id, r.name, r.naver_id, r.status, serving(r), r.daily_budget ?? "제한 없음"]),
   ], "adgroups.csv");
 
-  const cols: Col<AdGroup>[] = [
+  const cols: Col<NAdGroup>[] = [
     { key: "acc", label: "광고주", value: (r) => accountName(r.ad_account_id) },
     { key: "tp", label: "유형", value: (r) => r.adgroup_type, render: (r) => <Badge value={r.adgroup_type} /> },
-    { key: "camp", label: "캠페인", value: (r) => campName.get(r.campaign_id) ?? null },
+    { key: "camp", label: "캠페인", value: (r) => campById.get(r.campaign_naver_id)?.name ?? null },
     { key: "name", label: "광고그룹", value: (r) => r.name },
     { key: "status", label: "상태", value: (r) => r.status, render: (r) => <Badge value={r.status} /> },
     { key: "serving", label: "운영 상태", value: serving,
@@ -45,8 +44,8 @@ export default function AdGroupsPage() {
   return (
     <>
       <PageTitle desc="ON/OFF와 기본 입찰가를 여러 계정에 걸쳐 대량 변경합니다.">광고그룹</PageTitle>
-      <ErrorText error={groups.error} />
-      <DataTable rows={rows} cols={cols} selected={sel} onSelect={setSel} loading={groups.loading}
+      <DataStatus data={data} />
+      <DataTable rows={rows} cols={cols} selected={sel} onSelect={setSel} loading={data.loading && !rows.length}
         toolbar={
           <>
             <BulkBar entityType="adgroup" rows={rows.filter((r) => sel.has(r.id))} numberField={{ field: "bid_amt", label: "입찰가" }} />
