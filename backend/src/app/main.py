@@ -265,6 +265,25 @@ async def keyword_tool(account_id: int, hint: str, m: Membership = Depends(membe
     return sorted(rows, key=lambda r: -(r["pc"] + r["mobile"]))
 
 
+MasterItem = Literal["Campaign", "Adgroup", "Keyword", "Ad", "RsaAd", "AdExtension", "Asset", "AdAssetLink"]
+
+
+@app.post("/workspaces/{ws_id}/master-report-check")
+async def master_report_check(account_id: int, item: MasterItem, job_id: str | None = None,
+                              m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
+    """임시 확인용: 마스터 보고서 파일의 칸 구성을 실계정에서 보기. job_id가 없으면 만들고, 있으면 상태 + 완성 시 앞 50줄."""
+    resolve_account_ids(db, m, [account_id])
+    try:
+        job = bulk._client(db, m.workspace_id, account_id).master_report(item, job_id)
+    except NaverApiError as e:
+        raise HTTPException(400, f"마스터 보고서 실패: {e}")
+    text = job.pop("text", None)
+    if text is not None:
+        lines = text.splitlines()
+        job.update(line_count=len(lines), head=lines[:50])
+    return job
+
+
 # ---------- 다계정 통합 조회 ----------
 ProductType = Literal["WEB_SITE", "SHOPPING"] | None
 

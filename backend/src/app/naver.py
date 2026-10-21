@@ -12,6 +12,7 @@ import os
 import random
 import time
 from datetime import date, timedelta
+from urllib.parse import parse_qsl, urlsplit
 
 import httpx
 
@@ -70,18 +71,20 @@ class RealNaverClient:
     def __init__(self, api_key: str, secret_key: str, customer_id: str):
         self.api_key, self.secret_key, self.customer_id = api_key, secret_key, customer_id
 
-    def _req(self, method: str, uri: str, **kw):
+    def _req(self, method: str, uri: str, raw=False, base=BASE, **kw):
         ts = str(int(time.time() * 1000))
         sig = base64.b64encode(
             hmac.new(self.secret_key.encode(), f"{ts}.{method}.{uri}".encode(), hashlib.sha256).digest()
         ).decode()
         headers = {"X-Timestamp": ts, "X-API-KEY": self.api_key, "X-Customer": self.customer_id, "X-Signature": sig}
         try:
-            r = httpx.request(method, self.BASE + uri, headers=headers, timeout=20, **kw)
+            r = httpx.request(method, base + uri, headers=headers, timeout=20, **kw)
         except httpx.HTTPError as e:
             raise NaverApiError(f"네트워크 오류: {e}") from e
         if r.status_code >= 400:
             raise NaverApiError(f"{r.status_code} {r.text[:200]}")
+        if raw:
+            return r.text
         return r.json() if r.content else None  # DELETE는 본문 없이 응답할 수 있다
 
     def list_campaigns(self):
@@ -161,6 +164,17 @@ class RealNaverClient:
             for (k, _), e in zip(chunk, r.get("estimate", [])):
                 out[e.get("nccKeywordId") or k] = e.get("bid")
         return out
+
+    def master_report(self, item, job_id=None):
+        """마스터 보고서(명세: gh-pages assets/json/master-report.json). job_id가 없으면 만들고, 있으면 상태 조회 + BUILT면 파일 내용(text)."""
+        if not job_id:
+            return self._req("POST", "/master-reports", json={"item": item})
+        job = self._req("GET", f"/master-reports/{job_id}")
+        if job.get("status") == "BUILT":
+            # 다운로드도 서명이 필요하다. 서명 uri는 쿼리를 뺀 경로(공식 샘플의 /report-download)
+            u = urlsplit(job["downloadUrl"])
+            job["text"] = self._req("GET", u.path, raw=True, base=f"{u.scheme}://{u.netloc}", params=parse_qsl(u.query))
+        return job
 
     def update(self, entity_type, naver_id, field, value):
         if (entity_type, field) not in VERIFIED_WRITES and os.getenv("NAVER_ALLOW_REAL_WRITE") != "1":
@@ -264,6 +278,9 @@ class MockNaverClient:
              "bidAmt": bid, "useGroupBidAmt": use_group_bid}
         self.s["keywords"][kid] = k
         return dict(k)
+
+    def master_report(self, item, job_id=None):
+        return {"id": "mock", "item": item, "status": "BUILT", "text": "mock	탭으로 구분된 줄" if job_id else None}
 
     def keyword_tool(self, hints):
         r = random.Random(",".join(hints))

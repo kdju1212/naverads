@@ -427,3 +427,20 @@ def test_execute_in_chunks():
     last = c.post(url, headers=owner).json()
     assert last["status"] == "DONE" and last["counts"]["SUCCESS"] == n and last["executed_at"]
     assert c.post(url, headers=owner).status_code == 409
+
+
+def test_master_report_download(monkeypatch):
+    from app.naver import RealNaverClient
+
+    calls = []
+
+    def fake_req(self, method, uri, raw=False, base=RealNaverClient.BASE, **kw):
+        calls.append((method, base + uri, kw.get("params"), raw))
+        return "a\tb\nc\td" if raw else {"id": "j1", "status": "BUILT",
+                                         "downloadUrl": "https://api.searchad.naver.com/report-download?authtoken=T&x=1"}
+
+    monkeypatch.setattr(RealNaverClient, "_req", fake_req)
+    job = RealNaverClient("k", "s", "1").master_report("Keyword", "j1")
+    assert job["text"] == "a\tb\nc\td"
+    # 서명용 uri는 쿼리 없는 경로, 쿼리는 params로
+    assert calls[-1] == ("GET", "https://api.searchad.naver.com/report-download", [("authtoken", "T"), ("x", "1")], True)
