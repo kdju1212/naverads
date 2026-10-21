@@ -12,7 +12,7 @@ import os
 import random
 import time
 from datetime import date, timedelta
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -71,14 +71,16 @@ class RealNaverClient:
     def __init__(self, api_key: str, secret_key: str, customer_id: str):
         self.api_key, self.secret_key, self.customer_id = api_key, secret_key, customer_id
 
-    def _req(self, method: str, uri: str, raw=False, base=BASE, **kw):
+    def _headers(self, method: str, uri: str) -> dict:
         ts = str(int(time.time() * 1000))
         sig = base64.b64encode(
             hmac.new(self.secret_key.encode(), f"{ts}.{method}.{uri}".encode(), hashlib.sha256).digest()
         ).decode()
-        headers = {"X-Timestamp": ts, "X-API-KEY": self.api_key, "X-Customer": self.customer_id, "X-Signature": sig}
+        return {"X-Timestamp": ts, "X-API-KEY": self.api_key, "X-Customer": self.customer_id, "X-Signature": sig}
+
+    def _req(self, method: str, uri: str, raw=False, base=BASE, **kw):
         try:
-            r = httpx.request(method, base + uri, headers=headers, timeout=20, **kw)
+            r = httpx.request(method, base + uri, headers=self._headers(method, uri), timeout=20, **kw)
         except httpx.HTTPError as e:
             raise NaverApiError(f"네트워크 오류: {e}") from e
         if r.status_code >= 400:
@@ -165,16 +167,24 @@ class RealNaverClient:
                 out[e.get("nccKeywordId") or k] = e.get("bid")
         return out
 
-    def master_report(self, item, job_id=None):
-        """마스터 보고서(명세: gh-pages assets/json/master-report.json). job_id가 없으면 만들고, 있으면 상태 조회 + BUILT면 파일 내용(text)."""
-        if not job_id:
-            return self._req("POST", "/master-reports", json={"item": item})
-        job = self._req("GET", f"/master-reports/{job_id}")
-        if job.get("status") == "BUILT":
-            # 다운로드도 서명이 필요하다. 서명 uri는 쿼리를 뺀 경로(공식 샘플의 /report-download)
-            u = urlsplit(job["downloadUrl"])
-            job["text"] = self._req("GET", u.path, raw=True, base=f"{u.scheme}://{u.netloc}", params=parse_qsl(u.query))
-        return job
+    # 마스터 보고서(명세: gh-pages assets/json/master-report.json). 파일은 헤더 없는 TSV, 칸 구성은 브라우저(lib/naverData.ts) 참고
+    def create_master_report(self, item):
+        return self._req("POST", "/master-reports", json={"item": item})
+
+    def get_master_report(self, job_id):
+        return self._req("GET", f"/master-reports/{job_id}")
+
+    def master_file(self, job) -> dict:
+        """다운로드 주소 + 서명 헤더. 서명 uri는 쿼리를 뺀 경로(공식 샘플의 /report-download).
+        Workers는 이걸로 JS fetch를 해서 파이썬이 본문을 건드리지 않는다(9MB 실측: CPU 25ms, httpx는 1.5초)."""
+        return {"url": job["downloadUrl"], "headers": self._headers("GET", urlsplit(job["downloadUrl"]).path)}
+
+    def get_many(self, kind, ids):
+        """ids로 여러 개 조회(명세의 /ncc/{kind}?ids=). kind: adgroups | keywords | ads | ad-extensions"""
+        out = []
+        for i in range(0, len(ids), 100):  # shortcut: 한 번에 보낼 수 있는 개수는 명세에 없어 100개씩, 오류 나면 줄이기
+            out += self._req("GET", f"/ncc/{kind}", params={"ids": ",".join(ids[i:i + 100])})
+        return out
 
     def update(self, entity_type, naver_id, field, value):
         if (entity_type, field) not in VERIFIED_WRITES and os.getenv("NAVER_ALLOW_REAL_WRITE") != "1":
@@ -196,6 +206,60 @@ def _kwd_stat(k):
     n = lambda v: int(v) if str(v).isdigit() else 0  # noqa: E731
     return {"keyword": k["relKeyword"], "pc": n(k.get("monthlyPcQcCnt")), "mobile": n(k.get("monthlyMobileQcCnt")),
             "comp": k.get("compIdx", "")}
+
+
+def _status(o):
+    return "OFF" if o.get("userLock") else "ON"
+
+
+def _json(v):
+    """네이버는 일부 필드(adExtension, assetData)를 JSON 문자열로 준다."""
+    if isinstance(v, str):
+        try:
+            return json.loads(v)
+        except ValueError:
+            return {"text": v}
+    return v if v is not None else {}
+
+
+def _rsa_texts(assets) -> dict:
+    # shortcut: assetData 형식은 명세에 없어 문자열/JSON 모두 받아 문자열 값만 모은다, 실응답 확인 후 정리
+    out = {"headlines": [], "descriptions": []}
+    for x in assets:
+        key = {"HEADLINE": "headlines", "DESCRIPTION": "descriptions"}.get(x.get("linkType"))
+        if key:
+            d = _json(x.get("assetData"))
+            out[key].append(" ".join(v for v in d.values() if isinstance(v, str)) if isinstance(d, dict) else str(d))
+    return out
+
+
+# 브라우저 보관용 행. DB 사본 없이 네이버 ID로만 식별한다
+def campaign_row(aid, c):
+    return {"ad_account_id": aid, "naver_id": c["nccCampaignId"], "name": c["name"], "campaign_tp": c["campaignTp"],
+            "status": _status(c), "daily_budget": c.get("dailyBudget") or 0}
+
+
+def adgroup_row(aid, g):
+    return {"ad_account_id": aid, "naver_id": g["nccAdgroupId"], "campaign_naver_id": g["nccCampaignId"], "name": g["name"],
+            "adgroup_type": g["adgroupType"], "status": _status(g), "bid_amt": g["bidAmt"],
+            # shortcut: 공유예산(sharedBudgetId) 그룹은 반영 안 함, 쓰는 계정이 생기면 sharedDailyBudget 표시
+            "daily_budget": g.get("dailyBudget") if g.get("useDailyBudget") else None,
+            "serving": g.get("statusReason") or g.get("status")}
+
+
+def ad_row(aid, a):
+    attr = a.get("adAttr") or {}
+    payload = a.get("ad", {})
+    if a.get("assets"):  # RSA_AD: 제목·설명은 ad가 아니라 assets에 온다
+        payload = {**payload, **_rsa_texts(a["assets"])}
+    return {"ad_account_id": aid, "naver_id": a["nccAdId"], "adgroup_naver_id": a["nccAdgroupId"], "ad_type": a["type"],
+            "status": _status(a), "inspect_status": a.get("inspectStatus", ""), "bid_amt": attr.get("bidAmt"),
+            "use_group_bid": attr.get("useGroupBidAmt", True), "payload": payload}
+
+
+def extension_row(aid, e):
+    return {"ad_account_id": aid, "naver_id": e["nccAdExtensionId"], "owner_naver_id": e["ownerId"], "ext_type": e["type"],
+            "status": _status(e), "inspect_status": e.get("inspectStatus", ""), "payload": _json(e.get("adExtension"))}
 
 
 # ---- Mock ----
@@ -237,7 +301,7 @@ class MockNaverClient:
     def __init__(self, customer_id: str):
         if not customer_id.isdigit():
             raise NaverApiError("고객 ID는 숫자여야 합니다")
-        self.s = _MOCK_STORE.setdefault(customer_id, _seed(customer_id))
+        self.customer_id, self.s = customer_id, _MOCK_STORE.setdefault(customer_id, _seed(customer_id))
 
     def list_campaigns(self):
         return [dict(c) for c in self.s["campaigns"].values()]
@@ -279,8 +343,35 @@ class MockNaverClient:
         self.s["keywords"][kid] = k
         return dict(k)
 
-    def master_report(self, item, job_id=None):
-        return {"id": "mock", "item": item, "status": "BUILT", "text": "mock	탭으로 구분된 줄" if job_id else None}
+    def create_master_report(self, item):
+        return {"id": f"mock-{item}", "item": item, "status": "REGIST"}
+
+    def get_master_report(self, job_id):
+        return {"id": job_id, "item": job_id.removeprefix("mock-"), "status": "BUILT", "downloadUrl": "mock"}
+
+    def master_file(self, job) -> dict:
+        """실계정 파일과 같은 칸 구성(헤더 없는 TSV)."""
+        s, cid = self.s, self.customer_id
+        lock = lambda o: "1" if o.get("userLock") else "0"  # noqa: E731
+        ad_types = {"Ad": "TEXT_45", "RsaAd": "RSA_AD", "ShoppingProduct": "SHOPPING_PRODUCT_AD"}
+        item = job["item"]
+        if item == "Keyword":
+            rows = [[cid, k["nccAdgroupId"], k["nccKeywordId"], k["keyword"], str(k["bidAmt"]), "", "", lock(k), "10",
+                     "1" if k.get("useGroupBidAmt") else "0", "2026-07-01T00:00:00Z", "", ""] for k in s["keywords"].values()]
+        elif item == "Adgroup":
+            rows = [[cid, g["nccAdgroupId"], g["nccCampaignId"], g["name"], str(g["bidAmt"]), lock(g)] + [""] * 13
+                    for g in s["adgroups"].values()]
+        elif item in ad_types:
+            rows = [[cid, a["nccAdgroupId"], a["nccAdId"], "10", "", "", lock(a), "", ""]
+                    for a in s["ads"].values() if a["type"] == ad_types[item]]
+        elif item == "AdExtension":
+            rows = [[cid, e["nccAdExtensionId"], "8", e["ownerId"]] + [""] * 13 for e in s.get("ad-extensions", {}).values()]
+        else:
+            rows = []
+        return {"text": "\n".join("\t".join(r) for r in rows)}
+
+    def get_many(self, kind, ids):
+        return [dict(self.s[kind][i]) for i in ids if i in self.s.get(kind, {})]
 
     def keyword_tool(self, hints):
         r = random.Random(",".join(hints))

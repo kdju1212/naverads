@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Badge, Button, Card, ErrorText, inputCls, PageTitle } from "@/components/ui";
-import { api, downloadCsv, fmt } from "@/lib/api";
+import { api, fmt } from "@/lib/api";
 import { useApp } from "@/lib/store";
 import { useFetch } from "@/lib/useFetch";
 
@@ -18,7 +18,6 @@ export default function SettingsPage() {
       <div className="flex flex-col gap-4">
         <Accounts isAdmin={isAdmin} />
         {isAdmin && <Members />}
-        {isAdmin && <MasterReportCheck />}
         {/* 계정 연결·해제 시 과금 계정 수를 다시 불러온다 */}
         {isAdmin && <Subscription key={accounts.length} />}
       </div>
@@ -120,51 +119,6 @@ function Accounts({ isAdmin }: { isAdmin: boolean }) {
           </form>
         </div>
       )}
-    </Card>
-  );
-}
-
-interface MasterJob { id: string; status: string; line_count?: number; head?: string[]; text?: string }
-const MASTER_ITEMS = ["Campaign", "CampaignBudget", "Adgroup", "AdgroupBudget", "Keyword", "Ad", "RsaAd", "AdExtension", "Asset", "AdAssetLink"];
-
-// 임시: 마스터 보고서 파일 칸 구성 확인용 (동기화를 마스터 보고서로 바꾸기 전)
-function MasterReportCheck() {
-  const { ws, accounts } = useApp();
-  const [form, setForm] = useState({ account_id: "", item: "Keyword" });
-  const [job, setJob] = useState<MasterJob | null>(null);
-  const { error, busy, run } = useAction();
-
-  const check = () => run(async () => {
-    setJob(null);
-    const base = `/workspaces/${ws!.id}/master-report-check?account_id=${form.account_id}&item=${form.item}`;
-    let j = await api<MasterJob>(base, { method: "POST" });
-    setJob(j);
-    // 보고서가 만들어질 때까지 3초마다 확인, 최대 3분
-    for (let i = 0; i < 60 && !["BUILT", "NONE", "ERROR"].includes(j.status); i++) {
-      await new Promise((r) => setTimeout(r, 3000));
-      j = await api<MasterJob>(`${base}&job_id=${j.id}`, { method: "POST" });
-      setJob(j);
-    }
-    if (j.status === "BUILT" && !j.head) setJob(await api<MasterJob>(`${base}&job_id=${j.id}`, { method: "POST" }));
-  });
-
-  return (
-    <Card title="마스터 보고서 확인 (임시)">
-      <ErrorText error={error} />
-      <div className="mb-3 flex flex-wrap gap-2">
-        <select className={inputCls} value={form.account_id} onChange={(e) => setForm({ ...form, account_id: e.target.value })} aria-label="광고 계정">
-          <option value="">광고 계정 선택</option>
-          {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-        </select>
-        <select className={inputCls} value={form.item} onChange={(e) => setForm({ ...form, item: e.target.value })} aria-label="보고서 종류">
-          {MASTER_ITEMS.map((i) => <option key={i}>{i}</option>)}
-        </select>
-        <Button disabled={busy || !form.account_id} onClick={check}>{busy ? "보고서 만드는 중…" : "보고서 받아 보기"}</Button>
-      </div>
-      {job && <p className="text-sm">상태: {job.status}{job.line_count != null && ` · 전체 ${fmt(job.line_count, "줄")} (앞 50줄 표시)`}
-        {job.text != null && <Button variant="secondary" className="ml-2" onClick={() => downloadCsv(job.text!.split(/\r?\n/).map((l) => l.split("\t")), `마스터보고서_${form.item}.csv`)}>파일 받기</Button>}</p>}
-      {job?.head && <pre className="mt-2 max-h-96 overflow-auto rounded bg-gray-50 p-2 text-xs">{job.head.join("\n")}</pre>}
-      <p className="mt-3 text-xs text-gray-400">네이버에서 읽기만 하며 계정에는 변경이 없습니다.</p>
     </Card>
   );
 }

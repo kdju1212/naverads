@@ -1,3 +1,5 @@
+import { clearLocal } from "./localData";
+
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "https://naverads-api.djkim0509.workers.dev";
 
 export type Product = "" | "WEB_SITE" | "SHOPPING";
@@ -25,13 +27,15 @@ export function getToken(): string | null {
   try { return localStorage.getItem("token"); } catch { return null; }
 }
 
-export function setToken(t: string | null) {
+/** 로그인·로그아웃 모두 브라우저에 보관한 광고 데이터를 지운다(이전 사용자 것이 남지 않게) */
+export async function setToken(t: string | null) {
+  await clearLocal();
   try { if (t) localStorage.setItem("token", t); else localStorage.removeItem("token"); } catch { /* 저장 불가 환경 */ }
 }
 
 /** 전체 새로고침으로 이동해 메모리에 남은 이전 사용자 데이터를 비운다 */
-export function logout() {
-  setToken(null);
+export async function logout() {
+  await setToken(null);
   // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- 상태 초기화를 위해 의도적으로 전체 새로고침
   location.href = "/login";
 }
@@ -53,7 +57,7 @@ export async function api<T>(path: string, opts: { method?: string; body?: unkno
     // Cloudflare가 CPU 한도로 끊으면 CORS 헤더 없는 503이 와서 네트워크 오류로 보인다
     throw new Error("서버 응답이 없습니다. 잠시 후 다시 시도하세요. (무료 플랜 일시 제한일 수 있음)");
   }
-  if (res.status === 401 && !path.startsWith("/auth/")) logout();
+  if (res.status === 401 && !path.startsWith("/auth/")) void logout();
   if (opts.raw && res.ok) return (await res.blob()) as T;
   const data = res.headers.get("content-type")?.includes("json") ? await res.json() : null;
   if (!res.ok) {

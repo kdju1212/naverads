@@ -1,15 +1,16 @@
 from datetime import date, timedelta
 from typing import Literal
 
-from fastapi import Depends, FastAPI, HTTPException, UploadFile
+import httpx
+from fastapi import Depends, FastAPI, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import bulk
-from .access import admin_membership, current_user, membership, resolve_account_ids
+from . import bulk, naver
+from .access import admin_membership, current_user, membership, membership_of, resolve_account_ids, user_from_header
 from .db import Base, engine, get_db
 from .models import (AccountAccess, Ad, AdAccount, AdExtension, AdGroup, AuditLog, AutoBidRule, BulkJob, BulkJobRow, Campaign, Keyword, Membership,
                      NaverApiCredential, PerformanceDaily, Plan, Subscription, SyncRun, User, Workspace, WorkspaceAdAccount,
@@ -265,24 +266,59 @@ async def keyword_tool(account_id: int, hint: str, m: Membership = Depends(membe
     return sorted(rows, key=lambda r: -(r["pc"] + r["mobile"]))
 
 
-MasterItem = Literal["Campaign", "CampaignBudget", "Adgroup", "AdgroupBudget", "Keyword", "Ad", "RsaAd", "AdExtension", "Asset", "AdAssetLink"]
+# ---------- 네이버 원본 조회 (브라우저 보관용, DB에 저장하지 않음) ----------
+MasterItem = Literal["Adgroup", "Keyword", "Ad", "RsaAd", "ShoppingProduct", "AdExtension"]
+ROW_OF = {"adgroups": naver.adgroup_row, "ads": naver.ad_row, "ad-extensions": naver.extension_row}
 
 
-@app.post("/workspaces/{ws_id}/master-report-check")
-async def master_report_check(account_id: int, item: MasterItem, job_id: str | None = None,
-                              m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
-    """임시 확인용: 마스터 보고서 파일의 칸 구성을 실계정에서 보기. job_id가 없으면 만들고, 있으면 상태 + 완성 시 앞 50줄."""
+def _naver(db: Session, m: Membership, account_id: int, fn):
     resolve_account_ids(db, m, [account_id])
     try:
-        job = bulk._client(db, m.workspace_id, account_id).master_report(item, job_id)
+        return fn(bulk._client(db, m.workspace_id, account_id))
     except NaverApiError as e:
-        raise HTTPException(400, f"마스터 보고서 실패: {e}")
-    text = job.pop("text", None)
-    if text is not None:
-        lines = text.splitlines()
-        # shortcut: 전체 파일을 JSON에 그대로 담는다(파일 받기용), 큰 계정에서 쓰게 되면 따로 내려주기
-        job.update(line_count=len(lines), head=lines[:50], text=text)
-    return job
+        raise HTTPException(400, f"네이버 조회 실패: {e}")
+
+
+@app.post("/workspaces/{ws_id}/ad-accounts/{account_id}/master-reports")
+async def create_master_report(account_id: int, item: MasterItem, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    return _naver(db, m, account_id, lambda c: c.create_master_report(item))
+
+
+@app.get("/workspaces/{ws_id}/ad-accounts/{account_id}/master-reports/{job_id}")
+async def get_master_report(account_id: int, job_id: str, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    return _naver(db, m, account_id, lambda c: c.get_master_report(job_id))
+
+
+def master_file_source(db: Session, authorization: str, ws_id: int, account_id: int, job_id: str) -> dict:
+    """{"url", "headers"} 또는 {"text"}(Mock). Workers 진입점(src/main.py)이 직접 불러 JS fetch로 본문을 넘긴다."""
+    m = membership_of(db, ws_id, user_from_header(db, authorization))
+    return _naver(db, m, account_id, lambda c: c.master_file(c.get_master_report(job_id)))
+
+
+@app.get("/workspaces/{ws_id}/ad-accounts/{account_id}/master-reports/{job_id}/file")
+async def master_report_file(ws_id: int, account_id: int, job_id: str, authorization: str = Header(default=""),
+                             db: Session = Depends(get_db)):
+    """로컬·테스트용. Workers에서는 src/main.py가 이 경로를 먼저 가로챈다(큰 파일을 파이썬이 다루면 CPU 한도 초과)."""
+    src = master_file_source(db, authorization, ws_id, account_id, job_id)
+    if "text" not in src:
+        r = httpx.get(src["url"], headers=src["headers"], timeout=60)
+        if r.status_code >= 400:
+            raise HTTPException(400, f"보고서 다운로드 실패: {r.status_code}")
+        src["text"] = r.text
+    return Response(src["text"], media_type="text/tab-separated-values; charset=utf-8")
+
+
+@app.get("/workspaces/{ws_id}/ad-accounts/{account_id}/naver/{kind}")
+async def naver_objects(account_id: int, kind: Literal["campaigns", "adgroups", "ads", "ad-extensions"], ids: str = "",
+                        m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    """캠페인은 전체, 나머지는 ids(쉼표)로. 마스터 보고서에 없는 값(운영 상태·소재 문구·확장소재 내용)을 채운다."""
+    if kind == "campaigns":
+        return [naver.campaign_row(account_id, c) for c in _naver(db, m, account_id, lambda c: c.list_campaigns())
+                if c["campaignTp"] in ("WEB_SITE", "SHOPPING")]  # MVP 범위 밖 캠페인 유형은 보여 주지 않는다
+    id_list = [i for i in ids.split(",") if i]
+    if len(id_list) > 500:
+        raise HTTPException(400, "한 번에 500개까지")
+    return [ROW_OF[kind](account_id, o) for o in _naver(db, m, account_id, lambda c: c.get_many(kind, id_list))]
 
 
 # ---------- 다계정 통합 조회 ----------

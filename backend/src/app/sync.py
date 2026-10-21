@@ -6,7 +6,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from .models import Ad, AdAccount, AdExtension, AdGroup, AutoBidRule, Campaign, Keyword, PerformanceDaily, SyncRun, now
-from .naver import NaverApiError
+from .naver import NaverApiError, _json, _rsa_texts, _status
 
 STATS_DAYS = 30
 
@@ -44,31 +44,6 @@ class _Upserter:
             for o in gone[m]:
                 self.db.delete(o)
             self.db.flush()
-
-
-def _status(o):
-    return "OFF" if o.get("userLock") else "ON"
-
-
-def _json(v):
-    """네이버는 일부 필드(adExtension, assetData)를 JSON 문자열로 준다."""
-    if isinstance(v, str):
-        try:
-            return json.loads(v)
-        except ValueError:
-            return {"text": v}
-    return v if v is not None else {}
-
-
-def _rsa_texts(assets) -> dict:
-    # shortcut: assetData 형식은 명세에 없어 문자열/JSON 모두 받아 문자열 값만 모은다, 실응답 확인 후 정리
-    out = {"headlines": [], "descriptions": []}
-    for x in assets:
-        key = {"HEADLINE": "headlines", "DESCRIPTION": "descriptions"}.get(x.get("linkType"))
-        if key:
-            d = _json(x.get("assetData"))
-            out[key].append(" ".join(v for v in d.values() if isinstance(v, str)) if isinstance(d, dict) else str(d))
-    return out
 
 
 def _sync_extensions(_upsert, client, owner_id: str):

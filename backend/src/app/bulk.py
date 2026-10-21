@@ -10,9 +10,8 @@ from sqlalchemy.orm import Session
 from .access import accessible_account_ids
 from .models import (Ad, AdAccount, AdExtension, AdGroup, AuditLog, AutoBidRule, BulkJob, BulkJobRow, Campaign, Keyword, Membership,
                      NaverApiCredential, WorkspaceAdAccount, now)
-from .naver import NaverApiError, client_for
+from .naver import NaverApiError, _json, _status, client_for
 from .security import decrypt
-from .sync import _json, _status
 
 ENTITY_MODELS = {"campaign": Campaign, "adgroup": AdGroup, "keyword": Keyword, "ad": Ad, "ad_extension": AdExtension}
 ALLOWED_FIELDS = {

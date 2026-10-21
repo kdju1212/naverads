@@ -429,18 +429,38 @@ def test_execute_in_chunks():
     assert c.post(url, headers=owner).status_code == 409
 
 
-def test_master_report_download(monkeypatch):
+def test_master_file_signing():
     from app.naver import RealNaverClient
 
-    calls = []
+    src = RealNaverClient("k", "s", "1").master_file({"downloadUrl": "https://api.searchad.naver.com/report-download?authtoken=T"})
+    assert src["url"].endswith("?authtoken=T") and src["headers"]["X-Customer"] == "1"
+    # 서명 uri는 쿼리를 뺀 경로
+    import base64, hashlib, hmac
+    ts = src["headers"]["X-Timestamp"]
+    want = base64.b64encode(hmac.new(b"s", f"{ts}.GET./report-download".encode(), hashlib.sha256).digest()).decode()
+    assert src["headers"]["X-Signature"] == want
 
-    def fake_req(self, method, uri, raw=False, base=RealNaverClient.BASE, **kw):
-        calls.append((method, base + uri, kw.get("params"), raw))
-        return "a\tb\nc\td" if raw else {"id": "j1", "status": "BUILT",
-                                         "downloadUrl": "https://api.searchad.naver.com/report-download?authtoken=T&x=1"}
 
-    monkeypatch.setattr(RealNaverClient, "_req", fake_req)
-    job = RealNaverClient("k", "s", "1").master_report("Keyword", "j1")
-    assert job["text"] == "a\tb\nc\td"
-    # 서명용 uri는 쿼리 없는 경로, 쿼리는 params로
-    assert calls[-1] == ("GET", "https://api.searchad.naver.com/report-download", [("authtoken", "T"), ("x", "1")], True)
+def test_master_reports_and_lookup():
+    owner = user("mr@a.com")
+    ws = c.post("/workspaces", json={"name": "M"}, headers=owner).json()["id"]
+    cred = c.post(f"/workspaces/{ws}/credentials", json={"label": "m", "api_key": "k", "secret_key": "s"}, headers=owner).json()["id"]
+    acc = c.post(f"/workspaces/{ws}/ad-accounts", json={"credential_id": cred, "customer_id": "9009", "name": "t"}, headers=owner).json()["id"]
+    base = f"/workspaces/{ws}/ad-accounts/{acc}"
+    job = c.post(f"{base}/master-reports", params={"item": "Keyword"}, headers=owner).json()
+    assert c.get(f"{base}/master-reports/{job['id']}", headers=owner).json()["status"] == "BUILT"
+    rows = [r.split("\t") for r in c.get(f"{base}/master-reports/{job['id']}/file", headers=owner).text.split("\n")]
+    assert len(rows) == 6 and all(len(r) == 13 for r in rows) and rows[0][2].startswith("kwd-")
+    assert c.post(f"{base}/master-reports", params={"item": "Nope"}, headers=owner).status_code == 422
+
+    camps = c.get(f"{base}/naver/campaigns", headers=owner).json()
+    assert {x["campaign_tp"] for x in camps} == {"WEB_SITE", "SHOPPING"} and camps[0]["ad_account_id"] == acc
+    g = c.get(f"{base}/naver/adgroups", params={"ids": "grp-9009-pl1,grp-9009-pl2"}, headers=owner).json()
+    assert [x["serving"] for x in g] == ["GROUP_LIMITED_BY_BUDGET", "ELIGIBLE"] and g[1]["daily_budget"] is None
+    e = c.get(f"{base}/naver/ad-extensions", params={"ids": "ext-9009-pl1"}, headers=owner).json()
+    assert e[0]["payload"] == [{"name": "신상품", "final": "https://example.com/new"}]
+
+    outsider = user("mr2@b.com")
+    assert c.get(f"{base}/naver/campaigns", headers=outsider).status_code == 403
+    assert c.get(f"{base}/master-reports/x/file", headers=outsider).status_code == 403
+    assert c.get(f"{base}/master-reports/x/file").status_code == 401

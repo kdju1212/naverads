@@ -10,7 +10,7 @@ from .security import read_token
 ADMIN_ROLES = {"OWNER", "ADMIN"}
 
 
-async def current_user(authorization: str = Header(default=""), db: Session = Depends(get_db)) -> User:
+def user_from_header(db: Session, authorization: str) -> User:
     uid = read_token(authorization.removeprefix("Bearer ").strip())
     user = db.get(User, uid) if uid else None
     if not user:
@@ -18,11 +18,19 @@ async def current_user(authorization: str = Header(default=""), db: Session = De
     return user
 
 
-async def membership(ws_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)) -> Membership:
+def membership_of(db: Session, ws_id: int, user: User) -> Membership:
     m = db.scalar(select(Membership).where(Membership.workspace_id == ws_id, Membership.user_id == user.id))
     if not m:
         raise HTTPException(403, "이 조직에 접근 권한이 없습니다")
     return m
+
+
+async def current_user(authorization: str = Header(default=""), db: Session = Depends(get_db)) -> User:
+    return user_from_header(db, authorization)
+
+
+async def membership(ws_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)) -> Membership:
+    return membership_of(db, ws_id, user)
 
 
 async def admin_membership(m: Membership = Depends(membership)) -> Membership:

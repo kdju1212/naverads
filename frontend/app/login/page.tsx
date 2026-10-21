@@ -19,7 +19,7 @@ export default function LoginPage() {
     try {
       const body = mode === "login" ? { email: form.email, password: form.password } : form;
       const r = await api<{ token: string }>(`/auth/${mode}`, { body });
-      setToken(r.token);
+      await setToken(r.token);
       router.replace("/");
     } catch (err) {
       setError((err as Error).message);
