@@ -265,7 +265,7 @@ async def keyword_tool(account_id: int, hint: str, m: Membership = Depends(membe
     return sorted(rows, key=lambda r: -(r["pc"] + r["mobile"]))
 
 
-MasterItem = Literal["Campaign", "Adgroup", "Keyword", "Ad", "RsaAd", "AdExtension", "Asset", "AdAssetLink"]
+MasterItem = Literal["Campaign", "CampaignBudget", "Adgroup", "AdgroupBudget", "Keyword", "Ad", "RsaAd", "AdExtension", "Asset", "AdAssetLink"]
 
 
 @app.post("/workspaces/{ws_id}/master-report-check")

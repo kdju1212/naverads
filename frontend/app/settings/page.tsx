@@ -125,7 +125,7 @@ function Accounts({ isAdmin }: { isAdmin: boolean }) {
 }
 
 interface MasterJob { id: string; status: string; line_count?: number; head?: string[]; text?: string }
-const MASTER_ITEMS = ["Campaign", "Adgroup", "Keyword", "Ad", "RsaAd", "AdExtension", "Asset", "AdAssetLink"];
+const MASTER_ITEMS = ["Campaign", "CampaignBudget", "Adgroup", "AdgroupBudget", "Keyword", "Ad", "RsaAd", "AdExtension", "Asset", "AdAssetLink"];
 
 // 임시: 마스터 보고서 파일 칸 구성 확인용 (동기화를 마스터 보고서로 바꾸기 전)
 function MasterReportCheck() {
