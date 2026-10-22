@@ -5,7 +5,7 @@ import { BulkBar } from "@/components/BulkBar";
 import { Col, DataTable } from "@/components/DataTable";
 import { DataStatus } from "@/components/DataStatus";
 import { Badge, Button, Card, ErrorText, inputCls, PageTitle } from "@/components/ui";
-import { api } from "@/lib/api";
+import { api, inspectLabel } from "@/lib/api";
 import { NAdGroup, NExtension as Extension, patchAccount, useNaverData } from "@/lib/naverData";
 import { useApp } from "@/lib/store";
 
@@ -71,7 +71,7 @@ export default function ExtensionsPage() {
     { key: "type", label: "유형", value: (r) => TYPE_LABEL[r.ext_type] ?? r.ext_type },
     { key: "content", label: "내용", value: (r) => strings(r.payload).join(" · ").slice(0, 120) || null },
     { key: "status", label: "상태", value: (r) => r.status, render: (r) => <Badge value={r.status} /> },
-    { key: "inspect", label: "검수", value: (r) => r.inspect_status },
+    { key: "inspect", label: "검수", value: (r) => inspectLabel(r.inspect_status) },
   ];
 
   return (
@@ -114,7 +114,7 @@ function NewExtension({ wsId, groups, accountName, onCreated }: {
       const r = await api<Extension>(`/workspaces/${wsId}/ad-extensions`, {
         body: { ad_account_id: g.ad_account_id, adgroup_naver_id: g.naver_id, ext_type: form.ext_type, heading: form.heading, description: form.description, links },
       });
-      setMsg(`만들었습니다 (검수 상태: ${r.inspect_status || "확인 중"}). 검수가 끝나야 노출됩니다.`);
+      setMsg(`만들었습니다 (검수 상태: ${r.inspect_status ? inspectLabel(r.inspect_status) : "확인 중"}). 검수가 끝나야 노출됩니다.`);
       setForm({ ...form, heading: form.ext_type === "DESCRIPTION" ? form.heading : "", description: "", links: "" });
       await onCreated(r);
     } catch (err) {

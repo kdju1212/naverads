@@ -97,6 +97,12 @@ export const SERVING_LABEL: Record<string, string> = {
   MOBILE_BUSINESS_CHANNEL_APPROVED: "모바일 비즈채널 승인", MOBILE_BUSINESS_CHANNEL_DISAPPROVED: "모바일 비즈채널 반려",
   MOBILE_BUSINESS_CHANNEL_UNDER_REVIEW: "모바일 비즈채널 검수 중",
 };
+// 소재·확장소재 검수 상태 (inspectStatus)
+export const INSPECT_LABEL: Record<string, string> = {
+  UNDER_REVIEW: "검수 중", PENDING: "검수 대기", APPROVED: "승인", ELIGIBLE: "승인", LIMITED_ELIGIBLE: "일부 승인",
+  DENIED: "반려", REJECTED: "반려", DISAPPROVED: "반려",
+};
+export const inspectLabel = (v: string | null) => (v ? INSPECT_LABEL[v] ?? v : "-");
 export const servingLabel = (v: string | null) => (v ? SERVING_LABEL[v] ?? v : "-");
 export const FIELD_LABEL: Record<string, string> = { status: "상태", daily_budget: "일예산", bid_amt: "입찰가", create: "등록", delete: "삭제", keyword: "키워드" };
 export const ENTITY_LABEL: Record<string, string> = { campaign: "캠페인", adgroup: "광고그룹", keyword: "키워드", ad: "소재", ad_extension: "확장소재" };

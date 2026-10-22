@@ -237,17 +237,15 @@ export default function KeywordsPage() {
       <DataStatus data={data} />
       <ErrorText error={autoBids.error} />
       <KeywordAddBar groups={groups} campaignName={campaignName} keywords={rows} />
+      <Card title="자동입찰" className="my-3" actions={<span className="text-xs text-gray-500">아래 표에서 선택한 키워드 {selected.length}개</span>}>
+        <AutoBidBar picked={selected} onDone={() => {
+          autoBids.reload();
+          // 지금 실행으로 입찰가가 바뀌었을 수 있다
+          if (ws) void refreshAccounts(ws.id, [...new Set(selected.map((k) => k.ad_account_id))]);
+        }} />
+      </Card>
       <DataTable rows={rows} cols={cols} selected={sel} onSelect={setSel} loading={data.loading && !rows.length}
-        toolbar={
-          <div className="flex flex-col gap-2">
-            <BulkBar entityType="keyword" rows={selected} numberField={{ field: "bid_amt", label: "입찰가" }} deletable />
-            <AutoBidBar picked={selected} onDone={() => {
-              autoBids.reload();
-              // 지금 실행으로 입찰가가 바뀌었을 수 있다
-              if (ws) void refreshAccounts(ws.id, [...new Set(selected.map((k) => k.ad_account_id))]);
-            }} />
-          </div>
-        } />
+        toolbar={<BulkBar entityType="keyword" rows={selected} numberField={{ field: "bid_amt", label: "입찰가" }} deletable />} />
     </>
   );
 }
