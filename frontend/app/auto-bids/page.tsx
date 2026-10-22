@@ -72,10 +72,11 @@ export default function AutoBidsPage() {
   const data = useNaverData();
   const autoBids = useFetch<AutoBid[]>(ws && !shoppingOnly ? `/workspaces/${ws.id}/auto-bids` : null);
   const [sel, setSel] = useState<Set<string>>(new Set());
-  const [onlySet, setOnlySet] = useState(false);
+  const [addSel, setAddSel] = useState<Set<string>>(new Set());
   const groupName = useMemo(() => new Map(data.adgroups.map((g) => [g.naver_id, g.name])), [data.adgroups]);
   const rule = useMemo(() => new Map((autoBids.data ?? []).map((r) => [r.keyword_naver_id, r])), [autoBids.data]);
-  const rows = onlySet ? data.keywords.filter((k) => rule.has(k.naver_id)) : data.keywords;
+  const rows = data.keywords.filter((k) => rule.has(k.naver_id));
+  const others = data.keywords.filter((k) => !rule.has(k.naver_id));
 
   if (shoppingOnly) {
     return (
@@ -108,25 +109,26 @@ export default function AutoBidsPage() {
     },
   ];
   const selected = rows.filter((r) => sel.has(r.id));
+  const adding = others.filter((r) => addSel.has(r.id));
+  const done = (picked: Keyword[]) => {
+    autoBids.reload();
+    // 지금 실행으로 입찰가가 바뀌었을 수 있다
+    if (ws) void refreshAccounts(ws.id, [...new Set(picked.map((k) => k.ad_account_id))]);
+  };
   return (
     <>
       <PageTitle desc="파워링크 키워드에 목표 순위를 정해 두면 네이버 '순위별 예상 입찰가'로 매시 정각에 입찰가를 맞춥니다. 최대 입찰가는 넘지 않습니다.">자동입찰</PageTitle>
       <DataStatus data={data} />
       <ErrorText error={autoBids.error} />
-      <DataTable rows={rows} cols={cols} selected={sel} onSelect={setSel} loading={data.loading && !rows.length}
-        toolbar={
-          <div className="flex flex-wrap items-center gap-3">
-            <label className="flex items-center gap-1 text-sm">
-              <input type="checkbox" checked={onlySet} onChange={(e) => { setOnlySet(e.target.checked); setSel(new Set()); }} />
-              설정된 키워드만 ({fmt(rule.size)}개)
-            </label>
-            <AutoBidBar picked={selected} onDone={() => {
-              autoBids.reload();
-              // 지금 실행으로 입찰가가 바뀌었을 수 있다
-              if (ws) void refreshAccounts(ws.id, [...new Set(selected.map((k) => k.ad_account_id))]);
-            }} />
-          </div>
-        } />
+      <DataTable rows={rows} cols={cols} selected={sel} onSelect={setSel} loading={(data.loading || autoBids.loading) && !rows.length}
+        toolbar={<AutoBidBar picked={selected} onDone={() => { done(selected); setSel(new Set()); }} />} />
+      <details className="mt-3 rounded-lg border border-gray-200 bg-white">
+        <summary className="cursor-pointer px-4 py-2.5 text-sm font-semibold">자동입찰 추가 · 아직 설정 안 된 키워드 {fmt(others.length)}개</summary>
+        <div className="p-2">
+          <DataTable rows={others} cols={cols.slice(0, 4)} selected={addSel} onSelect={setAddSel} loading={data.loading && !others.length}
+            toolbar={<AutoBidBar picked={adding} onDone={() => { done(adding); setAddSel(new Set()); }} />} />
+        </div>
+      </details>
     </>
   );
 }

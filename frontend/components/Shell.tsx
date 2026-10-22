@@ -8,7 +8,7 @@ import { useApp } from "@/lib/store";
 import { Button, Card, ErrorText, inputCls } from "./ui";
 
 const NAV = [
-  ["/", "대시보드"], ["/campaigns", "캠페인"], ["/adgroups", "광고그룹"], ["/keywords", "키워드"], ["/auto-bids", "자동입찰"],
+  ["/", "대시보드"], ["/campaigns", "캠페인"], ["/adgroups", "광고그룹"], ["/keywords", "키워드"], ["/keyword-register", "키워드 등록"], ["/auto-bids", "자동입찰"],
   ["/ads", "소재·상품소재"], ["/extensions", "확장소재"], ["/bulk", "엑셀 대량 작업"], ["/jobs", "작업 결과"],
   ["/history", "변경 이력"], ["/settings", "설정"],
 ] as const;
