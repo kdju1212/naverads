@@ -12,6 +12,8 @@ const NAV = [
   ["/ads", "소재·상품소재"], ["/extensions", "확장소재"], ["/bulk", "엑셀 대량 작업"], ["/utm", "UTM 빌더"], ["/jobs", "작업 결과"],
   ["/history", "변경 이력"], ["/settings", "설정"],
 ] as const;
+// 쇼핑검색만 볼 때는 파워링크 전용 메뉴를 숨긴다
+const POWERLINK_ONLY = ["/keywords", "/keyword-register", "/auto-bids", "/extensions"];
 
 export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -25,7 +27,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
       <aside className="w-48 shrink-0 border-r border-gray-200 bg-white">
         <div className="px-4 py-4 text-base font-bold text-emerald-700">네이버 광고 관리</div>
         <nav className="flex flex-col px-2 text-sm">
-          {NAV.map(([href, label]) => {
+          {NAV.filter(([href]) => app.product !== "SHOPPING" || !POWERLINK_ONLY.includes(href)).map(([href, label]) => {
             const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
             return (
               <Link prefetch={false} key={href} href={href} className={`rounded-md px-3 py-2 ${active ? "bg-emerald-50 font-semibold text-emerald-800" : "text-gray-700 hover:bg-gray-50"}`}>
