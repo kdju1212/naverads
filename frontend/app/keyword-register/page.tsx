@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { DataStatus } from "@/components/DataStatus";
 import { Button, Card, ErrorText, inputCls, PageTitle } from "@/components/ui";
-import { api, fmt, Job } from "@/lib/api";
+import { api, downloadCsv, fmt, Job } from "@/lib/api";
 import { changeFor } from "@/lib/changes";
 import { ascending, combine, patterns, words } from "@/lib/combine";
 import { Keyword, NAdGroup, useNaverData } from "@/lib/naverData";
@@ -46,9 +46,11 @@ function KeywordCombiner({ onAdd }: { onAdd: (keywords: string[]) => void }) {
             </div>
           );
         })}
-        <div className="flex items-center gap-2">
+        <textarea readOnly className={`${inputCls} h-40 bg-gray-50`} aria-label="조합 결과" placeholder="조합 결과가 여기에 나옵니다"
+          value={result.join("\n")} />
+        <div className="flex flex-wrap items-center gap-2">
           <Button variant="secondary" disabled={!result.length} onClick={() => onAdd(result)}>조합 {fmt(result.length)}개 아래 목록에 추가</Button>
-          {result.length > 0 && <span className="truncate text-xs text-gray-500">{result.slice(0, 5).join(", ")}{result.length > 5 ? " …" : ""}</span>}
+          <Button variant="secondary" disabled={!result.length} onClick={() => downloadCsv([["키워드"], ...result.map((k) => [k])], "keyword_combinations.csv")}>엑셀 다운로드</Button>
         </div>
       </div>
     </details>
