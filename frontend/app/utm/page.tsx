@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { Button, Card, inputCls, PageTitle } from "@/components/ui";
-import { downloadCsv, fmt } from "@/lib/api";
 import { utmUrl } from "@/lib/utm";
 
 const FIELDS = [
@@ -41,12 +40,8 @@ export default function UtmPage() {
           </label>
           <textarea readOnly className={`${inputCls} h-40 bg-gray-50`} aria-label="UTM 결과" placeholder="결과 URL이 여기에 나옵니다"
             value={ok ? rows.map(([, u]) => u).join("\n") : ""} />
-          <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" disabled={!ok} onClick={() => navigator.clipboard.writeText(rows.map(([, u]) => u).join("\n"))}>
-              {fmt(rows.length)}개 복사
-            </Button>
-            <Button variant="secondary" disabled={!ok}
-              onClick={() => downloadCsv([["키워드", "URL"], ...rows.map(([t, u]) => [t, u])], "utm_urls.csv")}>엑셀 다운로드</Button>
+          <div>
+            <Button variant="secondary" disabled={!ok} onClick={() => navigator.clipboard.writeText(rows.map(([, u]) => u).join("\n"))}>복사하기</Button>
           </div>
         </div>
       </Card>
