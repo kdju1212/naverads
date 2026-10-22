@@ -25,20 +25,20 @@ export default function UtmPage() {
       <Card title="UTM 만들기">
         <div className="flex flex-col gap-2">
           <input className={inputCls} aria-label="연결 URL" placeholder="연결 URL (https://로 시작)" value={base} onChange={(e) => setBase(e.target.value)} />
-          {bad && <p role="alert" className="text-xs text-red-600">https:// 또는 http://로 시작하는 주소를 넣어 주세요</p>}
+          {bad && <p role="alert" className="text-xs text-danger">https:// 또는 http://로 시작하는 주소를 넣어 주세요</p>}
           <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
             {FIELDS.map(([k, label, ph]) => (
-              <label key={k} className="flex flex-col gap-1 text-xs text-gray-600">
+              <label key={k} className="flex flex-col gap-1 text-xs text-muted">
                 {label} ({k})
                 <input className={inputCls} placeholder={ph} value={vals[k]} onChange={(e) => setVals((v) => ({ ...v, [k]: e.target.value }))} />
               </label>
             ))}
           </div>
-          <label className="flex flex-col gap-1 text-xs text-gray-600">
+          <label className="flex flex-col gap-1 text-xs text-muted">
             키워드 (utm_term) · 한 줄에 하나, 비우면 키워드 없이 하나만
             <textarea className={`${inputCls} h-24`} value={terms} onChange={(e) => setTerms(e.target.value)} />
           </label>
-          <textarea readOnly className={`${inputCls} h-40 bg-gray-50`} aria-label="UTM 결과" placeholder="결과 URL이 여기에 나옵니다"
+          <textarea readOnly className={`${inputCls} h-40 bg-subtle`} aria-label="UTM 결과" placeholder="결과 URL이 여기에 나옵니다"
             value={ok ? rows.map(([, u]) => u).join("\n") : ""} />
           <div>
             <Button variant="secondary" disabled={!ok} onClick={() => navigator.clipboard.writeText(rows.map(([, u]) => u).join("\n"))}>복사하기</Button>

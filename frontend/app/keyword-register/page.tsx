@@ -19,7 +19,7 @@ function KeywordCombiner({ onAdd }: { onAdd: (keywords: string[]) => void }) {
   const [on, setOn] = useState<Set<string>>(new Set(PATTERNS.filter(ascending).map(patternLabel)));
   const result = combine(lists.map(words), PATTERNS.filter((p) => on.has(patternLabel(p))));
   return (
-    <details open className="rounded border border-gray-200 p-2">
+    <details open className="rounded border border-line p-2">
       <summary className="cursor-pointer text-sm font-medium">키워드 조합기</summary>
       <div className="mt-2 flex flex-col gap-2">
         <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
@@ -33,7 +33,7 @@ function KeywordCombiner({ onAdd }: { onAdd: (keywords: string[]) => void }) {
           const all = row.every((k) => on.has(k));
           return (
             <div key={len} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-              <Button variant="secondary" className="w-24 px-2 py-0.5 text-xs" title={all ? "이 줄 전체 해제" : "이 줄 전체 선택"}
+              <Button variant="secondary" className="w-28" title={all ? "이 줄 전체 해제" : "이 줄 전체 선택"}
                 onClick={() => setOn((o) => { const n = new Set(o); row.forEach((k) => (all ? n.delete(k) : n.add(k))); return n; })}>
                 {len}개 조합 {all ? "해제" : "전체"}
               </Button>
@@ -46,7 +46,7 @@ function KeywordCombiner({ onAdd }: { onAdd: (keywords: string[]) => void }) {
             </div>
           );
         })}
-        <textarea readOnly className={`${inputCls} h-40 bg-gray-50`} aria-label="조합 결과" placeholder="조합 결과가 여기에 나옵니다"
+        <textarea readOnly className={`${inputCls} h-40 bg-subtle`} aria-label="조합 결과" placeholder="조합 결과가 여기에 나옵니다"
           value={result.join("\n")} />
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="secondary" disabled={!result.length} onClick={() => onAdd(result)}>조합 {fmt(result.length)}개 아래 목록에 추가</Button>
@@ -128,7 +128,7 @@ function KeywordAddBar({ groups, campaignName, keywords }: { groups: NAdGroup[];
           {groups.map((g) => <option key={g.id} value={g.naver_id}>{label(g)}</option>)}
         </datalist>
         {grp.trim() && (
-          <p className={`text-xs ${group ? "text-gray-600" : "text-red-600"}`}>
+          <p className={`text-xs ${group ? "text-muted" : "text-danger"}`}>
             {group ? label(group) : "목록에 없는 광고그룹 ID입니다 (파워링크 광고그룹 ID인지, 동기화했는지 확인)"}
           </p>
         )}
@@ -136,17 +136,17 @@ function KeywordAddBar({ groups, campaignName, keywords }: { groups: NAdGroup[];
           <input className={`${inputCls} w-64`} aria-label="연관 키워드 검색어" placeholder="연관 키워드 찾기 (쉼표로 최대 5개)"
             value={hint} onChange={(e) => setHint(e.target.value)} onKeyDown={(e) => e.key === "Enter" && hint.trim() && searchRel()} />
           <Button variant="secondary" disabled={busy || !group || !hint.trim()} onClick={searchRel}>연관 키워드</Button>
-          {!group && <span className="text-xs text-gray-500">광고그룹을 먼저 지정하세요</span>}
+          {!group && <span className="text-xs text-faint">광고그룹을 먼저 지정하세요</span>}
         </div>
         {rel && (
-          <div className="max-h-72 overflow-auto rounded border border-gray-200">
+          <div className="max-h-72 overflow-auto rounded border border-line">
             <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-gray-50 text-left text-xs text-gray-500">
+              <thead className="sticky top-0 bg-subtle text-left text-xs text-faint">
                 <tr><th className="w-8 px-2 py-1.5" /><th>키워드</th><th className="text-right">PC 월 검색</th><th className="text-right">모바일 월 검색</th><th className="px-2 text-right">경쟁</th></tr>
               </thead>
               <tbody>
                 {rel.slice(0, 100).map((r) => (
-                  <tr key={r.keyword} className="border-t border-gray-100">
+                  <tr key={r.keyword} className="border-t border-line">
                     <td className="px-2 py-1"><input type="checkbox" aria-label={r.keyword} checked={pick.has(r.keyword)}
                       onChange={() => setPick((p) => { const n = new Set(p); if (n.has(r.keyword)) n.delete(r.keyword); else n.add(r.keyword); return n; })} /></td>
                     <td>{r.keyword}</td>
@@ -155,7 +155,7 @@ function KeywordAddBar({ groups, campaignName, keywords }: { groups: NAdGroup[];
                     <td className="px-2 text-right">{r.comp}</td>
                   </tr>
                 ))}
-                {rel.length === 0 && <tr><td colSpan={5} className="py-3 text-center text-gray-500">연관 키워드가 없습니다</td></tr>}
+                {rel.length === 0 && <tr><td colSpan={5} className="py-3 text-center text-faint">연관 키워드가 없습니다</td></tr>}
               </tbody>
             </table>
           </div>
@@ -192,7 +192,7 @@ export default function KeywordRegisterPage() {
     return (
       <>
         <PageTitle>키워드 등록</PageTitle>
-        <Card><p className="text-sm text-gray-600">키워드는 파워링크 전용입니다.</p></Card>
+        <Card><p className="text-sm text-muted">키워드는 파워링크 전용입니다.</p></Card>
       </>
     );
   }

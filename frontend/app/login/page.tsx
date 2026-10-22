@@ -30,9 +30,9 @@ export default function LoginPage() {
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [k]: e.target.value });
   return (
     <div className="flex min-h-screen items-center justify-center">
-      <form onSubmit={submit} className="w-full max-w-sm rounded-lg border border-gray-200 bg-white p-6">
-        <h1 className="text-lg font-bold text-emerald-700">네이버 광고 통합 관리</h1>
-        <p className="mb-5 mt-1 text-sm text-gray-500">파워링크 · 쇼핑검색광고를 여러 광고주 계정에서 한 번에</p>
+      <form onSubmit={submit} className="w-full max-w-sm rounded-panel border border-line bg-surface p-6">
+        <h1 className="text-xl font-bold text-primary">네이버 광고 통합 관리</h1>
+        <p className="mb-5 mt-1 text-sm text-faint">파워링크 · 쇼핑검색광고를 여러 광고주 계정에서 한 번에</p>
         <div className="flex flex-col gap-3">
           {mode === "signup" && (
             <label className="flex flex-col gap-1 text-sm">이름<input className={inputCls} value={form.name} onChange={set("name")} required autoComplete="name" /></label>
@@ -44,7 +44,7 @@ export default function LoginPage() {
           </label>
           <ErrorText error={error} />
           <Button type="submit" disabled={busy}>{busy ? "처리 중…" : mode === "login" ? "로그인" : "회원가입"}</Button>
-          <button type="button" className="text-sm text-gray-500 hover:text-gray-800" onClick={() => { setMode(mode === "login" ? "signup" : "login"); setError(null); }}>
+          <button type="button" className="text-sm text-faint hover:text-ink" onClick={() => { setMode(mode === "login" ? "signup" : "login"); setError(null); }}>
             {mode === "login" ? "계정이 없나요? 회원가입" : "이미 계정이 있나요? 로그인"}
           </button>
         </div>

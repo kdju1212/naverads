@@ -37,7 +37,7 @@ export function BulkBar({ entityType, rows, numberField, deletable }: {
   const disabled = busy || rows.length === 0;
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {error && <span role="alert" className="text-xs text-red-600">{error}</span>}
+      {error && <span role="alert" className="text-xs text-danger">{error}</span>}
       <Button variant="secondary" disabled={disabled} onClick={() => create("status", "ON")}>ON</Button>
       <Button variant="secondary" disabled={disabled} onClick={() => create("status", "OFF")}>OFF</Button>
       {numberField && (

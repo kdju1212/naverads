@@ -21,7 +21,7 @@ export default function KeywordsPage() {
     return (
       <>
         <PageTitle>키워드</PageTitle>
-        <Card><p className="text-sm text-gray-600">키워드는 파워링크 전용입니다. 쇼핑검색광고는 <b>소재·상품소재</b> 메뉴에서 상품소재 단위로 관리합니다.</p></Card>
+        <Card><p className="text-sm text-muted">키워드는 파워링크 전용입니다. 쇼핑검색광고는 <b>소재·상품소재</b> 메뉴에서 상품소재 단위로 관리합니다.</p></Card>
       </>
     );
   }

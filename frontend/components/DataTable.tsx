@@ -53,24 +53,24 @@ export function DataTable<T extends { id: string | number }>({ rows, cols, selec
   };
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-white">
-      <div className="flex flex-wrap items-center gap-2 border-b border-gray-100 p-2">
+    <div className="overflow-hidden rounded-panel border border-line bg-surface">
+      <div className={`flex flex-wrap items-center gap-2 border-b border-line px-3 py-2 ${selected && selected.size > 0 ? "bg-primary-soft" : ""}`}>
         <input className={`${inputCls} w-64`} placeholder="검색 (이름, ID, 광고주…)" value={q} onChange={(e) => setQ(e.target.value)} aria-label="표 검색" />
-        <span className="text-xs text-gray-500">
-          {view.length.toLocaleString()}건{selected && selected.size > 0 && ` · ${selected.size}건 선택`}
+        <span className="text-xs text-faint">
+          {view.length.toLocaleString()}건{selected && selected.size > 0 && <> · <b className="font-semibold text-primary">{selected.size}건 선택</b></>}
         </span>
         <div className="ml-auto flex flex-wrap items-center gap-2">{toolbar}</div>
       </div>
       <div className="max-h-[calc(100vh-260px)] overflow-auto">
-        <table className="w-full text-sm">
-          <thead className="sticky top-0 bg-gray-50 text-left text-xs text-gray-600">
+        <table className="w-full text-[13px]">
+          <thead className="sticky top-0 z-10 bg-subtle text-left text-xs text-muted shadow-[inset_0_-1px_0_var(--color-line)]">
             <tr>
               {selected && (
-                <th className="w-8 px-2 py-2"><input type="checkbox" aria-label="전체 선택" checked={allChecked} onChange={toggleAll} /></th>
+                <th className="h-9 w-9 px-3"><input type="checkbox" aria-label="전체 선택" checked={allChecked} onChange={toggleAll} /></th>
               )}
               {cols.map((c) => (
-                <th key={c.key} className={`whitespace-nowrap px-3 py-2 font-medium ${c.num ? "text-right" : ""}`}>
-                  <button className="hover:text-gray-900" onClick={() => setSort((s) => (s?.key === c.key ? { key: c.key, dir: s.dir === 1 ? -1 : 1 } : { key: c.key, dir: 1 }))}>
+                <th key={c.key} className={`h-9 whitespace-nowrap px-3 font-semibold ${c.num ? "text-right" : ""}`}>
+                  <button className="cursor-pointer hover:text-ink" onClick={() => setSort((s) => (s?.key === c.key ? { key: c.key, dir: s.dir === 1 ? -1 : 1 } : { key: c.key, dir: 1 }))}>
                     {c.label}{sort?.key === c.key ? (sort.dir === 1 ? " ▲" : " ▼") : ""}
                   </button>
                 </th>
@@ -79,13 +79,13 @@ export function DataTable<T extends { id: string | number }>({ rows, cols, selec
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={cols.length + 1} className="px-3 py-8 text-center text-gray-400">불러오는 중…</td></tr>
+              <tr><td colSpan={cols.length + 1} className="px-3 py-8 text-center text-faint">불러오는 중…</td></tr>
             ) : view.length === 0 ? (
-              <tr><td colSpan={cols.length + 1} className="px-3 py-8 text-center text-gray-400">{empty}</td></tr>
+              <tr><td colSpan={cols.length + 1} className="px-3 py-8 text-center text-faint">{empty}</td></tr>
             ) : view.map((r) => (
-              <tr key={r.id} className={`border-t border-gray-100 ${selected?.has(r.id) ? "bg-emerald-50/50" : "hover:bg-gray-50"}`}>
+              <tr key={r.id} className={`h-10 border-t border-line first:border-t-0 ${selected?.has(r.id) ? "bg-primary-soft" : "hover:bg-subtle"}`}>
                 {selected && (
-                  <td className="px-2 py-1.5"><input type="checkbox" aria-label="행 선택" checked={selected.has(r.id)} onChange={() => toggle(r.id)} /></td>
+                  <td className="px-3 py-1.5"><input type="checkbox" aria-label="행 선택" checked={selected.has(r.id)} onChange={() => toggle(r.id)} /></td>
                 )}
                 {cols.map((c) => (
                   <td key={c.key} className={`px-3 py-1.5 ${c.num ? "text-right tabular-nums" : ""}`}>{c.render ? c.render(r) : (c.value(r) ?? "-")}</td>

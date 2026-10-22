@@ -47,7 +47,7 @@ function AutoBidBar({ picked, onDone }: { picked: Keyword[]; onDone: () => void 
   const ranks = device === "PC" ? 10 : 5;
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {error && <span role="alert" className="text-xs text-red-600">{error}</span>}
+      {error && <span role="alert" className="text-xs text-danger">{error}</span>}
       <select className={inputCls} aria-label="기기" value={device}
         onChange={(e) => { const d = e.target.value as "PC" | "MOBILE"; setDevice(d); if (d === "MOBILE" && Number(rank) > 5) setRank("5"); }}>
         <option value="PC">PC</option>
@@ -82,7 +82,7 @@ export default function AutoBidsPage() {
     return (
       <>
         <PageTitle>자동입찰</PageTitle>
-        <Card><p className="text-sm text-gray-600">자동입찰은 파워링크 키워드 전용입니다.</p></Card>
+        <Card><p className="text-sm text-muted">자동입찰은 파워링크 키워드 전용입니다.</p></Card>
       </>
     );
   }
@@ -96,7 +96,7 @@ export default function AutoBidsPage() {
       key: "auto", label: "자동입찰", value: (r) => rule.get(r.naver_id)?.target_rank ?? null,
       render: (r) => {
         const a = rule.get(r.naver_id);
-        if (!a) return <span className="text-gray-400">-</span>;
+        if (!a) return <span className="text-faint">-</span>;
         return <span className="text-xs">{DEVICE_LABEL[a.device]} {a.target_rank}위 · 최대 {fmt(a.max_bid, "원")}</span>;
       },
     },
@@ -104,7 +104,7 @@ export default function AutoBidsPage() {
       key: "result", label: "최근 실행", value: (r) => rule.get(r.naver_id)?.last_result ?? null,
       render: (r) => {
         const a = rule.get(r.naver_id);
-        return a?.last_result ? <span className="text-xs text-gray-500" title={a.last_run_at ?? undefined}>{a.last_result}</span> : <span className="text-gray-400">-</span>;
+        return a?.last_result ? <span className="text-xs text-faint" title={a.last_run_at ?? undefined}>{a.last_result}</span> : <span className="text-faint">-</span>;
       },
     },
   ];
@@ -122,8 +122,8 @@ export default function AutoBidsPage() {
       <ErrorText error={autoBids.error} />
       <DataTable rows={rows} cols={cols} selected={sel} onSelect={setSel} loading={(data.loading || autoBids.loading) && !rows.length}
         toolbar={<AutoBidBar picked={selected} onDone={() => { done(selected); setSel(new Set()); }} />} />
-      <details className="mt-3 rounded-lg border border-gray-200 bg-white">
-        <summary className="cursor-pointer px-4 py-2.5 text-sm font-semibold">자동입찰 추가 · 아직 설정 안 된 키워드 {fmt(others.length)}개</summary>
+      <details className="mt-3 rounded-panel border border-line bg-surface">
+        <summary className="cursor-pointer px-4 py-3 text-[15px] font-semibold">자동입찰 추가 · 아직 설정 안 된 키워드 {fmt(others.length)}개</summary>
         <div className="p-2">
           <DataTable rows={others} cols={cols.slice(0, 4)} selected={addSel} onSelect={setAddSel} loading={data.loading && !others.length}
             toolbar={<AutoBidBar picked={adding} onDone={() => { done(adding); setAddSel(new Set()); }} />} />

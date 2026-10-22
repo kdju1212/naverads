@@ -39,7 +39,7 @@ export default function BulkPage() {
       <PageTitle desc="여러 광고주 계정의 변경을 엑셀 한 장으로 올리고, 미리보기에서 확인한 뒤 실행합니다.">엑셀 대량 작업</PageTitle>
       <div className="grid max-w-3xl gap-4">
         <Card title="1. 템플릿 받기">
-          <p className="mb-3 text-sm text-gray-600">
+          <p className="mb-3 text-sm text-muted">
             열: <code>entity_type</code>(campaign·adgroup·keyword·ad), <code>naver_id</code>, <code>field</code>(status·daily_budget·bid_amt), <code>value</code>.
             네이버 ID는 각 목록 화면에서 확인할 수 있습니다.
             키워드 등록은 <code>keyword</code> · 광고그룹 ID · <code>create</code> · <code>키워드|입찰가</code>(입찰가 비우면 70원),
@@ -55,7 +55,7 @@ export default function BulkPage() {
             <input type="file" accept=".xlsx" aria-label="엑셀 파일" onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="text-sm" />
             <Button disabled={!file || busy || data.loading} onClick={upload}>{busy ? "검증 중…" : data.loading ? "광고 데이터 받는 중…" : "업로드하고 미리보기"}</Button>
           </div>
-          <p className="mt-2 text-xs text-gray-500">업로드만으로는 아무것도 변경되지 않습니다. 다음 화면에서 광고주별 변경 전·후와 오류를 확인한 뒤 실행하세요.</p>
+          <p className="mt-2 text-xs text-faint">업로드만으로는 아무것도 변경되지 않습니다. 다음 화면에서 광고주별 변경 전·후와 오류를 확인한 뒤 실행하세요.</p>
           <div className="mt-3"><DataStatus data={data} /><ErrorText error={error} /></div>
         </Card>
       </div>

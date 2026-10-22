@@ -32,7 +32,7 @@ export default function HistoryPage() {
     { key: "target", label: "대상", value: (r) => (r.entity_type ? `${ENTITY_LABEL[r.entity_type] ?? r.entity_type} ${r.naver_id}` : null) },
     { key: "field", label: "항목", value: (r) => (r.field ? FIELD_LABEL[r.field] ?? r.field : null) },
     { key: "change", label: "변경 전 → 후", value: (r) => `${r.before ?? "-"} → ${r.after ?? "-"}` },
-    { key: "job", label: "작업 ID", value: (r) => r.job_id, render: (r) => (r.job_id ? <Link prefetch={false} className="text-emerald-700 hover:underline" href={`/jobs?id=${r.job_id}`}>#{r.job_id}</Link> : "-") },
+    { key: "job", label: "작업 ID", value: (r) => r.job_id, render: (r) => (r.job_id ? <Link prefetch={false} className="text-primary hover:underline" href={`/jobs?id=${r.job_id}`}>#{r.job_id}</Link> : "-") },
   ];
   return (
     <>

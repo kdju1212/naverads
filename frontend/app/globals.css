@@ -1,7 +1,46 @@
 @import "tailwindcss";
 
+/* 디자인 시스템 토큰 — design-system/MASTER.md. bg-canvas, text-muted, border-line, bg-primary-soft … 로 쓴다 */
+@theme {
+  --color-canvas: #f5f7fa;
+  --color-surface: #ffffff;
+  --color-subtle: #f8fafc;
+  --color-line: #e3e8ef;
+  --color-line-strong: #cbd3de;
+  --color-ink: #0f1b2d;
+  --color-muted: #4a5668;
+  --color-faint: #667085;
+  --color-primary: #1f3a63;
+  --color-primary-hover: #172e50;
+  --color-primary-soft: #eef2f8;
+  --color-accent: #0e7a55;
+  --color-accent-soft: #e8f5ef;
+  --color-danger: #b42318;
+  --color-danger-soft: #fef1ef;
+  --color-warning: #8a5300;
+  --color-warning-soft: #fff5e0;
+  --color-info: #1f5fad;
+  --color-info-soft: #edf3fc;
+  --color-focus: #3b6fd9;
+
+  --font-sans: "Pretendard Variable", Pretendard, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+
+  --radius-control: 6px;
+  --radius-panel: 8px;
+  --shadow-pop: 0 4px 12px rgb(15 27 45 / 0.08);
+}
+
 body {
-  background: #f6f7f9;
-  color: #1f2328;
-  font-family: system-ui, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+input[type="checkbox"] { accent-color: var(--color-primary); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0s !important; animation-duration: 0s !important; }
 }

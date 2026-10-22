@@ -60,7 +60,7 @@ export default function ExtensionsPage() {
     return (
       <>
         <PageTitle>확장소재 (파워링크)</PageTitle>
-        <Card><p className="text-sm text-gray-600">쇼핑검색광고에는 파워링크 전용 확장소재를 적용하지 않습니다.</p></Card>
+        <Card><p className="text-sm text-muted">쇼핑검색광고에는 파워링크 전용 확장소재를 적용하지 않습니다.</p></Card>
       </>
     );
   }
@@ -156,7 +156,7 @@ function NewExtension({ wsId, groups, accountName, onCreated }: {
             placeholder={"한 줄에 하나씩: 이름 | URL\n신제품 | https://example.com/new\n당일출고 | https://example.com/today"} />
         )}
         <ErrorText error={error} />
-        {msg && <p className="text-sm text-emerald-700">{msg}</p>}
+        {msg && <p className="text-sm text-accent">{msg}</p>}
         <div><Button type="submit" disabled={busy}>{busy ? "만드는 중…" : "네이버에 만들기"}</Button></div>
       </form>
     </Card>

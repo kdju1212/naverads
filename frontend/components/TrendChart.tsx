@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 const H = 140, PAD = { top: 8, right: 8, bottom: 20, left: 52 };
-const LINE = "#2a78d6"; // 단일 계열 — 제목이 계열 이름이라 범례 없음
+const LINE = "#1f3a63"; // 단일 계열 — 제목이 계열 이름이라 범례 없음
 
 function niceMax(v: number) {
   if (v <= 0) return 1;
@@ -51,28 +51,28 @@ export function TrendChart({ title, dates, values, unit = "" }: { title: string;
     <div>
       <div className="mb-1 flex items-baseline justify-between text-sm">
         <span className="font-medium">{title}</span>
-        <span className="text-xs text-gray-500 tabular-nums">{hover != null ? `${dates[hover]} · ${fmt(values[hover])}` : ""}</span>
+        <span className="text-xs text-faint tabular-nums">{hover != null ? `${dates[hover]} · ${fmt(values[hover])}` : ""}</span>
       </div>
       <div ref={box} className="relative" style={{ height: H }}>
         {!has ? (
-          <div className="flex h-full items-center justify-center text-xs text-gray-400">데이터 없음</div>
+          <div className="flex h-full items-center justify-center text-xs text-faint">데이터 없음</div>
         ) : w > 0 && (
           <svg width={w} height={H} role="img" aria-label={`${title} 일별 추이`}>
             {ticks.map((t) => (
               <g key={t}>
-                <line x1={PAD.left} x2={w - PAD.right} y1={y(t)} y2={y(t)} stroke="#e5e7eb" strokeWidth={1} />
-                <text x={PAD.left - 6} y={y(t)} dy="0.32em" textAnchor="end" fontSize={11} fill="#6b7280">{t.toLocaleString("ko-KR")}</text>
+                <line x1={PAD.left} x2={w - PAD.right} y1={y(t)} y2={y(t)} stroke="#e3e8ef" strokeWidth={1} />
+                <text x={PAD.left - 6} y={y(t)} dy="0.32em" textAnchor="end" fontSize={11} fill="#667085">{t.toLocaleString("ko-KR")}</text>
               </g>
             ))}
             {labelIdx.map((i) => (
-              <text key={i} x={x(i)} y={H - 4} fontSize={11} fill="#6b7280"
+              <text key={i} x={x(i)} y={H - 4} fontSize={11} fill="#667085"
                 textAnchor={i === 0 ? "start" : i === dates.length - 1 ? "end" : "middle"}>{dates[i].slice(5)}</text>
             ))}
             <path d={d} fill="none" stroke={LINE} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
             {values.length === 1 && values[0] != null && <circle cx={x(0)} cy={y(values[0])} r={4} fill={LINE} />}
             {hover != null && (
               <g pointerEvents="none">
-                <line x1={x(hover)} x2={x(hover)} y1={PAD.top} y2={PAD.top + ih} stroke="#9ca3af" strokeWidth={1} />
+                <line x1={x(hover)} x2={x(hover)} y1={PAD.top} y2={PAD.top + ih} stroke="#cbd3de" strokeWidth={1} />
                 {values[hover] != null && <circle cx={x(hover)} cy={y(values[hover]!)} r={4} fill={LINE} stroke="#fff" strokeWidth={2} />}
               </g>
             )}

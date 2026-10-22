@@ -47,11 +47,11 @@ export default function AdsPage() {
   return (
     <>
       <PageTitle desc="파워링크 텍스트 소재와 쇼핑검색 상품소재는 구조가 달라 탭을 나눠 관리합니다. 상품 원본 정보는 수정하지 않습니다.">소재 · 상품소재</PageTitle>
-      <div className="mb-3 flex gap-1" role="tablist">
+      <div className="mb-4 flex gap-4 border-b border-line" role="tablist">
         {([["TEXT_45", "파워링크 소재"], ["SHOPPING_PRODUCT_AD", "쇼핑 상품소재"]] as [AdType, string][]).map(([v, label]) => (
           <button key={v} role="tab" aria-selected={tab === v} disabled={product !== "" && tab !== v}
             onClick={() => { setTab(v); setSel(new Set()); }}
-            className={`rounded-md px-3 py-1.5 text-sm disabled:opacity-40 ${tab === v ? "bg-gray-900 text-white" : "bg-white border border-gray-300"}`}>{label}</button>
+            className={`-mb-px cursor-pointer border-b-2 px-1 pb-2 text-sm font-medium transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40 ${tab === v ? "border-primary text-primary" : "border-transparent text-muted hover:text-ink"}`}>{label}</button>
         ))}
       </div>
       <DataStatus data={data} />

@@ -37,7 +37,7 @@ export default function AdGroupsPage() {
     { key: "name", label: "광고그룹", value: (r) => r.name },
     { key: "status", label: "상태", value: (r) => r.status, render: (r) => <Badge value={r.status} /> },
     { key: "serving", label: "운영 상태", value: serving,
-      render: (r) => <span className={r.status === "OFF" || (r.serving && r.serving !== "ELIGIBLE") ? "text-amber-700" : ""}>{serving(r)}</span> },
+      render: (r) => <span className={r.status === "OFF" || (r.serving && r.serving !== "ELIGIBLE") ? "text-warning" : ""}>{serving(r)}</span> },
     { key: "budget", label: "하루예산", num: true, value: (r) => r.daily_budget, render: (r) => (r.daily_budget == null ? "제한 없음" : fmt(r.daily_budget, "원")) },
     { key: "bid", label: "기본 입찰가", num: true, value: (r) => r.bid_amt, render: (r) => fmt(r.bid_amt, "원") },
   ];

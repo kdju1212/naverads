@@ -2,21 +2,23 @@
 
 import { ButtonHTMLAttributes, ReactNode } from "react";
 
-export function Button({ variant = "primary", className = "", ...p }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "danger" }) {
+/** 디자인 시스템: design-system/MASTER.md. 색은 globals.css @theme 토큰 */
+export function Button({ variant = "primary", className = "", ...p }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "ghost" | "danger" }) {
   const v = {
-    primary: "bg-emerald-600 text-white hover:bg-emerald-700",
-    secondary: "bg-white border border-gray-300 text-gray-800 hover:bg-gray-50",
-    danger: "bg-white border border-red-300 text-red-700 hover:bg-red-50",
+    primary: "border-primary bg-primary text-white hover:bg-primary-hover",
+    secondary: "border-line-strong bg-surface text-ink hover:bg-subtle",
+    ghost: "border-transparent bg-transparent text-muted hover:bg-subtle hover:text-ink",
+    danger: "border-danger/30 bg-surface text-danger hover:bg-danger-soft",
   }[variant];
-  return <button {...p} className={`rounded-md px-3 py-1.5 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed ${v} ${className}`} />;
+  return <button {...p} className={`inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-control border px-3 text-[13px] font-medium transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50 ${v} ${className}`} />;
 }
 
 export function Card({ title, actions, children, className = "" }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <section className={`rounded-lg border border-gray-200 bg-white ${className}`}>
+    <section className={`rounded-panel border border-line bg-surface ${className}`}>
       {(title || actions) && (
-        <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-4 py-2.5">
-          <h2 className="text-sm font-semibold">{title}</h2>
+        <div className="flex min-h-12 items-center justify-between gap-2 border-b border-line px-4 py-2">
+          <h2 className="text-[15px] font-semibold">{title}</h2>
           <div className="flex items-center gap-2">{actions}</div>
         </div>
       )}
@@ -25,33 +27,39 @@ export function Card({ title, actions, children, className = "" }: { title?: Rea
   );
 }
 
+const OK = "bg-accent-soft text-accent", NEUTRAL = "bg-subtle text-muted ring-1 ring-inset ring-line";
+const WARN = "bg-warning-soft text-warning", BAD = "bg-danger-soft text-danger", INFO = "bg-info-soft text-info";
 const BADGE: Record<string, string> = {
-  ON: "bg-emerald-50 text-emerald-700", OFF: "bg-gray-100 text-gray-600",
-  SUCCESS: "bg-emerald-50 text-emerald-700", DONE: "bg-emerald-50 text-emerald-700", VALID: "bg-sky-50 text-sky-700",
-  FAILED: "bg-red-50 text-red-700", INVALID: "bg-red-50 text-red-700", PARTIAL: "bg-amber-50 text-amber-800",
-  PREVIEW: "bg-sky-50 text-sky-700", RUNNING: "bg-amber-50 text-amber-800",
-  WEB_SITE: "bg-indigo-50 text-indigo-700", SHOPPING: "bg-orange-50 text-orange-700",
+  ON: OK, OFF: NEUTRAL, SUCCESS: OK, DONE: OK, VALID: INFO, FAILED: BAD, INVALID: BAD, PARTIAL: WARN, PREVIEW: INFO, RUNNING: WARN,
 };
+// 광고 유형은 상태가 아니라 점 없이 구분만
+const KIND: Record<string, string> = { WEB_SITE: "bg-primary-soft text-primary", SHOPPING: NEUTRAL };
 const BADGE_LABEL: Record<string, string> = {
   SUCCESS: "성공", DONE: "완료", VALID: "실행 가능", FAILED: "실패", INVALID: "오류", PARTIAL: "부분 실패",
   PREVIEW: "미리보기", RUNNING: "실행 중", WEB_SITE: "파워링크", SHOPPING: "쇼핑검색",
 };
 
 export function Badge({ value }: { value: string }) {
-  return <span className={`inline-block whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium ${BADGE[value] ?? "bg-gray-100 text-gray-700"}`}>{BADGE_LABEL[value] ?? value}</span>;
+  const kind = KIND[value];
+  return (
+    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium ${kind ?? BADGE[value] ?? NEUTRAL}`}>
+      {!kind && <span aria-hidden="true" className="size-1.5 rounded-full bg-current" />}
+      {BADGE_LABEL[value] ?? value}
+    </span>
+  );
 }
 
 export function ErrorText({ error }: { error: string | null }) {
-  return error ? <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null;
+  return error ? <p role="alert" className="rounded-control bg-danger-soft px-3 py-2 text-sm text-danger">{error}</p> : null;
 }
 
 export function PageTitle({ children, desc }: { children: ReactNode; desc?: ReactNode }) {
   return (
-    <div className="mb-4">
-      <h1 className="text-lg font-bold">{children}</h1>
-      {desc && <p className="mt-0.5 text-sm text-gray-500">{desc}</p>}
+    <div className="mb-5">
+      <h1 className="text-xl font-bold text-balance">{children}</h1>
+      {desc && <p className="mt-1 max-w-[72ch] text-sm text-faint">{desc}</p>}
     </div>
   );
 }
 
-export const inputCls = "rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500";
+export const inputCls = "rounded-control border border-line-strong bg-surface px-2.5 py-[5px] text-[13px] leading-5 text-ink placeholder:text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-focus";

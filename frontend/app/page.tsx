@@ -39,9 +39,9 @@ const pct = (v: number | null | undefined, suffix = "%") => (v == null ? "-" : `
 /** 직전 같은 기간 대비. 좋고 나쁨은 지표마다 달라(광고비 증가 등) 색 없이 화살표와 숫자만 */
 function Delta({ now, prev }: { now: number | null | undefined; prev: number | null | undefined }) {
   if (now == null || prev == null) return null;
-  if (prev === 0) return now === 0 ? <span className="text-xs text-gray-400">변동 없음</span> : <span className="text-xs text-gray-500">이전 기간 0</span>;
+  if (prev === 0) return now === 0 ? <span className="text-xs text-faint">변동 없음</span> : <span className="text-xs text-faint">이전 기간 0</span>;
   const r = Math.round(((now - prev) / prev) * 1000) / 10;
-  return <span className="text-xs text-gray-500 tabular-nums">{r > 0 ? "▲" : r < 0 ? "▼" : ""} {Math.abs(r)}% <span className="text-gray-400">이전 기간 대비</span></span>;
+  return <span className="text-xs text-faint tabular-nums">{r > 0 ? "▲" : r < 0 ? "▼" : ""} {Math.abs(r)}% <span className="text-faint">이전 기간 대비</span></span>;
 }
 
 export default function DashboardPage() {
@@ -83,11 +83,11 @@ export default function DashboardPage() {
       </div>
       <ErrorText error={perf.error ?? daily.error ?? dash.error} />
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-panel border border-line bg-line lg:grid-cols-4">
         {kpis.map(([label, k, unit]) => (
-          <div key={label} className="rounded-lg border border-gray-200 bg-white p-4">
-            <div className="text-xs text-gray-500">{label}</div>
-            <div className="mt-1 text-xl font-bold tabular-nums">
+          <div key={label} className="bg-surface px-4 py-3">
+            <div className="text-xs font-medium text-muted">{label}</div>
+            <div className="mt-1 text-2xl font-bold tabular-nums">
               {perf.loading ? "…" : unit === "%" ? pct(total?.[k]) : fmt(total?.[k], unit)}
             </div>
             <div className="mt-0.5 h-4">{!perf.loading && !prev.loading && <Delta now={total?.[k]} prev={prevTotal?.[k]} />}</div>
@@ -99,13 +99,13 @@ export default function DashboardPage() {
         {showTable ? (
           <div className="overflow-auto">
             <table className="w-full text-sm tabular-nums">
-              <thead className="text-left text-xs text-gray-500">
+              <thead className="text-left text-xs text-faint">
                 <tr><th className="py-2 pr-3">날짜</th><th className="px-3 text-right">광고비</th><th className="px-3 text-right">노출</th>
                   <th className="px-3 text-right">클릭</th><th className="px-3 text-right">전환수</th><th className="pl-3 text-right">매출</th></tr>
               </thead>
               <tbody>
                 {series.map((d) => (
-                  <tr key={d.date} className="border-t border-gray-100">
+                  <tr key={d.date} className="border-t border-line">
                     <td className="py-1.5 pr-3">{d.date}</td><td className="px-3 text-right">{fmt(d.cost)}</td>
                     <td className="px-3 text-right">{fmt(d.impressions)}</td><td className="px-3 text-right">{fmt(d.clicks)}</td>
                     <td className="px-3 text-right">{fmt(d.conversions)}</td><td className="pl-3 text-right">{fmt(d.revenue)}</td>
@@ -115,7 +115,7 @@ export default function DashboardPage() {
             </table>
           </div>
         ) : daily.loading ? (
-          <p className="py-10 text-center text-sm text-gray-400">불러오는 중…</p>
+          <p className="py-10 text-center text-sm text-faint">불러오는 중…</p>
         ) : (
           // 단위가 다른 지표는 한 축에 겹치지 않고 각자 그래프로
           <div className="grid gap-6 lg:grid-cols-3">
@@ -131,7 +131,7 @@ export default function DashboardPage() {
       <Card title="광고주별 성과">
         <div className="overflow-auto">
           <table className="w-full text-sm">
-            <thead className="text-left text-xs text-gray-500">
+            <thead className="text-left text-xs text-faint">
               <tr>
                 <th className="py-2 pr-3">광고주</th>
                 <th className="px-3 text-right">파워링크 광고비</th><th className="px-3 text-right">파워링크 ROAS</th>
@@ -143,7 +143,7 @@ export default function DashboardPage() {
             </thead>
             <tbody className="tabular-nums">
               {rows.map((r) => (
-                <tr key={r.ad_account_id} className="border-t border-gray-100">
+                <tr key={r.ad_account_id} className="border-t border-line">
                   <td className="py-2 pr-3 font-medium">{r.name}</td>
                   <td className="px-3 text-right">{fmt(r.pl?.cost)}</td><td className="px-3 text-right">{pct(r.pl?.roas)}</td>
                   <td className="px-3 text-right">{fmt(r.sh?.cost)}</td><td className="px-3 text-right">{pct(r.sh?.roas)}</td>
@@ -155,7 +155,7 @@ export default function DashboardPage() {
                 </tr>
               ))}
               {!perf.loading && rows.length === 0 && (
-                <tr><td colSpan={13} className="py-6 text-center text-gray-400">연결된 광고 계정이 없습니다. <Link prefetch={false} className="text-emerald-700 underline" href="/settings">설정에서 연결</Link></td></tr>
+                <tr><td colSpan={13} className="py-6 text-center text-faint">연결된 광고 계정이 없습니다. <Link prefetch={false} className="text-primary underline" href="/settings">설정에서 연결</Link></td></tr>
               )}
             </tbody>
           </table>
@@ -163,28 +163,28 @@ export default function DashboardPage() {
       </Card>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card title="최근 대량 작업" actions={<Link prefetch={false} href="/jobs" className="text-xs text-emerald-700">전체 보기</Link>}>
-          <ul className="flex flex-col divide-y divide-gray-100 text-sm">
+        <Card title="최근 대량 작업" actions={<Link prefetch={false} href="/jobs" className="text-xs text-primary">전체 보기</Link>}>
+          <ul className="flex flex-col divide-y divide-line text-sm">
             {(dash.data?.recent_jobs ?? []).map((j) => (
               <li key={j.id} className="flex items-center gap-2 py-2">
                 <Link prefetch={false} href={`/jobs?id=${j.id}`} className="font-medium hover:underline">작업 #{j.id}</Link>
                 <Badge value={j.status} />
-                <span className="text-xs text-gray-500">성공 {j.counts.SUCCESS} · 실패 {j.counts.FAILED}</span>
-                <span className="ml-auto text-xs text-gray-400">{j.executed_at && new Date(j.executed_at).toLocaleString("ko-KR")}</span>
+                <span className="text-xs text-faint">성공 {j.counts.SUCCESS} · 실패 {j.counts.FAILED}</span>
+                <span className="ml-auto text-xs text-faint">{j.executed_at && new Date(j.executed_at).toLocaleString("ko-KR")}</span>
               </li>
             ))}
-            {dash.data?.recent_jobs.length === 0 && <li className="py-2 text-gray-400">실행한 작업이 없습니다</li>}
+            {dash.data?.recent_jobs.length === 0 && <li className="py-2 text-faint">실행한 작업이 없습니다</li>}
           </ul>
         </Card>
         <Card title="동기화 오류 · 실패 작업">
-          <ul className="flex flex-col divide-y divide-gray-100 text-sm">
+          <ul className="flex flex-col divide-y divide-line text-sm">
             {(dash.data?.sync_errors ?? []).map((s) => (
-              <li key={s.ad_account_id} className="py-2"><b>{accountName(s.ad_account_id)}</b> 동기화 실패: <span className="text-red-700">{s.error}</span></li>
+              <li key={s.ad_account_id} className="py-2"><b>{accountName(s.ad_account_id)}</b> 동기화 실패: <span className="text-danger">{s.error}</span></li>
             ))}
             {(dash.data?.failed_jobs ?? []).map((id) => (
-              <li key={id} className="py-2"><Link prefetch={false} href={`/jobs?id=${id}`} className="text-red-700 hover:underline">작업 #{id}에 실패한 행이 있습니다 → 확인·재실행</Link></li>
+              <li key={id} className="py-2"><Link prefetch={false} href={`/jobs?id=${id}`} className="text-danger hover:underline">작업 #{id}에 실패한 행이 있습니다 → 확인·재실행</Link></li>
             ))}
-            {dash.data && !dash.data.sync_errors.length && !dash.data.failed_jobs.length && <li className="py-2 text-gray-400">문제 없음</li>}
+            {dash.data && !dash.data.sync_errors.length && !dash.data.failed_jobs.length && <li className="py-2 text-faint">문제 없음</li>}
           </ul>
         </Card>
       </div>
@@ -213,7 +213,7 @@ function OpsSummary({ data, autoBids, connected }: { data: NaverData | null; aut
       <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4 lg:grid-cols-7">
         {items.map(([label, v, href]) => (
           <div key={label}>
-            <dt className="text-xs text-gray-500">{label}</dt>
+            <dt className="text-xs text-faint">{label}</dt>
             <dd className="mt-0.5 font-semibold tabular-nums">
               <Link prefetch={false} href={href} className="hover:underline">{v}</Link>
             </dd>
