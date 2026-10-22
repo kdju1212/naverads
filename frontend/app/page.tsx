@@ -155,7 +155,7 @@ export default function DashboardPage() {
                 </tr>
               ))}
               {!perf.loading && rows.length === 0 && (
-                <tr><td colSpan={13} className="py-6 text-center text-faint">연결된 광고 계정이 없습니다. <Link prefetch={false} className="text-primary underline" href="/settings">설정에서 연결</Link></td></tr>
+                <tr><td colSpan={13} className="py-6 text-center text-faint">연결된 광고 계정이 없습니다. <Link className="text-primary underline" href="/settings">설정에서 연결</Link></td></tr>
               )}
             </tbody>
           </table>
@@ -163,11 +163,11 @@ export default function DashboardPage() {
       </Card>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card title="최근 대량 작업" actions={<Link prefetch={false} href="/jobs" className="text-xs text-primary">전체 보기</Link>}>
+        <Card title="최근 대량 작업" actions={<Link href="/jobs" className="text-xs text-primary">전체 보기</Link>}>
           <ul className="flex flex-col divide-y divide-line text-sm">
             {(dash.data?.recent_jobs ?? []).map((j) => (
               <li key={j.id} className="flex items-center gap-2 py-2">
-                <Link prefetch={false} href={`/jobs?id=${j.id}`} className="font-medium hover:underline">작업 #{j.id}</Link>
+                <Link href={`/jobs?id=${j.id}`} className="font-medium hover:underline">작업 #{j.id}</Link>
                 <Badge value={j.status} />
                 <span className="text-xs text-faint">성공 {j.counts.SUCCESS} · 실패 {j.counts.FAILED}</span>
                 <span className="ml-auto text-xs text-faint">{j.executed_at && new Date(j.executed_at).toLocaleString("ko-KR")}</span>
@@ -182,7 +182,7 @@ export default function DashboardPage() {
               <li key={s.ad_account_id} className="py-2"><b>{accountName(s.ad_account_id)}</b> 동기화 실패: <span className="text-danger">{s.error}</span></li>
             ))}
             {(dash.data?.failed_jobs ?? []).map((id) => (
-              <li key={id} className="py-2"><Link prefetch={false} href={`/jobs?id=${id}`} className="text-danger hover:underline">작업 #{id}에 실패한 행이 있습니다 → 확인·재실행</Link></li>
+              <li key={id} className="py-2"><Link href={`/jobs?id=${id}`} className="text-danger hover:underline">작업 #{id}에 실패한 행이 있습니다 → 확인·재실행</Link></li>
             ))}
             {dash.data && !dash.data.sync_errors.length && !dash.data.failed_jobs.length && <li className="py-2 text-faint">문제 없음</li>}
           </ul>
@@ -215,7 +215,7 @@ function OpsSummary({ data, autoBids, connected }: { data: NaverData | null; aut
           <div key={label}>
             <dt className="text-xs text-faint">{label}</dt>
             <dd className="mt-0.5 font-semibold tabular-nums">
-              <Link prefetch={false} href={href} className="hover:underline">{v}</Link>
+              <Link href={href} className="hover:underline">{v}</Link>
             </dd>
           </div>
         ))}

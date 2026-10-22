@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link"; // 정적 내보내기의 세그먼트 미리 불러오기 경로가 404가 나서 prefetch={false}
+import Link from "next/link"; // 메뉴 링크는 화면에 보이면 미리 받아 둔다(누르면 바로 이동)
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { api, logout, Product } from "@/lib/api";
@@ -41,7 +41,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 {shown.map(([href, label]) => {
                   const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
                   return (
-                    <Link prefetch={false} key={href} href={href} aria-current={active ? "page" : undefined}
+                    <Link key={href} href={href} aria-current={active ? "page" : undefined}
                       className={`rounded-control px-3 py-1.5 transition-colors duration-150 ${active ? "bg-primary-soft font-semibold text-primary" : "text-muted hover:bg-subtle hover:text-ink"}`}>
                       {label}
                     </Link>
@@ -103,7 +103,7 @@ function TopBar() {
       </div>
 
       {(failed > 0 || neverSynced > 0) && (
-        <Link prefetch={false} href="/settings" className="inline-flex h-7 items-center rounded-control bg-warning-soft px-2.5 text-xs font-medium text-warning">
+        <Link href="/settings" className="inline-flex h-7 items-center rounded-control bg-warning-soft px-2.5 text-xs font-medium text-warning">
           {failed > 0 ? `동기화 실패 ${failed}개` : `동기화 필요 ${neverSynced}개`}
         </Link>
       )}

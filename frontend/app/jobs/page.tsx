@@ -35,7 +35,7 @@ function JobList() {
           <tbody>
             {(data ?? []).map((j) => (
               <tr key={j.id} className="border-t border-line">
-                <td className="py-2"><Link prefetch={false} href={`/jobs?id=${j.id}`} className="font-medium text-primary hover:underline">#{j.id}</Link>{j.parent_job_id && <span className="ml-1 text-xs text-faint">(#{j.parent_job_id} 재실행)</span>}</td>
+                <td className="py-2"><Link href={`/jobs?id=${j.id}`} className="font-medium text-primary hover:underline">#{j.id}</Link>{j.parent_job_id && <span className="ml-1 text-xs text-faint">(#{j.parent_job_id} 재실행)</span>}</td>
                 <td>{SOURCE[j.source] ?? j.source}</td>
                 <td><Badge value={j.status} /></td>
                 <td className="text-faint">{new Date(j.created_at).toLocaleString("ko-KR")}</td>
@@ -85,10 +85,10 @@ function JobDetail({ id }: { id: string }) {
   return (
     <>
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        <Link prefetch={false} href="/jobs" className="text-sm text-faint hover:text-ink">← 작업 목록</Link>
+        <Link href="/jobs" className="text-sm text-faint hover:text-ink">← 작업 목록</Link>
         <h1 className="text-xl font-bold">작업 #{job.id}</h1>
         <Badge value={job.status} />
-        {job.parent_job_id && <Link prefetch={false} href={`/jobs?id=${job.parent_job_id}`} className="text-xs text-faint underline">원본 #{job.parent_job_id}</Link>}
+        {job.parent_job_id && <Link href={`/jobs?id=${job.parent_job_id}`} className="text-xs text-faint underline">원본 #{job.parent_job_id}</Link>}
       </div>
 
       <div className="mb-4 flex flex-wrap items-center gap-3 rounded-panel border border-line bg-surface p-3 text-sm">
