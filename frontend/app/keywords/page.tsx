@@ -8,63 +8,52 @@ import { DataStatus } from "@/components/DataStatus";
 import { Badge, Button, Card, ErrorText, inputCls, PageTitle } from "@/components/ui";
 import { api, fmt, Job } from "@/lib/api";
 import { changeFor } from "@/lib/changes";
-import { Keyword, NAdGroup, refreshAccounts, useNaverData } from "@/lib/naverData";
+import { ascending, combine, patterns, words } from "@/lib/combine";
+import { Keyword, NAdGroup, useNaverData } from "@/lib/naverData";
 import { useApp } from "@/lib/store";
-import { useFetch } from "@/lib/useFetch";
 
-interface AutoBid {
-  id: number; ad_account_id: number; keyword_naver_id: string; keyword: string; device: "PC" | "MOBILE"; target_rank: number;
-  max_bid: number; enabled: boolean; last_run_at: string | null; last_result: string | null;
-}
+const PATTERNS = patterns(4);
+const patternLabel = (p: number[]) => p.map((i) => i + 1).join("+");
 
-const DEVICE_LABEL = { PC: "PC", MOBILE: "모바일" };
-
-/** 선택한 키워드에 목표 순위 자동입찰을 설정·해제하고, 지금 실행한다. 매시 정각에도 자동 실행된다. */
-function AutoBidBar({ picked, onDone }: { picked: Keyword[]; onDone: () => void }) {
-  const { ws } = useApp();
-  const router = useRouter();
-  const [device, setDevice] = useState<"PC" | "MOBILE">("PC");
-  const [rank, setRank] = useState("3");
-  const [maxBid, setMaxBid] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const call = async (path: string, body: unknown, method = "POST") => {
-    if (!ws) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const r = await api<{ job_ids?: number[] }>(`/workspaces/${ws.id}/auto-bids${path}`, { method, body });
-      onDone();
-      if (r.job_ids?.length) router.push(`/jobs?id=${r.job_ids[0]}`);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const none = busy || picked.length === 0;
-  const keywords = picked.map((k) => ({ ad_account_id: k.ad_account_id, naver_id: k.naver_id, keyword: k.keyword }));
-  const ranks = device === "PC" ? 10 : 5;
+/** 단어 목록 4개를 고른 조합식대로 띄어쓰기 없이 이어 붙여 등록 목록에 넣는다. */
+function KeywordCombiner({ onAdd }: { onAdd: (keywords: string[]) => void }) {
+  const [lists, setLists] = useState(["", "", "", ""]);
+  const [on, setOn] = useState<Set<string>>(new Set(PATTERNS.filter(ascending).map(patternLabel)));
+  const result = combine(lists.map(words), PATTERNS.filter((p) => on.has(patternLabel(p))));
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      {error && <span role="alert" className="text-xs text-red-600">{error}</span>}
-      <select className={inputCls} aria-label="기기" value={device}
-        onChange={(e) => { const d = e.target.value as "PC" | "MOBILE"; setDevice(d); if (d === "MOBILE" && Number(rank) > 5) setRank("5"); }}>
-        <option value="PC">PC</option>
-        <option value="MOBILE">모바일</option>
-      </select>
-      <select className={inputCls} aria-label="목표 순위" value={rank} onChange={(e) => setRank(e.target.value)}>
-        {Array.from({ length: ranks }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}위</option>)}
-      </select>
-      <input className={`${inputCls} w-32`} inputMode="numeric" placeholder="최대 입찰가(원)" aria-label="최대 입찰가"
-        value={maxBid} onChange={(e) => setMaxBid(e.target.value.replace(/[^0-9]/g, ""))} />
-      <Button disabled={none || !maxBid}
-        onClick={() => call("", { keywords, device, target_rank: Number(rank), max_bid: Number(maxBid) }, "PUT")}>자동입찰 설정</Button>
-      <Button variant="secondary" disabled={none} onClick={() => call("/run", { keywords })}>지금 실행</Button>
-      <Button variant="danger" disabled={none} onClick={() => confirm(`${picked.length}개 키워드의 자동입찰을 해제할까요?`) && call("/delete", { keywords })}>해제</Button>
-    </div>
+    <details className="rounded border border-gray-200 p-2">
+      <summary className="cursor-pointer text-sm font-medium">키워드 조합기</summary>
+      <div className="mt-2 flex flex-col gap-2">
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+          {lists.map((v, i) => (
+            <textarea key={i} className={`${inputCls} h-24`} aria-label={`단어 목록 ${i + 1}`} placeholder={`${i + 1}번 목록 (한 줄에 하나 또는 쉼표)`}
+              value={v} onChange={(e) => setLists((l) => l.map((x, j) => (j === i ? e.target.value : x)))} />
+          ))}
+        </div>
+        {[1, 2, 3, 4].map((len) => {
+          const row = PATTERNS.filter((p) => p.length === len).map(patternLabel);
+          const all = row.every((k) => on.has(k));
+          return (
+            <div key={len} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+              <Button variant="secondary" className="w-24 px-2 py-0.5 text-xs" title={all ? "이 줄 전체 해제" : "이 줄 전체 선택"}
+                onClick={() => setOn((o) => { const n = new Set(o); row.forEach((k) => (all ? n.delete(k) : n.add(k))); return n; })}>
+                {len}개 조합 {all ? "해제" : "전체"}
+              </Button>
+              {row.map((k) => (
+                <label key={k} className="flex items-center gap-1">
+                  <input type="checkbox" checked={on.has(k)}
+                    onChange={() => setOn((o) => { const n = new Set(o); if (n.has(k)) n.delete(k); else n.add(k); return n; })} />{k}
+                </label>
+              ))}
+            </div>
+          );
+        })}
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" disabled={!result.length} onClick={() => onAdd(result)}>조합 {fmt(result.length)}개 아래 목록에 추가</Button>
+          {result.length > 0 && <span className="truncate text-xs text-gray-500">{result.slice(0, 5).join(", ")}{result.length > 5 ? " …" : ""}</span>}
+        </div>
+      </div>
+    </details>
   );
 }
 
@@ -102,9 +91,12 @@ function KeywordAddBar({ groups, campaignName, keywords }: { groups: NAdGroup[];
     }
   };
 
-  const addPicked = () => {
+  const addLines = (ks: string[]) => {
     const have = new Set(lines.map((l) => l.split("|")[0].trim()));
-    setText([...lines, ...[...pick].filter((k) => !have.has(k))].join("\n"));
+    setText([...lines, ...ks.filter((k) => !have.has(k))].join("\n"));
+  };
+  const addPicked = () => {
+    addLines([...pick]);
     setPick(new Set());
   };
 
@@ -128,7 +120,7 @@ function KeywordAddBar({ groups, campaignName, keywords }: { groups: NAdGroup[];
   };
 
   return (
-    <Card title="키워드 등록">
+    <Card title="키워드 등록" className="mb-3">
       <div className="flex flex-col gap-2">
         <input className={inputCls} aria-label="광고그룹 ID" list="adgroup-ids" placeholder="광고그룹 ID (grp-...) 붙여넣기 또는 선택"
           value={grp} onChange={(e) => setGrp(e.target.value)} />
@@ -176,6 +168,7 @@ function KeywordAddBar({ groups, campaignName, keywords }: { groups: NAdGroup[];
             <Button variant="secondary" disabled={pick.size === 0} onClick={addPicked}>선택한 {pick.size}개 아래 목록에 추가</Button>
           </div>
         )}
+        <KeywordCombiner onAdd={addLines} />
         <textarea className={`${inputCls} h-28`} aria-label="키워드 목록" value={text} onChange={(e) => setText(e.target.value)}
           placeholder={"한 줄에 하나씩. 키워드마다 입찰가를 다르게 하려면 | 뒤에\n여름 원피스|500\n린넨 원피스"} />
         <div className="flex flex-wrap items-center gap-2">
@@ -190,16 +183,14 @@ function KeywordAddBar({ groups, campaignName, keywords }: { groups: NAdGroup[];
 }
 
 export default function KeywordsPage() {
-  const { ws, product, accountName } = useApp();
+  const { product, accountName } = useApp();
   const shoppingOnly = product === "SHOPPING";
   const data = useNaverData();
-  const autoBids = useFetch<AutoBid[]>(ws && !shoppingOnly ? `/workspaces/${ws.id}/auto-bids` : null);
   const campaignName = useMemo(() => new Map(data.campaigns.map((c) => [c.naver_id, c.name])), [data.campaigns]);
   const groups = useMemo(() => data.adgroups.filter((g) => g.adgroup_type === "WEB_SITE"), [data.adgroups]);
   const [sel, setSel] = useState<Set<string>>(new Set());
   const rows = data.keywords;
   const groupName = useMemo(() => new Map(data.adgroups.map((g) => [g.naver_id, g.name])), [data.adgroups]);
-  const rule = useMemo(() => new Map((autoBids.data ?? []).map((r) => [r.keyword_naver_id, r])), [autoBids.data]);
 
   if (shoppingOnly) {
     return (
@@ -216,34 +207,13 @@ export default function KeywordsPage() {
     { key: "kw", label: "키워드", value: (r) => r.keyword },
     { key: "status", label: "상태", value: (r) => r.status, render: (r) => <Badge value={r.status} /> },
     { key: "bid", label: "입찰가", num: true, value: (r) => r.bid_amt, render: (r) => (r.use_group_bid ? "그룹 입찰가" : fmt(r.bid_amt, "원")) },
-    {
-      key: "auto", label: "자동입찰", value: (r) => rule.get(r.naver_id)?.target_rank ?? null,
-      render: (r) => {
-        const a = rule.get(r.naver_id);
-        if (!a) return <span className="text-gray-400">-</span>;
-        return (
-          <div className="text-xs">
-            <div>{DEVICE_LABEL[a.device]} {a.target_rank}위 · 최대 {fmt(a.max_bid, "원")}</div>
-            {a.last_result && <div className="text-gray-500" title={a.last_run_at ?? undefined}>{a.last_result}</div>}
-          </div>
-        );
-      },
-    },
   ];
   const selected = rows.filter((r) => sel.has(r.id));
   return (
     <>
-      <PageTitle desc="파워링크 키워드를 대량 등록·삭제하고 ON/OFF·입찰가를 대량 변경합니다. 자동입찰은 네이버 '순위별 예상 입찰가'로 매시 정각에 입찰가를 맞추며 최대 입찰가를 넘지 않습니다.">키워드 (파워링크)</PageTitle>
+      <PageTitle desc="파워링크 키워드를 대량 등록·삭제하고 ON/OFF·입찰가를 대량 변경합니다. 자동입찰은 왼쪽 메뉴 '자동입찰'에서 설정합니다.">키워드 (파워링크)</PageTitle>
       <DataStatus data={data} />
-      <ErrorText error={autoBids.error} />
       <KeywordAddBar groups={groups} campaignName={campaignName} keywords={rows} />
-      <Card title="자동입찰" className="my-3" actions={<span className="text-xs text-gray-500">아래 표에서 선택한 키워드 {selected.length}개</span>}>
-        <AutoBidBar picked={selected} onDone={() => {
-          autoBids.reload();
-          // 지금 실행으로 입찰가가 바뀌었을 수 있다
-          if (ws) void refreshAccounts(ws.id, [...new Set(selected.map((k) => k.ad_account_id))]);
-        }} />
-      </Card>
       <DataTable rows={rows} cols={cols} selected={sel} onSelect={setSel} loading={data.loading && !rows.length}
         toolbar={<BulkBar entityType="keyword" rows={selected} numberField={{ field: "bid_amt", label: "입찰가" }} deletable />} />
     </>

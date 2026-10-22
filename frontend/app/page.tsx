@@ -206,7 +206,7 @@ function OpsSummary({ data, autoBids, connected }: { data: NaverData | null; aut
     ["키워드 ON / OFF", onOff(data?.keywords), "/keywords"],
     ["소재 검수 중 · 반려", inspect(data?.ads), "/ads"],
     ["확장소재 검수 중 · 반려", inspect(data?.extensions), "/extensions"],
-    ["자동입찰 키워드", fmt(autoBids, "개"), "/keywords"],
+    ["자동입찰 키워드", fmt(autoBids, "개"), "/auto-bids"],
   ];
   return (
     <Card title="운영 현황">
