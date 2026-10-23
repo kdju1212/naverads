@@ -198,23 +198,36 @@ def test_auto_bid():
     assert c.put(f"/workspaces/{ws_b}/auto-bids", headers=outsider,
                  json={"keywords": [k1], "device": "PC", "target_rank": 1, "max_bid": 500}).status_code == 403
 
-    # Mock 예상가: PC 1위 1070원 → 최대 500원으로 제한, PC 5위 270원. 현재 입찰가는 네이버에서 조회
+    # Mock 검색 화면: 경쟁 광고 900·700·500·300·150원. 원피스1(300원) 5위 → 목표 1위라 20% 올림, 여름 원피스1(600원) 3위 = 목표
     c.put(url, headers=owner, json={"keywords": [k1], "device": "PC", "target_rank": 1, "max_bid": 500})
-    c.put(url, headers=owner, json={"keywords": [k2], "device": "PC", "target_rank": 5, "max_bid": 5000})
+    c.put(url, headers=owner, json={"keywords": [k2], "device": "MOBILE", "target_rank": 3, "max_bid": 5000})
     jobs = c.post(f"{url}/run", headers=owner).json()["job_ids"]
     assert len(jobs) == 1 and c.get(f"/workspaces/{ws}/bulk-jobs/{jobs[0]}", headers=owner).json()["status"] == "DONE"
     kws = store("4004")["keywords"]
-    assert kws["kwd-4004-11"]["bidAmt"] == 500 and kws["kwd-4004-12"]["bidAmt"] == 270
-    rules = c.get(url, headers=owner).json()
-    assert rules[0]["keyword"] == "원피스1" and rules[0]["keyword_naver_id"] == "kwd-4004-11"
-    assert "최대 500원" in rules[0]["last_result"] and "300원 → 500원" in rules[0]["last_result"]
+    assert kws["kwd-4004-11"]["bidAmt"] == 360 and kws["kwd-4004-12"]["bidAmt"] == 600
+    rules = {r["keyword_naver_id"]: r for r in c.get(url, headers=owner).json()}
+    assert rules["kwd-4004-11"]["keyword"] == "원피스1"
+    assert rules["kwd-4004-11"]["last_result"] == "지금 5위 (목표 1위) · 300원 → 360원"
+    assert rules["kwd-4004-12"]["last_result"] == "지금 3위 (목표 3위) · 변경 없음"
     assert c.get(f"/workspaces/{ws}/dashboard", headers=owner).json()["auto_bids"] == 2
 
-    # 다시 돌리면 변경 없음 → 작업도 안 만든다 (크론 경로)
+    # 크론 경로: 360원은 4위 → 다시 올림
     db = SessionLocal()
     run_all_auto_bids(db)
     db.close()
-    assert all("변경 없음" in r["last_result"] for r in c.get(url, headers=owner).json())
+    assert kws["kwd-4004-11"]["bidAmt"] == 430
+
+    # 지금 순위 확인 (보기 권한)
+    r = c.post(f"/workspaces/{ws}/ranks", headers=owner, json={"keywords": [k1, k2]}).json()
+    assert r == [{"naver_id": "kwd-4004-11", "PC": 4, "MOBILE": 4}, {"naver_id": "kwd-4004-12", "PC": 3, "MOBILE": 3}]
+    assert c.post(f"/workspaces/{ws}/ranks", headers=owner, json={"keywords": [k1] * 11}).status_code == 400
+
+    # 꺼진 키워드는 노출이 안 돼 입찰가만 오르므로 건너뜀
+    kws["kwd-4004-11"]["userLock"] = True
+    c.post(f"{url}/run", headers=owner)
+    assert kws["kwd-4004-11"]["bidAmt"] == 430
+    assert "OFF라 건너뜀" in next(r for r in c.get(url, headers=owner).json() if r["keyword_naver_id"] == "kwd-4004-11")["last_result"]
+    kws["kwd-4004-11"]["userLock"] = False
 
     # 네이버에서 지워진 키워드는 결과에 표시
     kws.pop("kwd-4004-12")
@@ -349,7 +362,9 @@ def test_real_stats(monkeypatch):
     import json
     from datetime import date
 
-    from app.naver import RealNaverClient
+    import pytest
+
+    from app.naver import NaverApiError, RealNaverClient
 
     calls = []
 
@@ -367,14 +382,24 @@ def test_real_stats(monkeypatch):
     RealNaverClient("k", "s", "1").delete_ad_extension("ext-1")
     assert calls[-1] == ("DELETE", "/ncc/ad-extensions", {"ids": "ext-1"})  # 경로 방식은 실계정 404
 
-    def fake_est(self, method, uri, **kw):
-        calls.append((method, uri, kw["json"]))
-        return {"device": "PC", "estimate": [{"keyword": "a", "position": 3, "bid": 1230}, {"keyword": "b", "position": 3, "bid": 70}]}
+    class Page:
+        status_code, text = 200, "<a i=nad-a001-01-2>x</a><a i=nad-a001-01-1></a><b nad-a001-01-2></b>"
 
-    monkeypatch.setattr(RealNaverClient, "_req", fake_est)
-    assert RealNaverClient("k", "s", "1").estimate_bids("PC", [("nkw-1", 3), ("nkw-2", 3)]) == {"nkw-1": 1230, "nkw-2": 70}
-    assert calls[-1] == ("POST", "/estimate/average-position-bid/id",
-                         {"device": "PC", "items": [{"key": "nkw-1", "position": 3}, {"key": "nkw-2", "position": 3}]})
+    got = {}
+    monkeypatch.setattr("app.naver.httpx.get", lambda url, **kw: got.setdefault("url", url) and Page)
+    assert RealNaverClient("k", "s", "1").serp_ads("원 피스", "MOBILE") == ["nad-a001-01-2", "nad-a001-01-1"]  # 노출 순서, 중복 제거
+    assert got["url"].startswith("https://m.ad.search.naver.com/") and got["url"].endswith("%EC%9B%90%20%ED%94%BC%EC%8A%A4")
+    Page.text = "<html>차단</html>"  # 광고 ID가 하나도 없으면 '내 광고 없음'이 아니라 실패
+    with pytest.raises(NaverApiError):
+        RealNaverClient("k", "s", "1").serp_ads("원피스", "PC")
+
+
+def test_next_bid():
+    from app.bulk import next_bid
+    assert next_bid(300, 5, 1, 500) == 360 and next_bid(300, None, 1, 500) == 360  # 아래거나 안 보이면 +20%
+    assert next_bid(480, 5, 1, 500) == 500 and next_bid(500, 4, 1, 500) == 500    # 최대 입찰가에서 멈춤
+    assert next_bid(600, 2, 5, 5000) == 540 and next_bid(70, 1, 3, 500) == 70     # 위면 -10%, 최소 70원
+    assert next_bid(400, 3, 3, 500) == 400 and next_bid(70, 9, 1, 500) == 80      # 목표면 그대로, 최소 10원씩
 
 
 def test_keyword_tool():
@@ -394,7 +419,9 @@ def test_keyword_tool():
 
 
 def test_master_file_signing():
-    from app.naver import RealNaverClient
+    import pytest
+
+    from app.naver import NaverApiError, RealNaverClient
 
     src = RealNaverClient("k", "s", "1").master_file({"downloadUrl": "https://api.searchad.naver.com/report-download?authtoken=T"})
     assert src["url"].endswith("?authtoken=T") and src["headers"]["X-Customer"] == "1"

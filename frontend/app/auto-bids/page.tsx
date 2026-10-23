@@ -1,9 +1,10 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { ReactNode, useMemo, useState } from "react";
 import { Col, DataTable } from "@/components/DataTable";
 import { DataStatus } from "@/components/DataStatus";
+import { useRanks } from "@/components/RankCheck";
 import { Button, Card, ErrorText, inputCls, PageTitle } from "@/components/ui";
 import { api, fmt } from "@/lib/api";
 import { Keyword, refreshAccounts, useNaverData } from "@/lib/naverData";
@@ -17,8 +18,8 @@ interface AutoBid {
 
 const DEVICE_LABEL = { PC: "PC", MOBILE: "모바일" };
 
-/** 선택한 키워드에 목표 순위 자동입찰을 설정·해제하고, 지금 실행한다. 매시 정각에도 자동 실행된다. */
-function AutoBidBar({ picked, onDone }: { picked: Keyword[]; onDone: () => void }) {
+/** 선택한 키워드에 목표 순위 자동입찰을 설정·해제하고, 지금 실행한다. 10분마다 자동 실행된다. */
+function AutoBidBar({ picked, onDone, rankButton }: { picked: Keyword[]; onDone: () => void; rankButton: ReactNode }) {
   const { ws } = useApp();
   const router = useRouter();
   const [device, setDevice] = useState<"PC" | "MOBILE">("PC");
@@ -48,6 +49,7 @@ function AutoBidBar({ picked, onDone }: { picked: Keyword[]; onDone: () => void 
   return (
     <div className="flex flex-wrap items-center gap-2">
       {error && <span role="alert" className="text-xs text-danger">{error}</span>}
+      {rankButton}
       <select className={inputCls} aria-label="기기" value={device}
         onChange={(e) => { const d = e.target.value as "PC" | "MOBILE"; setDevice(d); if (d === "MOBILE" && Number(rank) > 5) setRank("5"); }}>
         <option value="PC">PC</option>
@@ -70,6 +72,7 @@ export default function AutoBidsPage() {
   const { ws, product, accountName } = useApp();
   const shoppingOnly = product === "SHOPPING";
   const data = useNaverData();
+  const rank = useRanks();
   const autoBids = useFetch<AutoBid[]>(ws && !shoppingOnly ? `/workspaces/${ws.id}/auto-bids` : null);
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [addSel, setAddSel] = useState<Set<string>>(new Set());
@@ -117,16 +120,16 @@ export default function AutoBidsPage() {
   };
   return (
     <>
-      <PageTitle desc="파워링크 키워드에 목표 순위를 정해 두면 네이버 '순위별 예상 입찰가'로 매시 정각에 입찰가를 맞춥니다. 최대 입찰가는 넘지 않습니다.">자동입찰</PageTitle>
+      <PageTitle desc="파워링크 키워드에 목표 순위를 정해 두면 10분마다 네이버 검색 화면에서 지금 순위를 확인해, 목표보다 아래면 입찰가를 20% 올리고 위면 10% 내립니다. 최대 입찰가는 넘지 않고, OFF인 키워드·광고그룹은 건너뜁니다.">자동입찰</PageTitle>
       <DataStatus data={data} />
       <ErrorText error={autoBids.error} />
       <DataTable rows={rows} cols={cols} selected={sel} onSelect={setSel} loading={(data.loading || autoBids.loading) && !rows.length}
-        toolbar={<AutoBidBar picked={selected} onDone={() => { done(selected); setSel(new Set()); }} />} />
+        toolbar={<AutoBidBar picked={selected} rankButton={rank.button(selected)} onDone={() => { done(selected); setSel(new Set()); }} />} />
       <details className="mt-3 rounded-panel border border-line bg-surface">
         <summary className="cursor-pointer px-4 py-3 text-[15px] font-semibold">자동입찰 추가 · 아직 설정 안 된 키워드 {fmt(others.length)}개</summary>
         <div className="p-2">
-          <DataTable rows={others} cols={cols.slice(0, 4)} selected={addSel} onSelect={setAddSel} loading={data.loading && !others.length}
-            toolbar={<AutoBidBar picked={adding} onDone={() => { done(adding); setAddSel(new Set()); }} />} />
+          <DataTable rows={others} cols={[...cols.slice(0, 4), rank.col]} selected={addSel} onSelect={setAddSel} loading={data.loading && !others.length}
+            toolbar={<AutoBidBar picked={adding} rankButton={rank.button(adding)} onDone={() => { done(adding); setAddSel(new Set()); }} />} />
         </div>
       </details>
     </>

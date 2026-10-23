@@ -5,7 +5,7 @@
   "compatibility_date": "2026-10-18",
   "compatibility_flags": ["python_workers"],
   "observability": { "enabled": true },
-  "triggers": { "crons": ["0 * * * *"] },
+  "triggers": { "crons": ["*/10 * * * *"] },
   "d1_databases": [
     { "binding": "DB", "database_name": "naverads", "database_id": "f6603131-365a-425e-ae58-ed357b5f08b4", "migrations_dir": "migrations" }
   ]

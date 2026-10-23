@@ -532,6 +532,20 @@ async def delete_auto_bids(body: AutoBidKeysIn, m: Membership = Depends(membersh
     return {"ok": True}
 
 
+RANK_LIMIT = 10  # 검색 화면을 키워드마다 PC·모바일 2번 읽으므로 무료 플랜 요청당 외부 호출 한도 안에서
+
+
+@app.post("/workspaces/{ws_id}/ranks")
+async def keyword_ranks(body: AutoBidKeysIn, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    """지금 순위 확인. 보기 권한이면 된다."""
+    if not 1 <= len(body.keywords) <= RANK_LIMIT:
+        raise HTTPException(400, f"순위 확인은 한 번에 1~{RANK_LIMIT}개입니다")
+    allowed = resolve_account_ids(db, m, None)
+    if any(k.ad_account_id not in allowed for k in body.keywords):
+        raise HTTPException(403, "이 광고 계정을 볼 권한이 없습니다")
+    return bulk.check_ranks(db, m.workspace_id, body.keywords)
+
+
 @app.post("/workspaces/{ws_id}/auto-bids/run")
 async def run_auto_bids(body: AutoBidKeysIn | None = None, m: Membership = Depends(membership), db: Session = Depends(get_db)):
     """지금 실행. keywords를 주면 그 키워드 규칙만."""

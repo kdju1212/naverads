@@ -10,9 +10,10 @@ import hmac
 import json
 import os
 import random
+import re
 import time
 from datetime import date, timedelta
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -63,6 +64,13 @@ VERIFIED_WRITES = {("campaign", "status"), ("campaign", "daily_budget"), ("adgro
 
 # 확장소재 노출 스케줄: 요일별 0~23시 비트 합 (2^24-1 = 매시간)
 ALL_WEEK = {d: 2 ** 24 - 1 for d in ("SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT")}
+
+# 파워링크 전체 목록 화면(검색 결과의 '광고 더보기'). 공식 API에 현재 순위 조회가 없어 이 화면을 읽는다
+SERP = {"PC": ("https://ad.search.naver.com/search.naver?where=ad&query=",
+               "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"),
+        "MOBILE": ("https://m.ad.search.naver.com/search.naver?where=m_expd&query=",
+                   "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148")}
+SERP_AD_ID = re.compile(r"nad-a\d+-\d+-\d+")
 
 
 class RealNaverClient:
@@ -155,17 +163,18 @@ class RealNaverClient:
                             "ccnt": s.get("ccnt"), "convAmt": s.get("convAmt")})
         return out
 
-    def estimate_bids(self, device, items):
-        """items: [(nccKeywordId, 순위)] → {nccKeywordId: 예상 입찰가}. 명세(gh-pages assets/json/estimate.json)."""
-        out = {}
-        for i in range(0, len(items), 100):  # shortcut: 한 번에 보낼 수 있는 개수는 명세에 없어 100개씩, 오류 나면 줄이기
-            chunk = items[i:i + 100]
-            r = self._req("POST", "/estimate/average-position-bid/id", json={
-                "device": device, "items": [{"key": k, "position": p} for k, p in chunk]})
-            # 응답은 요청 순서대로 온다. nccKeywordId가 있으면 그걸 쓴다
-            for (k, _), e in zip(chunk, r.get("estimate", [])):
-                out[e.get("nccKeywordId") or k] = e.get("bid")
-        return out
+    def serp_ads(self, keyword, device) -> list[str]:
+        """검색 화면의 파워링크 소재 ID(nad-...)를 노출 순서대로. Cloudflare에서도 한국 화면으로 보이는 것 확인(10/23).
+        shortcut: 화면 HTML에 소재 ID가 순서대로 있다는 데 기대고 있다, 네이버가 화면을 바꾸면 여기만 고친다"""
+        url, ua = SERP[device]
+        try:
+            r = httpx.get(url + quote(keyword), headers={"User-Agent": ua}, timeout=15)
+        except httpx.HTTPError as e:
+            raise NaverApiError(f"검색 화면 네트워크 오류: {e}") from e
+        ids = list(dict.fromkeys(SERP_AD_ID.findall(r.text))) if r.status_code < 400 else []
+        if not ids:  # 차단·화면 변경을 '내 광고 없음'으로 오해해 입찰가를 올리지 않도록 실패로 본다
+            raise NaverApiError(f"검색 화면에서 광고 목록을 읽지 못했습니다 ({r.status_code})")
+        return ids
 
     # 마스터 보고서(명세: gh-pages assets/json/master-report.json). 파일은 헤더 없는 TSV, 칸 구성은 브라우저(lib/naverData.ts) 참고
     def create_master_report(self, item):
@@ -265,6 +274,7 @@ def extension_row(aid, e):
 # ---- Mock ----
 _MOCK_STORE: dict[str, dict] = {}
 MOCK_FAIL_IDS: set[str] = set()  # 테스트용: 여기 있는 naver_id 수정은 API 오류로 응답
+MOCK_RIVALS = (900, 700, 500, 300, 150)  # 가상 검색 화면의 경쟁 광고 입찰가
 
 
 def _seed(cid: str) -> dict:
@@ -397,10 +407,14 @@ class MockNaverClient:
             d += timedelta(days=1)
         return out
 
-    def estimate_bids(self, device, items):
-        # 순위가 높을수록(숫자가 작을수록) 비싸다
-        base = 1000 if device == "PC" else 700
-        return {k: base // p // 10 * 10 + 70 for k, p in items if k in self.s["keywords"]}
+    def serp_ads(self, keyword, device):
+        # 경쟁 광고 입찰가가 MOCK_RIVALS인 가상 화면: 입찰가 높은 순, 같으면 경쟁 광고가 먼저
+        ads = [(-self._bid(k), a["nccAdId"]) for k in self.s["keywords"].values() if k["keyword"] == keyword and not k["userLock"]
+               for a in self.s["ads"].values() if a["nccAdgroupId"] == k["nccAdgroupId"]]
+        return [i for _, i in sorted([(-b, f"nad-rival-{b}") for b in MOCK_RIVALS] + ads, key=lambda x: x[0])]
+
+    def _bid(self, k):
+        return self.s["adgroups"][k["nccAdgroupId"]]["bidAmt"] if k["useGroupBidAmt"] else k["bidAmt"]
 
     def update(self, entity_type, naver_id, field, value):
         if naver_id in MOCK_FAIL_IDS:

@@ -180,9 +180,57 @@ def retry_failed(db: Session, m: Membership, job: BulkJob) -> BulkJob:
     return create_job(db, m, changes, "RETRY", parent_job_id=job.id)
 
 
+def _group_ads(client, adgroup_ids) -> dict[str, set[str]]:
+    return {g: {a["nccAdId"] for a in client.list_ads(g)} for g in set(adgroup_ids)}
+
+
+def _rank(serp: list[str], mine: set[str]) -> int | None:
+    """검색 화면 소재 ID 목록에서 내 광고그룹 소재가 처음 나오는 순위. 없으면 None(노출 안 됨)."""
+    return next((i for i, x in enumerate(serp, 1) if x in mine), None)
+
+
+def next_bid(cur: int, rank: int | None, target: int, max_bid: int) -> int:
+    """목표보다 아래(또는 노출 안 됨)면 20% 올리고, 위면 10% 내린다(최소 10원). 내릴 때 덜 움직여 순위가 출렁이지 않게."""
+    lo = BID_RANGE["WEB_SITE"][0]
+    if rank == target:
+        return cur
+    if rank is None or rank > target:
+        return max(lo, min(cur + max(10, cur // 5 // 10 * 10), max_bid // 10 * 10))
+    return max(lo, cur - max(10, cur // 10 // 10 * 10))
+
+
+def check_ranks(db: Session, workspace_id: int, refs) -> list[dict]:
+    """지금 순위: 키워드별 PC·모바일 검색 화면에서 내 광고가 몇 위인지. refs는 권한 확인을 마친 KeywordRef."""
+    out = []
+    by_account: dict[int, list] = {}
+    for k in refs:
+        by_account.setdefault(k.ad_account_id, []).append(k)
+    for account_id, ks in by_account.items():
+        try:
+            client = _client(db, workspace_id, account_id)
+            kws = {k["nccKeywordId"]: k for k in client.get_many("keywords", [k.naver_id for k in ks])}
+            ads = _group_ads(client, [k["nccAdgroupId"] for k in kws.values()])
+        except NaverApiError as e:
+            out += [{"naver_id": k.naver_id, "error": f"네이버 조회 실패: {e}"[:200]} for k in ks]
+            continue
+        for k in ks:
+            kw = kws.get(k.naver_id)
+            row = {"naver_id": k.naver_id}
+            if kw is None:
+                row["error"] = "네이버에 키워드가 없습니다"
+            else:
+                try:
+                    for d in ("PC", "MOBILE"):
+                        row[d] = _rank(client.serp_ads(kw["keyword"], d), ads[kw["nccAdgroupId"]])
+                except NaverApiError as e:
+                    row["error"] = str(e)[:200]
+            out.append(row)
+    return out
+
+
 def run_auto_bids(db: Session, workspace_id: int, rule_ids: list[int] | None = None) -> list[BulkJob]:
-    """자동입찰 규칙 실행: 목표 순위 예상 입찰가(최대 입찰가 이하)로 바꿀 키워드를 모아 만든 사람별 대량 작업으로 실행한다.
-    현재 입찰가는 네이버에서 키워드 ID로 조회한다. 권한 확인·네이버 반영 검증·감사 로그는 일반 대량 작업과 같다."""
+    """자동입찰 규칙 실행: 검색 화면에서 지금 순위를 읽어 목표보다 아래면 올리고 위면 내린다(next_bid, 최대 입찰가 이하).
+    바꿀 키워드는 만든 사람별 대량 작업으로 실행한다. 권한 확인·네이버 반영 검증·감사 로그는 일반 대량 작업과 같다."""
     s = select(AutoBidRule).where(AutoBidRule.workspace_id == workspace_id, AutoBidRule.enabled.is_(True))
     if rule_ids is not None:
         s = s.where(AutoBidRule.id.in_(rule_ids))
@@ -190,7 +238,6 @@ def run_auto_bids(db: Session, workspace_id: int, rule_ids: list[int] | None = N
     for r in db.scalars(s):
         by_user.setdefault(r.created_by, []).append(r)
     jobs = []
-    lo = BID_RANGE["WEB_SITE"][0]
     for user_id, rules in by_user.items():
         m = db.scalar(select(Membership).where(Membership.workspace_id == workspace_id, Membership.user_id == user_id))
         allowed = accessible_account_ids(db, m, edit=True) if m else set()
@@ -206,10 +253,9 @@ def run_auto_bids(db: Session, workspace_id: int, rule_ids: list[int] | None = N
             try:
                 client = _client(db, workspace_id, account_id)
                 current = {k["nccKeywordId"]: k for k in client.get_many("keywords", [r.keyword_naver_id for r in rs])}
-                est = {}
-                for device in {r.device for r in rs}:
-                    est[device] = client.estimate_bids(device, [(r.keyword_naver_id, r.target_rank) for r in rs
-                                                                if r.device == device and r.keyword_naver_id in current])
+                gids = list({k["nccAdgroupId"] for k in current.values()})
+                groups = {g["nccAdgroupId"]: g for g in client.get_many("adgroups", gids)} if gids else {}
+                ads = _group_ads(client, gids)
             except NaverApiError as e:
                 for r in rs:
                     r.last_result = f"네이버 조회 실패: {e}"[:300]
@@ -219,18 +265,26 @@ def run_auto_bids(db: Session, workspace_id: int, rule_ids: list[int] | None = N
                 if kw is None:
                     r.last_result = "네이버에 키워드가 없습니다 (삭제되었으면 규칙을 해제하세요)"
                     continue
-                bid = est[r.device].get(r.keyword_naver_id)
-                if not bid:
-                    r.last_result = "예상 입찰가가 없습니다 (노출 데이터 부족)"
+                grp = groups.get(kw["nccAdgroupId"], {})
+                # 꺼져 있으면 노출이 안 돼 입찰가만 계속 오르므로 건너뛴다. shortcut: 캠페인 OFF는 안 봄, 필요하면 캠페인도 조회
+                if kw.get("userLock") or grp.get("userLock"):
+                    r.last_result = "키워드나 광고그룹이 OFF라 건너뜀"
                     continue
-                target = max(lo, min(bid, r.max_bid) // 10 * 10)
-                r.last_result = f"{r.target_rank}위 예상 {bid:,}원" + (f" > 최대 {r.max_bid:,}원" if bid > r.max_bid else "")
-                if target == kw["bidAmt"] and not kw.get("useGroupBidAmt"):
-                    r.last_result += " · 변경 없음"
+                try:
+                    rank = _rank(client.serp_ads(kw["keyword"], r.device), ads[kw["nccAdgroupId"]])
+                except NaverApiError as e:
+                    r.last_result = f"순위 확인 실패: {e}"[:300]
                     continue
-                r.last_result += f" · {kw['bidAmt']:,}원 → {target:,}원"
+                cur = grp.get("bidAmt", kw["bidAmt"]) if kw.get("useGroupBidAmt") else kw["bidAmt"]
+                target = next_bid(cur, rank, r.target_rank, r.max_bid)
+                r.last_result = f"지금 {rank}위" if rank else "지금 노출 안 됨"
+                r.last_result += f" (목표 {r.target_rank}위)"
+                if target == cur:
+                    r.last_result += " · 변경 없음" + (" (최대 입찰가)" if rank != r.target_rank and cur >= r.max_bid else "")
+                    continue
+                r.last_result += f" · {cur:,}원 → {target:,}원"
                 changes.append({"entity_type": "keyword", "naver_id": r.keyword_naver_id, "field": "bid_amt", "value": str(target),
-                                "ad_account_id": account_id, "before": kw["bidAmt"], "product": "WEB_SITE"})
+                                "ad_account_id": account_id, "before": cur, "product": "WEB_SITE"})
                 rule_by_nid[r.keyword_naver_id] = r
         db.commit()
         if not changes:
