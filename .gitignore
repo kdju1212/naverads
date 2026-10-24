@@ -12,3 +12,6 @@ python_modules/
 node_modules/
 
 d1_backup_*.sql
+
+# Claude 점검 전용 계정 (비밀번호 포함)
+.test-account
