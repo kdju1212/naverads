@@ -455,3 +455,14 @@ def test_master_reports_and_lookup():
     assert c.get(f"{base}/naver/campaigns", headers=outsider).status_code == 403
     assert c.get(f"{base}/master-reports/x/file", headers=outsider).status_code == 403
     assert c.get(f"{base}/master-reports/x/file").status_code == 401
+
+
+def test_seo_fetch_blocks():
+    u = user("seo@a.com")
+    ws = c.post("/workspaces", json={"name": "SEO"}, headers=u).json()["id"]
+    for bad in ("https://smartstore.naver.com/shop/products/1", "https://m.smartstore.naver.com/x", "https://brand.naver.com/b",
+                "ftp://a.com", "a.com", "http://localhost:8000", "http://127.0.0.1", "http://192.168.0.1/admin", "http://[::1]/"):
+        r = c.get(f"/workspaces/{ws}/seo-fetch", params={"url": bad}, headers=u)
+        assert r.status_code == 400, bad
+    assert "스마트스토어" in c.get(f"/workspaces/{ws}/seo-fetch", params={"url": "https://smartstore.naver.com/a"}, headers=u).json()["detail"]
+    assert c.get(f"/workspaces/{ws}/seo-fetch", params={"url": "https://a.com"}, headers=user("seo2@b.com")).status_code == 403

@@ -9,7 +9,7 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import bulk, naver
+from . import bulk, naver, seo
 from .access import admin_membership, current_user, membership, membership_of, resolve_account_ids, user_from_header
 from .db import Base, engine, get_db
 from .models import (AccountAccess, AdAccount, AuditLog, AutoBidRule, BulkJob, BulkJobRow, Membership, NaverApiCredential,
@@ -263,6 +263,15 @@ async def keyword_tool(account_id: int, hint: str, m: Membership = Depends(membe
     except NaverApiError as e:
         raise HTTPException(400, f"연관 키워드 조회 실패: {e}")
     return sorted(rows, key=lambda r: -(r["pc"] + r["mobile"]))
+
+
+@app.get("/workspaces/{ws_id}/seo-fetch")
+async def seo_fetch(url: str, m: Membership = Depends(membership)):
+    """SEO·GEO 점검용으로 광고주 페이지와 robots.txt 등을 가져온다. 판정은 브라우저가 한다."""
+    try:
+        return seo.fetch(url)
+    except seo.SeoError as e:
+        raise HTTPException(400, str(e))
 
 
 # ---------- 네이버 원본 조회 (브라우저 보관용, DB에 저장하지 않음) ----------
