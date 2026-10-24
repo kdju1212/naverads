@@ -48,8 +48,7 @@ export function extractFacts(html: string): Facts {
   };
 }
 
-/** robots.txt에서 이 봇이 path를 수집할 수 없으면 true. 가장 긴 규칙이 이긴다(구글 방식).
- * shortcut: * · $ 와일드카드는 무시하고 앞부분 일치만 본다, 오판이 보이면 패턴 처리 추가 */
+/** robots.txt에서 이 봇이 path를 수집할 수 없으면 true. 가장 긴 규칙이 이기고 같으면 Allow(구글 방식), * · $ 지원 */
 export function robotsBlocked(robots: string | null, bot: string, path: string): boolean {
   if (!robots) return false;
   const groups: { agents: string[]; rules: [boolean, string][] }[] = [];
@@ -61,7 +60,7 @@ export function robotsBlocked(robots: string | null, bot: string, path: string):
       if (!cur || cur.rules.length) groups.push((cur = { agents: [], rules: [] }));
       cur.agents.push(val.toLowerCase());
     } else if (cur && (key === "allow" || key === "disallow")) {
-      cur.rules.push([key === "allow", val.replace(/[*$].*/, "")]);
+      cur.rules.push([key === "allow", val]);
     }
   }
   const b = bot.toLowerCase();
@@ -70,7 +69,8 @@ export function robotsBlocked(robots: string | null, bot: string, path: string):
   let best: [boolean, string] | null = null;
   for (const r of rules) {
     if (r[1] === "" && !r[0]) continue; // "Disallow:" 빈 값은 전부 허용
-    if (path.startsWith(r[1]) && (!best || r[1].length > best[1].length || (r[1].length === best[1].length && r[0]))) best = r;
+    const re = new RegExp("^" + r[1].replace(/[.+?^{}()|[\]\\$]/g, "\\$&").replace(/\*/g, ".*").replace(/\\\$$/, "$"));
+    if (re.test(path) && (!best || r[1].length > best[1].length || (r[1].length === best[1].length && r[0]))) best = r;
   }
   return !!best && !best[0];
 }
@@ -81,7 +81,8 @@ const AI_BOTS = [["GPTBot", "ChatGPT 학습"], ["OAI-SearchBot", "ChatGPT 검색
 export function runChecks(f: Fetched, x: Facts): Check[] {
   const out: Check[] = [];
   const add = (group: Check["group"], label: string, level: Level, detail: string, fix?: string) => out.push({ group, label, level, detail, fix });
-  const path = new URL(f.url).pathname;
+  const { pathname, search } = new URL(f.url);
+  const path = pathname + search; // robots 규칙에 ?sort= 같은 쿼리 조건이 있어서
 
   // ----- SEO -----
   add("SEO", "페이지 응답", f.status < 300 ? "PASS" : "FAIL", `HTTP ${f.status}`,

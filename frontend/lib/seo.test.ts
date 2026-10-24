@@ -12,6 +12,15 @@ test("robots.txt", () => {
   assert.equal(robotsBlocked(r, "ClaudeBot", "/"), true);
   assert.equal(robotsBlocked("User-agent: *\nDisallow:", "Yeti", "/"), false);
   assert.equal(robotsBlocked(null, "Yeti", "/"), false);
+  // cafe24.com 실제 규칙: 와일드카드를 "/"로 잘라 읽으면 전부 차단으로 오판했었다
+  const w = "User-agent: Googlebot\nDisallow: /*board*page=\nDisallow: /*?sort=\nDisallow: /*.pdf$\nDisallow: /skin-*/";
+  assert.equal(robotsBlocked(w, "Googlebot", "/"), false);
+  assert.equal(robotsBlocked(w, "Googlebot", "/x/board/list.html?page=2"), true);
+  assert.equal(robotsBlocked(w, "Googlebot", "/p?sort=new"), true);
+  assert.equal(robotsBlocked(w, "Googlebot", "/a.pdf"), true);
+  assert.equal(robotsBlocked(w, "Googlebot", "/a.pdf?x=1"), false);
+  assert.equal(robotsBlocked(w, "Googlebot", "/skin-1/a.css"), true);
+  assert.equal(robotsBlocked("User-agent: *\nDisallow: /a+b(c)", "Yeti", "/a+b(c)/d"), true);
 });
 
 test("판정", () => {
