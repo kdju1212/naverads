@@ -91,6 +91,12 @@ class RealNaverClient:
             r = httpx.request(method, base + uri, headers=self._headers(method, uri), timeout=20, **kw)
         except httpx.HTTPError as e:
             raise NaverApiError(f"네트워크 오류: {e}") from e
+        except AttributeError as e:
+            # Workers의 httpx(jsfetch)는 본문 없는 응답(소재 DELETE의 204)에서 body가 null이라 getReader에서 죽는다.
+            # 네이버 오류 응답은 항상 JSON 본문이 있으니 본문 없음 = 성공으로 본다 (실계정 10/26)
+            if "getReader" not in str(e):
+                raise
+            return None
         if r.status_code >= 400:
             raise NaverApiError(f"{r.status_code} {r.text[:200]}")
         if raw:
