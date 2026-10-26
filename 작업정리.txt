@@ -249,6 +249,10 @@ API:     https://naverads-api.djkim0509.workers.dev/docs
   - 글자 수·개수 검사는 네이버에 맡김. assets 형식({"linkType", "assetData": {"text"}})은 명세에 없어 마스터 보고서로 추정
   - 10/26 실계정 등록 성공: 자하라밤_메인_모바일에 RSA 1개(nad-a001-01-000000605438641, 제목 5·설명 2, OFF·검수 중) → 추정 형식 맞음
     ※ 가운뎃점(·)은 1030 "Only English and Korean, and some special characters are allowed" 로 거부됨 → 쉼표로 바꿔 등록
+- 소재 삭제 (10/26): 소재 화면 "삭제" 버튼·MCP preview_changes(ad, delete)·엑셀(ad · nad-… · delete · 빈칸), 키워드 삭제와 같은 미리보기→실행
+  - 실계정: 테스트 소재(밤/러브샷, nad-a001-01-000000601161753) 삭제 성공, 작업 #31
+  - 네이버는 DELETE /ncc/ads/{id}에 본문 없는 204를 돌려줌 → Workers httpx가 'JsNull' getReader 오류로 죽었음(삭제는 됐는데 기록 전 끊김)
+    → naver.py _req에서 본문 없음 = 성공 처리. 이미 없는 소재를 다시 지워도 204라 "성공"으로 나옴
 - 확장소재 등록(MCP create_ad_extension): 웹 확장소재 화면과 같은 검증(홍보문구·추가제목·추가설명·서브링크)
 - 작업 기록(MCP list_audit_logs): 누가 언제 무엇을 바꿨는지, 이름 포함
 
