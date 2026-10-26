@@ -140,15 +140,21 @@ class RealNaverClient:
         r = self._req("GET", "/keywordstool", params={"hintKeywords": ",".join(hints), "showDetail": "1"})
         return [_kwd_stat(k) for k in r.get("keywordList", [])]
 
-    def delete_keyword(self, keyword_id):
-        # ids 쿼리 방식(공식 샘플 Keywords.java)이 실계정에서 1018 "No permission"(10/20) → 명세의 /{id} 경로를 먼저 시도
+    def _delete(self, path, nid):
+        # 키워드는 ids 쿼리 방식(공식 샘플)이 실계정에서 1018 "No permission"(10/20) → 명세의 /{id} 경로를 먼저 시도
         try:
-            self._req("DELETE", f"/ncc/keywords/{keyword_id}")
+            self._req("DELETE", f"{path}/{nid}")
         except NaverApiError as e1:
             try:
-                self._req("DELETE", "/ncc/keywords", params={"ids": keyword_id})
+                self._req("DELETE", path, params={"ids": nid})
             except NaverApiError as e2:
                 raise NaverApiError(f"경로 방식: {e1} / ids 방식: {e2}")
+
+    def delete_keyword(self, keyword_id):
+        self._delete("/ncc/keywords", keyword_id)
+
+    def delete_ad(self, ad_id):
+        self._delete("/ncc/ads", ad_id)
 
     def stats(self, campaign_ids, since: date, until: date):
         # 명세(gh-pages assets/json/ncc-report.json): 일별(timeIncrement=1)은 단일 id만 지원, salesAmt는 VAT 포함
@@ -408,6 +414,10 @@ class MockNaverClient:
     def delete_keyword(self, keyword_id):
         if keyword_id in MOCK_FAIL_IDS or self.s["keywords"].pop(keyword_id, None) is None:
             raise NaverApiError("대상 키워드가 존재하지 않습니다")
+
+    def delete_ad(self, ad_id):
+        if self.s["ads"].pop(ad_id, None) is None:
+            raise NaverApiError("대상 소재가 존재하지 않습니다")
 
     def stats(self, campaign_ids, since: date, until: date):
         out, d = [], since

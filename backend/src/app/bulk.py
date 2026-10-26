@@ -20,7 +20,7 @@ ALLOWED_FIELDS = {
     "campaign": {"status", "daily_budget"},
     "adgroup": {"status", "bid_amt"},
     "keyword": {"status", "bid_amt", "create", "delete"},  # create: naver_id는 광고그룹, value는 "키워드" 또는 "키워드|입찰가"
-    "ad": {"status", "bid_amt"},
+    "ad": {"status", "bid_amt", "delete"},
     "ad_extension": {"status"},  # 파워링크 확장소재: ON/OFF만 (내용 수정은 유형별 구조 확인 후)
 }
 # shortcut: 입찰가·예산 한도는 가정값, 공식 문서 확인 후 수정
@@ -145,7 +145,7 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
                 bid_amt = int(bid) if bid else BID_RANGE["WEB_SITE"][0]  # 비우면 최저 입찰가(사용자 요청 10/20)
                 created = client.create_keyword(row.naver_id, kw, bid_amt, False)
             elif row.field == "delete":
-                client.delete_keyword(row.naver_id)
+                (client.delete_keyword if row.entity_type == "keyword" else client.delete_ad)(row.naver_id)
             else:
                 client.update(row.entity_type, row.naver_id, row.field, row.after)
         except NaverApiError as e:
@@ -155,8 +155,9 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
         if row.field == "create":
             audit.update(action="CREATE", naver_id=created["nccKeywordId"], field="keyword", after=kw)
         elif row.field == "delete":
-            db.execute(delete(AutoBidRule).where(AutoBidRule.workspace_id == m.workspace_id, AutoBidRule.keyword_naver_id == row.naver_id))
-            audit.update(action="DELETE", field="keyword", after=None)
+            if row.entity_type == "keyword":
+                db.execute(delete(AutoBidRule).where(AutoBidRule.workspace_id == m.workspace_id, AutoBidRule.keyword_naver_id == row.naver_id))
+            audit.update(action="DELETE", field=row.entity_type, after=None)
         row.status = "SUCCESS"
         db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=row.ad_account_id, job_id=job.id,
                         entity_type=row.entity_type, **audit))
@@ -401,7 +402,8 @@ def excel_template() -> bytes:
                  ["field", "status(ON/OFF), daily_budget(캠페인), bid_amt(광고그룹·키워드·쇼핑 상품소재), 확장소재는 status만"],
                  ["value", "10원 단위 숫자 또는 ON/OFF"],
                  ["키워드 등록", "entity_type=keyword, naver_id=광고그룹 ID(grp-...), field=create, value=키워드|입찰가 (입찰가 비우면 70원)"],
-                 ["키워드 삭제", "entity_type=keyword, naver_id=키워드 ID(kwd-...), field=delete, value 비움"]]:
+                 ["키워드 삭제", "entity_type=keyword, naver_id=키워드 ID(kwd-...), field=delete, value 비움"],
+                 ["소재 삭제", "entity_type=ad, naver_id=소재 ID(nad-...), field=delete, value 비움"]]:
         guide.append(line)
     buf = io.BytesIO()
     wb.save(buf)

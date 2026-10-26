@@ -159,7 +159,7 @@ CHANGE = {"type": "object", "required": ["entity_type", "naver_id", "field", "va
     "entity_type": {"enum": ["campaign", "adgroup", "keyword", "ad", "ad_extension"]},
     "naver_id": {"type": "string", "description": "대상 네이버 ID. 키워드 등록(create)이면 광고그룹 ID"},
     "field": {"enum": ["status", "bid_amt", "daily_budget", "create", "delete"],
-              "description": "status: ON/OFF, bid_amt: 입찰가(10원 단위), daily_budget: 캠페인 일예산, create: 키워드 등록, delete: 키워드 삭제"},
+              "description": "status: ON/OFF, bid_amt: 입찰가(10원 단위), daily_budget: 캠페인 일예산, create: 키워드 등록, delete: 키워드·소재 삭제"},
     "value": {"type": "string", "description": "새 값. create는 '키워드' 또는 '키워드|입찰가'(입찰가 비우면 70원), delete는 빈 문자열"},
     "ad_account_id": {"type": "integer"},
     "before": {"type": "string", "description": "목록 도구로 확인한 현재 값(같으면 미리보기에서 걸러짐)"},

@@ -57,7 +57,7 @@ export default function AdsPage() {
       <DataStatus data={data} />
       <DataTable key={tab} rows={rows} cols={cols} selected={sel} onSelect={setSel} loading={data.loading && !rows.length}
         toolbar={<BulkBar entityType="ad" rows={rows.filter((r) => sel.has(r.id))}
-          numberField={tab === "SHOPPING_PRODUCT_AD" ? { field: "bid_amt", label: "입찰가" } : undefined} />} />
+          numberField={tab === "SHOPPING_PRODUCT_AD" ? { field: "bid_amt", label: "입찰가" } : undefined} deletable />} />
     </>
   );
 }

@@ -295,6 +295,19 @@ def test_keyword_create_delete():
     assert {("CREATE", "keyword"), ("DELETE", "keyword")} <= acts
 
 
+def test_ad_delete():
+    owner, ws, acc = _account("addel@a.com", "6106")
+    job = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [
+        ch(acc, "ad", "ad-6106-pl1", "delete", product="WEB_SITE"),
+        ch(acc, "adgroup", "grp-6106-pl1", "delete", product="WEB_SITE"),  # 광고그룹 삭제는 허용 안 함
+    ]}).json()
+    assert [r["status"] for a in job["accounts"] for r in a["rows"]] == ["VALID", "INVALID"]
+    assert c.post(f"/workspaces/{ws}/bulk-jobs/{job['id']}/execute", headers=owner).json()["status"] == "DONE"
+    assert "ad-6106-pl1" not in store("6106")["ads"] and "ad-6106-pl2" in store("6106")["ads"]
+    acts = {(h["action"], h["field"]) for h in c.get(f"/workspaces/{ws}/audit-logs", headers=owner).json()}
+    assert ("DELETE", "ad") in acts
+
+
 def test_execute_in_chunks():
     from app import bulk
 
