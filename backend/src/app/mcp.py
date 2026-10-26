@@ -166,6 +166,10 @@ CHANGE = {"type": "object", "required": ["entity_type", "naver_id", "field", "va
     "product": {"enum": ["WEB_SITE", "SHOPPING"], "description": "캠페인·광고그룹 유형. 키워드 등록은 광고그룹 유형"},
     "ad_type": {"type": "string", "description": "소재 입찰가 변경 시 소재 유형"}}}
 
+KEYS = {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["ad_account_id", "naver_id"], "properties": {
+    "ad_account_id": {"type": "integer"}, "naver_id": {"type": "string", "description": "키워드 네이버 ID (list_keywords 결과)"},
+    "keyword": {"type": "string", "description": "키워드 문구(자동입찰 목록 표시용)"}}}}
+
 TOOLS = [
     {"name": "list_ad_accounts", "description": "내가 속한 조직과 조직별로 볼 수 있는 네이버 광고 계정 목록. 다른 도구의 workspace_id·ad_account_id는 여기서 얻는다.",
      "inputSchema": {"type": "object", "properties": {}}, "annotations": {"readOnlyHint": True}},
@@ -192,6 +196,26 @@ TOOLS = [
     {"name": "related_keywords", "description": "네이버 키워드 도구의 연관 키워드와 월간 검색수. hint는 띄어쓰기 없는 키워드, 쉼표로 최대 5개.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "hint"], "properties": {
          **ACC, "hint": {"type": "string"}}}, "annotations": {"readOnlyHint": True}},
+    {"name": "check_ranks", "description": "키워드의 지금 순위(PC·모바일 네이버 검색 화면에서 내 광고가 몇 위인지, 노출 안 되면 null). 한 번에 10개까지.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "keywords"], "properties": {**WS, "keywords": {**KEYS, "maxItems": 10}}},
+     "annotations": {"readOnlyHint": True}},
+    {"name": "list_auto_bids", "description": "조직의 자동입찰 규칙 목록(기기·목표 순위·최대 입찰가·마지막 실행 결과).",
+     "inputSchema": {"type": "object", "required": ["workspace_id"], "properties": WS}, "annotations": {"readOnlyHint": True}},
+    {"name": "set_auto_bid", "description": "키워드에 자동입찰 규칙을 만들거나 덮어쓴다(바로 저장). 10분마다 순위를 읽어 목표보다 아래면 입찰가를 20% 올리고 "
+     "위면 10% 내린다(최대 입찰가 이하). 한 번에 목표 순위로 가지 않고 몇십 분에 걸쳐 맞춘다. 조직당 20개까지. "
+     "기기·목표 순위·최대 입찰가를 사용자에게 확인받은 뒤 호출. enabled=false면 규칙을 남긴 채 중지.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "keywords", "device", "target_rank", "max_bid"], "properties": {
+         **WS, "keywords": KEYS, "device": {"enum": ["PC", "MOBILE"]},
+         "target_rank": {"type": "integer", "description": "목표 순위. PC 1~10, 모바일 1~5"},
+         "max_bid": {"type": "integer", "description": "최대 입찰가(70~100,000원, 10원 단위)"}, "enabled": {"type": "boolean"}}},
+     "annotations": {"destructiveHint": True}},
+    {"name": "delete_auto_bid", "description": "키워드의 자동입찰 규칙을 지운다(입찰가는 지금 값 그대로).",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "keywords"], "properties": {**WS, "keywords": KEYS}},
+     "annotations": {"destructiveHint": True}},
+    {"name": "run_auto_bids", "description": "자동입찰을 10분 기다리지 않고 지금 한 번 실행해 입찰가를 실제로 바꾼다. keywords를 주면 그 키워드 규칙만. "
+     "결과는 list_auto_bids의 last_result로 확인.",
+     "inputSchema": {"type": "object", "required": ["workspace_id"], "properties": {**WS, "keywords": KEYS}},
+     "annotations": {"destructiveHint": True}},
     {"name": "preview_changes", "description": "ON/OFF·입찰가·일예산 변경, 키워드 등록·삭제의 미리보기를 만든다. 아직 네이버에 반영되지 않는다. "
      "행마다 검증 결과(VALID/INVALID)가 나오니 사용자에게 보여 주고 승인을 받은 뒤 execute_job을 부른다.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "changes"], "properties": {
@@ -226,6 +250,16 @@ async def _call(db, user: User, name: str, a: dict):
         return await api.create_bulk_job(api.BulkIn(changes=a["changes"]), m=m, db=db)
     if name == "execute_job":
         return await api.execute_bulk_job(int(a["job_id"]), m=m, db=db)
+    if name == "check_ranks":
+        return await api.keyword_ranks(api.AutoBidKeysIn(keywords=a["keywords"]), m=m, db=db)
+    if name == "list_auto_bids":
+        return await api.list_auto_bids(m=m, db=db)
+    if name == "set_auto_bid":
+        return await api.set_auto_bids(api.AutoBidIn(**{k: v for k, v in a.items() if k != "workspace_id"}), m=m, db=db)
+    if name == "delete_auto_bid":
+        return await api.delete_auto_bids(api.AutoBidKeysIn(keywords=a["keywords"]), m=m, db=db)
+    if name == "run_auto_bids":
+        return await api.run_auto_bids(api.AutoBidKeysIn(keywords=a["keywords"]) if a.get("keywords") else None, m=m, db=db)
     acc = int(a["ad_account_id"])
     if name == "list_campaigns":
         return await api.naver_objects(acc, "campaigns", m=m, db=db)

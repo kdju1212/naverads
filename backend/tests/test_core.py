@@ -535,6 +535,17 @@ def test_mcp_oauth_and_tools():
     done, _ = call("execute_job", workspace_id=ws, job_id=job["id"])
     assert done["status"] == "DONE" and store("8008")["keywords"][kws[0]["naver_id"]]["bidAmt"] == 400
 
+    # 자동입찰: 순위 확인 → 규칙 저장 → 지금 실행. 원피스1(300→400원)은 Mock 검색 화면 4위, 목표 1위라 20% 올림
+    k = [{"ad_account_id": acc, "naver_id": kws[0]["naver_id"], "keyword": kws[0]["keyword"]}]
+    assert call("check_ranks", workspace_id=ws, keywords=k)[0][0]["PC"] == 4
+    assert call("set_auto_bid", workspace_id=ws, keywords=k, device="PC", target_rank=11, max_bid=1000)[1]  # PC는 10위까지
+    assert call("set_auto_bid", workspace_id=ws, keywords=k, device="PC", target_rank=1, max_bid=1000) == ({"ok": True}, False)
+    call("run_auto_bids", workspace_id=ws, keywords=k)
+    assert store("8008")["keywords"][kws[0]["naver_id"]]["bidAmt"] == 480
+    assert call("list_auto_bids", workspace_id=ws)[0][0]["last_result"] == "지금 4위 (목표 1위) · 400원 → 480원"
+    call("delete_auto_bid", workspace_id=ws, keywords=k)
+    assert call("list_auto_bids", workspace_id=ws)[0] == []
+
     # 다른 조직 사용자는 도구로도 못 본다
     other = user("mcp2@b.com")
     h = other
