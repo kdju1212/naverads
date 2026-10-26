@@ -203,7 +203,7 @@ TOOLS = [
     {"name": "list_ad_extensions", "description": "광고그룹의 확장소재 목록(유형·상태·검수 상태·내용).",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id"], "properties": {
          **ACC, "adgroup_id": {"type": "string", "description": "광고그룹 네이버 ID"}}}, "annotations": {"readOnlyHint": True}},
-    {"name": "related_keywords", "description": "네이버 키워드 도구의 연관 키워드와 월간 검색수. hint는 띄어쓰기 없는 키워드, 쉼표로 최대 5개.",
+    {"name": "related_keywords", "description": "네이버 키워드 도구의 연관 키워드와 월간 검색수(검색량 많은 순 상위 100개). hint는 띄어쓰기 없는 키워드, 쉼표로 최대 5개.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "hint"], "properties": {
          **ACC, "hint": {"type": "string"}}}, "annotations": {"readOnlyHint": True}},
     {"name": "check_ranks", "description": "키워드의 지금 순위(PC·모바일 네이버 검색 화면에서 내 광고가 몇 위인지, 노출 안 되면 null). 한 번에 10개까지.",
@@ -320,7 +320,7 @@ async def _call(db, user: User, name: str, a: dict):
         return await api.create_ad_extension(api.ExtensionIn(ad_account_id=acc, adgroup_naver_id=a["adgroup_id"], **{
             k: a[k] for k in ("ext_type", "heading", "description", "links") if k in a}), m=m, db=db)
     if name == "related_keywords":
-        return await api.keyword_tool(acc, a["hint"], m=m, db=db)
+        return (await api.keyword_tool(acc, a["hint"], m=m, db=db))[:100]  # 웹 화면과 같이 검색량 상위 100개
     raise HTTPException(400, f"알 수 없는 도구: {name}")
 
 
