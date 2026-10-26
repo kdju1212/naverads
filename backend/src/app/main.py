@@ -588,11 +588,43 @@ def _account_performance(db: Session, ids: set[int], since: date, until: date):
     names = dict(db.execute(select(AdAccount.id, AdAccount.name).where(AdAccount.id.in_(ids))).all())
     out = {i: {"ad_account_id": i, "name": names[i], "WEB_SITE": None, "SHOPPING": None} for i in ids}
     for acc, tp, imp, clk, cost, conv, rev in db.execute(q):
-        out[acc][tp] = {"impressions": imp, "clicks": clk, "cost": cost, "conversions": conv, "revenue": rev,
-                        "ctr": round(clk / imp * 100, 2) if imp else None, "cpc": round(cost / clk) if clk else None,
-                        # 매출 미제공(NULL)이면 ROAS도 NULL — 0과 구분
-                        "roas": round(rev / cost * 100, 1) if rev is not None and cost else None}
+        out[acc][tp] = _perf(imp, clk, cost, conv, rev)
     return list(out.values())
+
+
+def _perf(imp, clk, cost, conv, rev) -> dict:
+    return {"impressions": imp, "clicks": clk, "cost": cost, "conversions": conv, "revenue": rev,
+            "ctr": round(clk / imp * 100, 2) if imp else None, "cpc": round(cost / clk) if clk else None,
+            # 매출 미제공(NULL)이면 ROAS도 NULL — 0과 구분
+            "roas": round(rev / cost * 100, 1) if rev is not None and cost else None}
+
+
+class EntityPerfIn(BaseModel):
+    ad_account_id: int
+    ids: list[str]
+    since: date | None = None
+    until: date | None = None
+
+
+ENTITY_PERF_LIMIT = 500  # 100개당 외부 호출 1번 — 무료 플랜 요청당 한도 안에서
+
+
+@app.post("/workspaces/{ws_id}/performance/entities")
+async def performance_entities(body: EntityPerfIn, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    """키워드·광고그룹·소재별 기간 합계. 서버에 저장하지 않고 네이버에서 바로 조회한다. 기간을 비우면 어제까지 7일."""
+    if not 1 <= len(body.ids) <= ENTITY_PERF_LIMIT:
+        raise HTTPException(400, f"성과 조회는 한 번에 1~{ENTITY_PERF_LIMIT}개입니다")
+    until = body.until or date.today() - timedelta(days=1)
+    since = body.since or until - timedelta(days=6)
+    if since > until or (until - since).days > 92:
+        raise HTTPException(400, "기간은 93일 이내")
+    stats = _naver(db, m, body.ad_account_id, lambda c: c.entity_stats(body.ids, since, until))
+    out = []
+    for i in body.ids:
+        x = stats.get(i, {})
+        out.append({"naver_id": i, **_perf(x.get("impCnt", 0), x.get("clkCnt", 0), x.get("salesAmt", 0), x.get("ccnt", 0),
+                                           x.get("convAmt")), "avg_rank": x.get("avgRnk")})
+    return {"since": since, "until": until, "rows": out}
 
 
 @app.get("/workspaces/{ws_id}/performance/accounts")

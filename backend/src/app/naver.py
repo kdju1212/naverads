@@ -163,6 +163,22 @@ class RealNaverClient:
                             "ccnt": s.get("ccnt"), "convAmt": s.get("convAmt")})
         return out
 
+    def entity_stats(self, ids, since: date, until: date) -> dict:
+        """키워드·광고그룹·소재 여러 개의 기간 합계(명세 getBulkEntityStatUsingGET). {id: 수치}"""
+        fields = json.dumps(["impCnt", "clkCnt", "salesAmt", "ccnt", "convAmt", "avgRnk"])
+        time_range = json.dumps({"since": since.isoformat(), "until": until.isoformat()})
+        out = {}
+        for i in range(0, len(ids), 100):
+            # shortcut: ids는 쉼표로, 응답은 data 목록이라고 가정(실계정 미확인), 실계정 응답이 다르면 여기만 고친다
+            r = self._req("GET", "/stats", params={"ids": ",".join(ids[i:i + 100]), "fields": fields, "timeRange": time_range})
+            out.update({x["id"]: x for x in r.get("data", [])})
+        return out
+
+    def create_ad(self, adgroup_id, ad_type, ad, assets):
+        # 명세 AdRequest. 검수·확인 전에 노출되지 않게 OFF로 만든다. shortcut: 실계정 미확인
+        body = {"nccAdgroupId": adgroup_id, "type": ad_type, "ad": ad, "userLock": True, **({"assets": assets} if assets else {})}
+        return self._req("POST", "/ncc/ads", json=body)
+
     def serp_ads(self, keyword, device) -> list[str]:
         """검색 화면의 파워링크 소재 ID(nad-...)를 노출 순서대로. Cloudflare에서도 한국 화면으로 보이는 것 확인(10/23).
         shortcut: 화면 HTML에 소재 ID가 순서대로 있다는 데 기대고 있다, 네이버가 화면을 바꾸면 여기만 고친다"""
@@ -406,6 +422,26 @@ class MockNaverClient:
                             "ccnt": conv, "convAmt": conv * r.randint(20000, 60000)})
             d += timedelta(days=1)
         return out
+
+    def entity_stats(self, ids, since: date, until: date) -> dict:
+        out = {}
+        for i in ids:
+            if i in MOCK_FAIL_IDS:
+                raise NaverApiError("통계 조회 실패")
+            r = random.Random(f"{i}{since}{until}")
+            imp = r.randint(0, 3000)
+            clk = imp * r.randint(0, 5) // 100
+            out[i] = {"id": i, "impCnt": imp, "clkCnt": clk, "salesAmt": clk * r.randint(200, 800), "ccnt": clk // 20,
+                      "convAmt": clk // 20 * 30000, "avgRnk": round(r.uniform(1, 8), 1)}
+        return out
+
+    def create_ad(self, adgroup_id, ad_type, ad, assets):
+        if adgroup_id not in self.s["adgroups"]:
+            raise NaverApiError("광고그룹이 없습니다")
+        aid = f"nad-{self.customer_id}-{len(self.s['ads']) + 1}"
+        self.s["ads"][aid] = {"nccAdId": aid, "nccAdgroupId": adgroup_id, "type": ad_type, "userLock": True,
+                              "inspectStatus": "UNDER_REVIEW", "ad": ad, **({"assets": assets} if assets else {})}
+        return dict(self.s["ads"][aid])
 
     def serp_ads(self, keyword, device):
         # 경쟁 광고 입찰가가 MOCK_RIVALS인 가상 화면: 입찰가 높은 순, 같으면 경쟁 광고가 먼저

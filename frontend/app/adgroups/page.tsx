@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { BulkBar } from "@/components/BulkBar";
 import { Col, DataTable } from "@/components/DataTable";
 import { DataStatus } from "@/components/DataStatus";
+import { usePerf } from "@/components/PerfCheck";
 import { Badge, Button, PageTitle } from "@/components/ui";
 import { downloadCsv, fmt, PRODUCT_LABEL, servingLabel } from "@/lib/api";
 import { NAdGroup, useNaverData } from "@/lib/naverData";
@@ -21,6 +22,7 @@ export default function AdGroupsPage() {
   const { product, accountName } = useApp();
   const data = useNaverData();
   const [sel, setSel] = useState<Set<string>>(new Set());
+  const perf = usePerf<NAdGroup>();
   const rows = useMemo(() => data.adgroups.filter((g) => !product || g.adgroup_type === product), [data.adgroups, product]);
   const campById = useMemo(() => new Map(data.campaigns.map((c) => [c.naver_id, c])), [data.campaigns]);
   // 키워드 등록 엑셀에 넣을 광고그룹 ID를 찾기 쉽게: 상단 계정·유형 필터가 적용된 전체 목록
@@ -40,6 +42,7 @@ export default function AdGroupsPage() {
       render: (r) => <span className={r.status === "OFF" || (r.serving && r.serving !== "ELIGIBLE") ? "text-warning" : ""}>{serving(r)}</span> },
     { key: "budget", label: "하루예산", num: true, value: (r) => r.daily_budget, render: (r) => (r.daily_budget == null ? "제한 없음" : fmt(r.daily_budget, "원")) },
     { key: "bid", label: "기본 입찰가", num: true, value: (r) => r.bid_amt, render: (r) => fmt(r.bid_amt, "원") },
+    ...perf.cols,
   ];
   return (
     <>
@@ -48,6 +51,7 @@ export default function AdGroupsPage() {
       <DataTable rows={rows} cols={cols} selected={sel} onSelect={setSel} loading={data.loading && !rows.length}
         toolbar={
           <>
+            {perf.button(rows.filter((r) => sel.has(r.id)))}
             <BulkBar entityType="adgroup" rows={rows.filter((r) => sel.has(r.id))} numberField={{ field: "bid_amt", label: "입찰가" }} />
             <Button variant="secondary" disabled={rows.length === 0} onClick={download}>다운로드 (엑셀)</Button>
           </>

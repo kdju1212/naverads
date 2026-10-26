@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import select
 
-from . import main as api
+from . import bulk, main as api
 from .access import membership_of, user_from_header
 from .db import SessionLocal
 from .models import User
@@ -179,6 +179,16 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["workspace_id", "since", "until"], "properties": {
          **WS, **PERIOD, "product": {"enum": ["WEB_SITE", "SHOPPING"], "description": "파워링크(WEB_SITE)·쇼핑검색만 보려면"}}},
      "annotations": {"readOnlyHint": True}},
+    {"name": "get_entity_performance", "description": "키워드·광고그룹·소재별 성과 합계(노출·클릭·비용·전환·매출·CTR·CPC·ROAS·평균 노출 순위). "
+     "adgroup_id를 주면 그 광고그룹의 키워드 전체(키워드 문구·상태·입찰가 포함), ids를 주면 그 대상들(최대 500개). 기간을 비우면 어제까지 7일. 네이버에서 바로 조회.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id"], "properties": {
+         **ACC, "since": PERIOD["since"], "until": PERIOD["until"], "adgroup_id": {"type": "string", "description": "광고그룹 네이버 ID"},
+         "ids": {"type": "array", "items": {"type": "string"}, "description": "캠페인·광고그룹·키워드·소재 네이버 ID들"}}},
+     "annotations": {"readOnlyHint": True}},
+    {"name": "list_audit_logs", "description": "작업 기록(누가 언제 무엇을 바꿨는지: 대량 작업·자동입찰·등록·삭제). 최신순.",
+     "inputSchema": {"type": "object", "required": ["workspace_id"], "properties": {
+         **WS, "ad_account_id": {"type": "integer", "description": "이 광고 계정만"}, "limit": {"type": "integer", "description": "개수(기본 50, 최대 500)"}}},
+     "annotations": {"readOnlyHint": True}},
     {"name": "list_campaigns", "description": "광고 계정의 캠페인(파워링크·쇼핑검색) 목록과 상태·일예산. 네이버에서 바로 조회.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id"], "properties": ACC}, "annotations": {"readOnlyHint": True}},
     {"name": "list_adgroups", "description": "캠페인의 광고그룹 목록과 상태·입찰가·하루예산·운영 상태.",
@@ -216,6 +226,22 @@ TOOLS = [
      "결과는 list_auto_bids의 last_result로 확인.",
      "inputSchema": {"type": "object", "required": ["workspace_id"], "properties": {**WS, "keywords": KEYS}},
      "annotations": {"destructiveHint": True}},
+    {"name": "create_ad", "description": "파워링크 광고그룹에 소재를 등록한다(바로 실행, OFF 상태로 만들어져 검수 후 사용자가 켬). "
+     "먼저 제목·설명·URL 초안을 사용자에게 보여 주고 승인받은 뒤 호출. RSA_AD(반응형)는 제목 여러 개·설명 여러 개, TEXT_45는 첫 제목·설명만 쓴다. "
+     "글자 수·개수 제한은 네이버가 검사해 오류로 알려 준다(보통 제목 15자, 설명 45자).",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id", "headlines", "descriptions", "pc_url"], "properties": {
+         **ACC, "adgroup_id": {"type": "string"}, "ad_type": {"enum": ["RSA_AD", "TEXT_45"], "description": "기본 RSA_AD"},
+         "headlines": {"type": "array", "items": {"type": "string"}}, "descriptions": {"type": "array", "items": {"type": "string"}},
+         "pc_url": {"type": "string", "description": "PC 연결 URL"}, "mobile_url": {"type": "string", "description": "비우면 PC URL"}}},
+     "annotations": {"destructiveHint": True}},
+    {"name": "create_ad_extension", "description": "파워링크 광고그룹에 확장소재를 등록한다(바로 실행). 사용자 승인 후 호출. "
+     "DESCRIPTION(홍보문구: heading은 할인·사은품·추가선물증정·이벤트·신상품 중 하나, description 14자), HEADLINE(추가제목: heading에 15자), "
+     "DESCRIPTION_EXTRA(추가설명: description 45자), SUB_LINKS(서브링크: links [{name, final}]).",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id", "ext_type"], "properties": {
+         **ACC, "adgroup_id": {"type": "string"}, "ext_type": {"enum": ["DESCRIPTION", "HEADLINE", "DESCRIPTION_EXTRA", "SUB_LINKS"]},
+         "heading": {"type": "string"}, "description": {"type": "string"},
+         "links": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "final": {"type": "string"}}}}}},
+     "annotations": {"destructiveHint": True}},
     {"name": "preview_changes", "description": "ON/OFF·입찰가·일예산 변경, 키워드 등록·삭제의 미리보기를 만든다. 아직 네이버에 반영되지 않는다. "
      "행마다 검증 결과(VALID/INVALID)가 나오니 사용자에게 보여 주고 승인을 받은 뒤 execute_job을 부른다.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "changes"], "properties": {
@@ -250,6 +276,10 @@ async def _call(db, user: User, name: str, a: dict):
         return await api.create_bulk_job(api.BulkIn(changes=a["changes"]), m=m, db=db)
     if name == "execute_job":
         return await api.execute_bulk_job(int(a["job_id"]), m=m, db=db)
+    if name == "list_audit_logs":
+        logs = (await api.audit_logs(None, a.get("ad_account_id"), m=m, db=db))[:min(int(a.get("limit") or 50), 500)]
+        names = dict(db.execute(select(User.id, User.name).where(User.id.in_({x["user_id"] for x in logs}))).all())
+        return [{**x, "user": names.get(x["user_id"])} for x in logs]
     if name == "check_ranks":
         return await api.keyword_ranks(api.AutoBidKeysIn(keywords=a["keywords"]), m=m, db=db)
     if name == "list_auto_bids":
@@ -272,6 +302,23 @@ async def _call(db, user: User, name: str, a: dict):
         return [ad_row(acc, x) for x in api._naver(db, m, acc, lambda c: c.list_ads(a["adgroup_id"]))]
     if name == "list_ad_extensions":
         return [extension_row(acc, x) for x in api._naver(db, m, acc, lambda c: c.list_ad_extensions(a["adgroup_id"]))]
+    if name == "get_entity_performance":
+        kws = {}
+        if a.get("adgroup_id"):
+            kws = {k["nccKeywordId"]: {"keyword": k["keyword"], "status": _status(k), "bid_amt": k["bidAmt"]}
+                   for k in api._naver(db, m, acc, lambda c: c.list_keywords(a["adgroup_id"]))}
+            if not kws:
+                return {"rows": []}
+        body = api.EntityPerfIn(ad_account_id=acc, ids=list(kws) or a.get("ids") or [], since=a.get("since"), until=a.get("until"))
+        r = await api.performance_entities(body, m=m, db=db)
+        r["rows"] = [{**kws.get(x["naver_id"], {}), **x} for x in r["rows"]]
+        return r
+    if name == "create_ad":
+        return bulk.create_ad(db, m, acc, a["adgroup_id"], a.get("ad_type") or "RSA_AD", a["headlines"], a["descriptions"],
+                              a["pc_url"], a.get("mobile_url") or "")
+    if name == "create_ad_extension":
+        return await api.create_ad_extension(api.ExtensionIn(ad_account_id=acc, adgroup_naver_id=a["adgroup_id"], **{
+            k: a[k] for k in ("ext_type", "heading", "description", "links") if k in a}), m=m, db=db)
     if name == "related_keywords":
         return await api.keyword_tool(acc, a["hint"], m=m, db=db)
     raise HTTPException(400, f"알 수 없는 도구: {name}")

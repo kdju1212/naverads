@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from .access import accessible_account_ids
 from .models import AdAccount, AuditLog, AutoBidRule, BulkJob, BulkJobRow, Membership, NaverApiCredential, WorkspaceAdAccount, now
-from .naver import NaverApiError, client_for, extension_row
+from .naver import NaverApiError, ad_row, client_for, extension_row
 from .security import decrypt
 
 ALLOWED_FIELDS = {
@@ -324,6 +324,32 @@ def create_extension(db: Session, m: Membership, account_id: int, adgroup_naver_
         row["payload"] = content
     db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=account_id, action="CREATE",
                     entity_type="ad_extension", naver_id=row["naver_id"], field="ext_type", after=row["ext_type"]))
+    db.commit()
+    return row
+
+
+def create_ad(db: Session, m: Membership, account_id: int, adgroup_naver_id: str, ad_type: str, headlines: list[str],
+              descriptions: list[str], pc_url: str, mobile_url: str) -> dict:
+    """소재 등록(OFF로 생성). 확장소재처럼 행 단위 미리보기 없이 바로 실행하고, 권한 확인·감사 로그는 같다.
+    RSA_AD(반응형)는 제목·설명을 assets로, TEXT_45는 첫 제목·설명만 ad에 넣는다. 글자 수·개수 검사는 네이버에 맡긴다."""
+    _check_edit(db, m, account_id)
+    headlines, descriptions = [h.strip() for h in headlines if h.strip()], [d.strip() for d in descriptions if d.strip()]
+    if not headlines or not descriptions or not pc_url.startswith("http"):
+        raise HTTPException(400, "제목·설명을 1개 이상, 연결 URL은 http로 시작하게 입력하세요")
+    ad = {"pc": {"final": pc_url}, "mobile": {"final": mobile_url or pc_url}}
+    assets = None
+    if ad_type == "RSA_AD":
+        assets = ([{"linkType": "HEADLINE", "assetData": {"text": h}} for h in headlines]
+                  + [{"linkType": "DESCRIPTION", "assetData": {"text": d}} for d in descriptions])
+    else:
+        ad |= {"headline": headlines[0], "description": descriptions[0]}
+    try:
+        a = _client(db, m.workspace_id, account_id).create_ad(adgroup_naver_id, ad_type, ad, assets)
+    except NaverApiError as err:
+        raise HTTPException(400, f"네이버 소재 등록 실패: {err}")
+    row = ad_row(account_id, a)
+    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=account_id, action="CREATE",
+                    entity_type="ad", naver_id=row["naver_id"], field="ad_type", after=ad_type))
     db.commit()
     return row
 
