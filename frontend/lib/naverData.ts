@@ -130,7 +130,8 @@ const empty: NaverData = { campaigns: [], adgroups: [], keywords: [], ads: [], e
 /** 보관본을 바로 고친다(네이버에 반영한 변경을 다시 받지 않고 화면에 보이게). */
 export async function patchAccount(wsId: number, accountId: number, fn: (d: AccountData) => AccountData) {
   const k = keyOf(wsId, accountId);
-  const cur = entries.get(k)?.data;
+  // 작업 화면을 새로 불러왔으면(배포 직후 이동 등) 메모리가 비어 있다 → 브라우저 보관본을 고친다
+  const cur = entries.get(k)?.data ?? await loadLocal<AccountData>(k);
   if (!cur) return;
   const data = fn(cur);
   setEntry(k, { data });
