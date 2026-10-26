@@ -295,6 +295,23 @@ def test_keyword_create_delete():
     assert {("CREATE", "keyword"), ("DELETE", "keyword")} <= acts
 
 
+def test_master_report_limit_clears_and_retries():
+    from app.naver import NaverApiError, RealNaverClient
+
+    calls = []
+
+    def fake_req(method, uri, **kw):
+        calls.append((method, uri))
+        if len(calls) == 1:
+            raise NaverApiError('400 {"detail":"exceeded limit of \'100\' numbers of \'job\'"}')
+        return {"id": "job-1"}
+
+    cl = RealNaverClient("k", "s", "1")
+    cl._req = fake_req
+    assert cl.create_master_report("Keyword") == {"id": "job-1"}
+    assert calls == [("POST", "/master-reports"), ("DELETE", "/master-reports"), ("POST", "/master-reports")]
+
+
 def test_ad_delete():
     owner, ws, acc = _account("addel@a.com", "6106")
     job = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [

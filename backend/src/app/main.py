@@ -297,6 +297,13 @@ async def get_master_report(account_id: int, job_id: str, m: Membership = Depend
     return _naver(db, m, account_id, lambda c: c.get_master_report(job_id))
 
 
+@app.delete("/workspaces/{ws_id}/ad-accounts/{account_id}/master-reports/{job_id}")
+async def delete_master_report(account_id: int, job_id: str, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    """다 받은 보고서를 지운다(네이버 계정당 100개 한도)."""
+    _naver(db, m, account_id, lambda c: c.delete_master_report(job_id))
+    return {"ok": True}
+
+
 def master_file_source(db: Session, authorization: str, ws_id: int, account_id: int, job_id: str) -> dict:
     """{"url", "headers"} 또는 {"text"}(Mock). Workers 진입점(src/main.py)이 직접 불러 JS fetch로 본문을 넘긴다."""
     m = membership_of(db, ws_id, user_from_header(db, authorization))

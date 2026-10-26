@@ -206,10 +206,21 @@ class RealNaverClient:
 
     # 마스터 보고서(명세: gh-pages assets/json/master-report.json). 파일은 헤더 없는 TSV, 칸 구성은 브라우저(lib/naverData.ts) 참고
     def create_master_report(self, item):
-        return self._req("POST", "/master-reports", json={"item": item})
+        try:
+            return self._req("POST", "/master-reports", json={"item": item})
+        except NaverApiError as e:
+            # 계정당 보고서 100개 한도("exceeded limit of '100' numbers of 'job'", 10/26). 다 받은 보고서는 화면이 지우지만
+            # 그 전에 쌓인 것·지우기 실패분을 비운다. shortcut: 전부 지우므로 같은 계정에서 동시에 받던 보고서가 끊길 수 있음(다시 새로고침하면 됨)
+            if "exceeded limit" not in str(e):
+                raise
+            self._req("DELETE", "/master-reports")
+            return self._req("POST", "/master-reports", json={"item": item})
 
     def get_master_report(self, job_id):
         return self._req("GET", f"/master-reports/{job_id}")
+
+    def delete_master_report(self, job_id):
+        self._req("DELETE", f"/master-reports/{job_id}")
 
     def master_file(self, job) -> dict:
         """다운로드 주소 + 서명 헤더. 서명 uri는 쿼리를 뺀 경로(공식 샘플의 /report-download).
@@ -386,6 +397,9 @@ class MockNaverClient:
 
     def get_master_report(self, job_id):
         return {"id": job_id, "item": job_id.removeprefix("mock-"), "status": "BUILT", "downloadUrl": "mock"}
+
+    def delete_master_report(self, job_id):
+        pass
 
     def master_file(self, job) -> dict:
         """실계정 파일과 같은 칸 구성(헤더 없는 TSV)."""

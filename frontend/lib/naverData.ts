@@ -36,14 +36,19 @@ const withId = <T extends { naver_id: string }>(rows: T[]) => rows.map((r) => ({
 
 async function report(base: string, item: string): Promise<string[][]> {
   const job = await api<{ id: string; status: string }>(`${base}/master-reports?item=${item}`, { method: "POST" });
-  for (let i = 0; i < POLL_TRIES; i++) {
-    const j = await api<{ status: string }>(`${base}/master-reports/${job.id}`);
-    if (j.status === "BUILT") return parseTsv(await (await api<Blob>(`${base}/master-reports/${job.id}/file`, { raw: true })).text());
-    if (j.status === "NONE") return []; // 해당 항목이 없는 계정
-    if (j.status === "ERROR") throw new Error(`네이버가 ${item} 보고서를 만들지 못했습니다`);
-    await sleep(POLL_MS);
+  try {
+    for (let i = 0; i < POLL_TRIES; i++) {
+      const j = await api<{ status: string }>(`${base}/master-reports/${job.id}`);
+      if (j.status === "BUILT") return parseTsv(await (await api<Blob>(`${base}/master-reports/${job.id}/file`, { raw: true })).text());
+      if (j.status === "NONE") return []; // 해당 항목이 없는 계정
+      if (j.status === "ERROR") throw new Error(`네이버가 ${item} 보고서를 만들지 못했습니다`);
+      await sleep(POLL_MS);
+    }
+    throw new Error(`${item} 보고서가 너무 오래 걸립니다. 잠시 후 새로고침하세요`);
+  } finally {
+    // 네이버는 계정당 보고서 100개까지라 다 쓴 보고서는 지운다. 실패해도 다음 생성 때 서버가 비운다
+    api(`${base}/master-reports/${job.id}`, { method: "DELETE" }).catch(() => {});
   }
-  throw new Error(`${item} 보고서가 너무 오래 걸립니다. 잠시 후 새로고침하세요`);
 }
 
 async function lookup<T extends { naver_id: string }>(base: string, kind: string, ids: string[]): Promise<(T & { id: string })[]> {
