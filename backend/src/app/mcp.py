@@ -16,7 +16,7 @@ from . import main as api
 from .access import membership_of, user_from_header
 from .db import SessionLocal
 from .models import User
-from .naver import _status, adgroup_row
+from .naver import _status, ad_row, adgroup_row, extension_row
 from .security import TOKEN_TTL, make_token, read_payload, sign_payload, verify_password
 
 router = APIRouter()
@@ -183,6 +183,12 @@ TOOLS = [
     {"name": "list_keywords", "description": "광고그룹의 키워드 목록과 상태·입찰가.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id"], "properties": {
          **ACC, "adgroup_id": {"type": "string", "description": "광고그룹 네이버 ID"}}}, "annotations": {"readOnlyHint": True}},
+    {"name": "list_ads", "description": "광고그룹의 소재 목록(유형·상태·검수 상태·문구, 쇼핑 상품소재는 입찰가). 소재 입찰가 변경 시 ad_type을 여기서 얻는다.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id"], "properties": {
+         **ACC, "adgroup_id": {"type": "string", "description": "광고그룹 네이버 ID"}}}, "annotations": {"readOnlyHint": True}},
+    {"name": "list_ad_extensions", "description": "광고그룹의 확장소재 목록(유형·상태·검수 상태·내용).",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id"], "properties": {
+         **ACC, "adgroup_id": {"type": "string", "description": "광고그룹 네이버 ID"}}}, "annotations": {"readOnlyHint": True}},
     {"name": "related_keywords", "description": "네이버 키워드 도구의 연관 키워드와 월간 검색수. hint는 띄어쓰기 없는 키워드, 쉼표로 최대 5개.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "hint"], "properties": {
          **ACC, "hint": {"type": "string"}}}, "annotations": {"readOnlyHint": True}},
@@ -228,6 +234,10 @@ async def _call(db, user: User, name: str, a: dict):
     if name == "list_keywords":
         return [{"naver_id": k["nccKeywordId"], "keyword": k["keyword"], "status": _status(k), "bid_amt": k["bidAmt"],
                  "use_group_bid": k.get("useGroupBidAmt")} for k in api._naver(db, m, acc, lambda c: c.list_keywords(a["adgroup_id"]))]
+    if name == "list_ads":
+        return [ad_row(acc, x) for x in api._naver(db, m, acc, lambda c: c.list_ads(a["adgroup_id"]))]
+    if name == "list_ad_extensions":
+        return [extension_row(acc, x) for x in api._naver(db, m, acc, lambda c: c.list_ad_extensions(a["adgroup_id"]))]
     if name == "related_keywords":
         return await api.keyword_tool(acc, a["hint"], m=m, db=db)
     raise HTTPException(400, f"알 수 없는 도구: {name}")

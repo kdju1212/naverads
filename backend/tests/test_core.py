@@ -523,6 +523,9 @@ def test_mcp_oauth_and_tools():
     groups, _ = call("list_adgroups", workspace_id=ws, ad_account_id=acc, campaign_id=camps[0]["naver_id"])
     kws, _ = call("list_keywords", workspace_id=ws, ad_account_id=acc, adgroup_id=groups[0]["naver_id"])
     assert kws[0]["bid_amt"] == 300
+    ads, _ = call("list_ads", workspace_id=ws, ad_account_id=acc, adgroup_id=groups[0]["naver_id"])
+    exts, _ = call("list_ad_extensions", workspace_id=ws, ad_account_id=acc, adgroup_id=groups[0]["naver_id"])
+    assert ads[0]["ad_type"] == "TEXT_45" and exts[0]["ext_type"] == "SUB_LINKS"
     perf, err = call("get_performance", workspace_id=ws)
     assert not err
 
