@@ -1,3 +1,4 @@
+import json
 import io
 import os
 
@@ -466,3 +467,73 @@ def test_seo_fetch_blocks():
         assert r.status_code == 400, bad
     assert "스마트스토어" in c.get(f"/workspaces/{ws}/seo-fetch", params={"url": "https://smartstore.naver.com/a"}, headers=u).json()["detail"]
     assert c.get(f"/workspaces/{ws}/seo-fetch", params={"url": "https://a.com"}, headers=user("seo2@b.com")).status_code == 403
+
+
+def test_mcp_oauth_and_tools():
+    import base64
+    import hashlib
+    from urllib.parse import parse_qs, urlparse
+
+    owner = user("mcp@a.com")
+    ws = c.post("/workspaces", json={"name": "M"}, headers=owner).json()["id"]
+    cred = c.post(f"/workspaces/{ws}/credentials", json={"label": "m", "api_key": "k", "secret_key": "s"}, headers=owner).json()["id"]
+    acc = c.post(f"/workspaces/{ws}/ad-accounts", json={"credential_id": cred, "customer_id": "8008", "name": "m"}, headers=owner).json()["id"]
+
+    # 토큰 없으면 401 + 로그인 안내 주소
+    r = c.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    assert r.status_code == 401 and "resource_metadata=" in r.headers["www-authenticate"]
+    assert c.get("/.well-known/oauth-authorization-server").json()["registration_endpoint"].endswith("/oauth/register")
+
+    # 등록: Claude·localhost 외 주소는 거부
+    assert c.post("/oauth/register", json={"redirect_uris": ["https://evil.com/cb"]}).status_code == 400
+    cb = "http://localhost:3333/callback"
+    client_id = c.post("/oauth/register", json={"redirect_uris": [cb]}).json()["client_id"]
+
+    verifier = "v" * 50
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    q = {"client_id": client_id, "redirect_uri": cb, "code_challenge": challenge, "code_challenge_method": "S256", "state": "s1"}
+    assert c.get("/oauth/authorize", params={**q, "redirect_uri": "http://localhost:9/other"}).status_code == 400  # 등록 안 한 주소
+    assert c.get("/oauth/authorize", params=q).status_code == 200
+    assert c.post("/oauth/authorize", data={**q, "email": "mcp@a.com", "password": "wrong"}, follow_redirects=False).status_code == 401
+    r = c.post("/oauth/authorize", data={**q, "email": "mcp@a.com", "password": "password1"}, follow_redirects=False)
+    loc = urlparse(r.headers["location"])
+    code = parse_qs(loc.query)["code"][0]
+    assert r.status_code == 302 and parse_qs(loc.query)["state"] == ["s1"]
+
+    tok = {"grant_type": "authorization_code", "code": code, "redirect_uri": cb, "client_id": client_id}
+    assert c.post("/oauth/token", data={**tok, "code_verifier": "x" * 50}).status_code == 400  # PKCE 불일치
+    t = c.post("/oauth/token", data={**tok, "code_verifier": verifier}).json()
+    assert c.post("/oauth/token", data={"grant_type": "refresh_token", "refresh_token": code}).status_code == 400  # 코드는 갱신 토큰이 아님
+    t = c.post("/oauth/token", data={"grant_type": "refresh_token", "refresh_token": t["refresh_token"]}).json()
+    h = {"Authorization": f"Bearer {t['access_token']}"}
+    assert c.get(f"/workspaces/{ws}/ad-accounts", headers={"Authorization": f"Bearer {t['refresh_token']}"}).status_code == 401
+
+    def call(name, **args):
+        r = c.post("/mcp", headers=h, json={"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": name, "arguments": args}})
+        res = r.json()["result"]
+        return json.loads(res["content"][0]["text"]), res["isError"]
+
+    init = c.post("/mcp", headers=h, json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}}).json()
+    assert init["result"]["protocolVersion"] == "2025-06-18"
+    assert c.post("/mcp", headers=h, json={"jsonrpc": "2.0", "method": "notifications/initialized"}).status_code == 202
+
+    accounts, _ = call("list_ad_accounts")
+    assert accounts[0]["id"] == ws and accounts[0]["accounts"][0]["id"] == acc
+    camps, _ = call("list_campaigns", workspace_id=ws, ad_account_id=acc)
+    groups, _ = call("list_adgroups", workspace_id=ws, ad_account_id=acc, campaign_id=camps[0]["naver_id"])
+    kws, _ = call("list_keywords", workspace_id=ws, ad_account_id=acc, adgroup_id=groups[0]["naver_id"])
+    assert kws[0]["bid_amt"] == 300
+    perf, err = call("get_performance", workspace_id=ws)
+    assert not err
+
+    job, _ = call("preview_changes", workspace_id=ws, changes=[
+        {"entity_type": "keyword", "naver_id": kws[0]["naver_id"], "field": "bid_amt", "value": "400", "ad_account_id": acc, "before": "300"}])
+    assert job["counts"]["VALID"] == 1 and store("8008")["keywords"][kws[0]["naver_id"]]["bidAmt"] == 300  # 미리보기는 반영 안 함
+    done, _ = call("execute_job", workspace_id=ws, job_id=job["id"])
+    assert done["status"] == "DONE" and store("8008")["keywords"][kws[0]["naver_id"]]["bidAmt"] == 400
+
+    # 다른 조직 사용자는 도구로도 못 본다
+    other = user("mcp2@b.com")
+    h = other
+    assert call("list_campaigns", workspace_id=ws, ad_account_id=acc) == ({"error": "이 조직에 접근 권한이 없습니다"}, True)
+    assert call("get_daily_performance", workspace_id=ws)[1]  # 인자 누락

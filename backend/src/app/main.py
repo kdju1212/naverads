@@ -658,3 +658,9 @@ async def subscription(m: Membership = Depends(admin_membership), db: Session = 
         WorkspaceAdAccount.workspace_id == m.workspace_id, WorkspaceAdAccount.status == "CONNECTED"))
     return {"plan": plan.name, "status": sub.status, "trial_ends_at": sub.trial_ends_at, "billable_accounts": billable,
             "price_per_account": plan.price_per_account, "monthly_total": billable * plan.price_per_account}
+
+
+# Claude 커넥터(MCP)는 위 엔드포인트 함수들을 불러 쓰므로 맨 아래에서 등록
+from . import mcp  # noqa: E402
+
+app.include_router(mcp.router)

@@ -2,6 +2,7 @@ import base64
 import functools
 import hashlib
 import hmac
+import json
 import os
 import secrets
 import time
@@ -70,6 +71,24 @@ def read_token(token: str) -> int | None:
     if not hmac.compare_digest(sig, _sign(f"{uid}.{exp}")) or int(exp) < time.time():
         return None
     return int(uid)
+
+
+def sign_payload(data: dict, ttl: int | None = None) -> str:
+    """MCP 로그인(OAuth)의 클라이언트 ID·인가 코드·갱신 토큰. DB 없이 서명으로 검증한다(점 1개라 로그인 토큰과 섞이지 않음)."""
+    if ttl:
+        data = {**data, "exp": int(time.time()) + ttl}
+    body = base64.urlsafe_b64encode(json.dumps(data, separators=(",", ":")).encode()).decode().rstrip("=")
+    return f"{body}.{_sign('p.' + body)}"
+
+
+def read_payload(token: str, kind: str) -> dict | None:
+    body, _, sig = token.partition(".")
+    if not sig or not hmac.compare_digest(sig, _sign("p." + body)):
+        return None
+    data = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+    if data.get("t") != kind or data.get("exp", float("inf")) < time.time():
+        return None
+    return data
 
 
 def encrypt(s: str) -> str:
