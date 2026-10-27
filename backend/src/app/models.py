@@ -20,6 +20,14 @@ class User(Base):
     name: Mapped[str] = mapped_column(String(100))
 
 
+class LoginFailure(Base):
+    """로그인 실패 횟수. key는 "email:주소" 또는 "ip:주소", first_at부터 LOGIN_WINDOW 동안 센다."""
+    __tablename__ = "login_failures"
+    key: Mapped[str] = mapped_column(String(330), primary_key=True)
+    count: Mapped[int] = mapped_column(Integer)
+    first_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class Workspace(Base):
     __tablename__ = "workspaces"
     id: Mapped[int] = mapped_column(primary_key=True)

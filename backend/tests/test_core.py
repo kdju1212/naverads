@@ -795,3 +795,40 @@ def test_goal_guards(monkeypatch):
     kws = store("6400")["keywords"]
     assert kws["kwd-6400-11"]["bidAmt"] == 300 and kws["kwd-6400-13"]["userLock"] is False
     assert "계정 전환 0건이라 무전환 OFF 안 함" in c.get(url, headers=owner).json()[0]["last_result"]
+
+
+def test_login_limit(monkeypatch):
+    from datetime import timedelta
+    from app import main
+
+    user("lock@a.com")
+    login = lambda email, pw, **h: c.post("/auth/login", json={"email": email, "password": pw}, headers=h)  # noqa: E731
+    for _ in range(main.LOGIN_MAX["email"]):
+        assert login("lock@a.com", "wrong").status_code == 401
+    r = login("lock@a.com", "password1")  # 맞는 비밀번호도 막힌 동안은 거부
+    assert r.status_code == 429 and "15분" in r.json()["detail"]
+    for _ in range(main.LOGIN_MAX["email"]):  # 없는 이메일도 똑같이 막혀 가입 여부가 드러나지 않는다
+        login("nobody@a.com", "wrong")
+    assert login("nobody@a.com", "wrong").status_code == 429
+
+    # MCP(Claude 연결) 로그인도 같은 제한
+    cb = "http://localhost:3333/callback"
+    q = {"client_id": c.post("/oauth/register", json={"redirect_uris": [cb]}).json()["client_id"], "redirect_uri": cb,
+         "code_challenge": "x" * 43, "code_challenge_method": "S256", "state": "s"}
+    assert c.post("/oauth/authorize", data={**q, "email": "lock@a.com", "password": "password1"}, follow_redirects=False).status_code == 429
+
+    # 15분이 지나면 다시 로그인, 성공하면 실패 기록이 지워진다
+    real_now = main.now
+    monkeypatch.setattr(main, "now", lambda: real_now() + timedelta(minutes=16))
+    assert login("lock@a.com", "password1").status_code == 200
+    for _ in range(main.LOGIN_MAX["email"] - 1):
+        login("lock@a.com", "wrong")
+    assert login("lock@a.com", "password1").status_code == 200
+
+    # 같은 IP에서 여러 이메일로 틀리면 IP로 막는다
+    monkeypatch.setitem(main.LOGIN_MAX, "ip", 3)
+    ip = {"cf-connecting-ip": "203.0.113.9"}
+    for i in range(3):
+        login(f"spray{i}@a.com", "wrong", **ip)
+    assert login("lock@a.com", "password1", **ip).status_code == 429
+    assert login("lock@a.com", "password1").status_code == 200  # 다른 IP는 그대로

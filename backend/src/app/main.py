@@ -2,17 +2,17 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from . import bulk, naver, seo
 from .access import ADMIN_ROLES, admin_membership, current_user, membership, membership_of, resolve_account_ids, user_from_header
 from .db import Base, engine, get_db
-from .models import (AccountAccess, AccountGoal, AdAccount, AuditLog, AutoBidRule, BulkJob, BulkJobRow, Membership, NaverApiCredential,
+from .models import (AccountAccess, AccountGoal, AdAccount, AuditLog, AutoBidRule, BulkJob, BulkJobRow, LoginFailure, Membership, NaverApiCredential,
                      PerformanceDaily, Plan, Subscription, SyncRun, User, Workspace, WorkspaceAdAccount, now)
 from .naver import NaverApiError, client_for
 from .security import decrypt, encrypt, hash_password, make_token, verify_password
@@ -60,10 +60,50 @@ class LoginIn(BaseModel):
     password: str
 
 
+# 15분 안에 이만큼 틀리면 그 15분이 끝날 때까지 로그인을 막는다(없는 이메일도 똑같이 세어 가입 여부가 드러나지 않게)
+LOGIN_WINDOW = timedelta(minutes=15)
+LOGIN_MAX = {"email": 5, "ip": 30}
+LOGIN_BLOCKED = "로그인 실패가 많아 15분 동안 막혔습니다. 잠시 후 다시 시도하세요"
+
+
+def _login_keys(email: str, ip: str | None) -> dict[str, int]:
+    keys = {f"email:{email.strip().lower()}": LOGIN_MAX["email"]}
+    if ip:  # Cloudflare가 넣는 CF-Connecting-IP(로컬·테스트에는 없음)
+        keys[f"ip:{ip}"] = LOGIN_MAX["ip"]
+    return keys
+
+
+def login_blocked(db: Session, email: str, ip: str | None) -> bool:
+    keys = _login_keys(email, ip)
+    q = select(LoginFailure.key, LoginFailure.count).where(LoginFailure.key.in_(keys), LoginFailure.first_at > now() - LOGIN_WINDOW)
+    return any(n >= keys[k] for k, n in db.execute(q))
+
+
+def record_login(db: Session, email: str, ip: str | None, ok: bool):
+    """성공이면 그 이메일의 실패 기록을 지우고, 실패면 이메일·IP 횟수를 올린다.
+    shortcut: 동시에 틀린 요청은 한두 번 덜 셀 수 있다, 정확히 세야 하면 UPDATE count = count + 1로"""
+    keys = _login_keys(email, ip)
+    if ok:
+        db.execute(delete(LoginFailure).where(LoginFailure.key == next(iter(keys))))
+    else:
+        db.execute(delete(LoginFailure).where(LoginFailure.first_at <= now() - LOGIN_WINDOW))  # 지난 기록은 지워 표가 커지지 않게
+        for k in keys:
+            if f := db.get(LoginFailure, k):
+                f.count += 1
+            else:
+                db.add(LoginFailure(key=k, count=1, first_at=now()))
+    db.commit()
+
+
 @app.post("/auth/login")
-async def login(body: LoginIn, db: Session = Depends(get_db)):
+async def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
+    ip = request.headers.get("cf-connecting-ip")
+    if login_blocked(db, body.email, ip):
+        raise HTTPException(429, LOGIN_BLOCKED)
     user = db.scalar(select(User).where(User.email == body.email))
-    if not user or not await verify_password(body.password, user.password_hash):
+    ok = bool(user) and await verify_password(body.password, user.password_hash)
+    record_login(db, body.email, ip, ok)
+    if not ok:
         raise HTTPException(401, "이메일 또는 비밀번호가 올바르지 않습니다")
     return {"id": user.id, "token": make_token(user.id)}
 
