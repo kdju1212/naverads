@@ -12,7 +12,7 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
 - 배포: main에 push하면 Cloudflare Workers Builds가 프론트(naverads)·백엔드(naverads-api) 자동 배포
   GitHub 커밋의 Workers Builds 두 개가 성공한 뒤 확인 (프론트가 먼저 뜨면 잠깐 "Not Found" → 새로고침)
 - DB 변경은 자동 배포 안 됨 → push 전에 backend 폴더에서: npx wrangler d1 migrations apply naverads --remote
-  (0010까지 적용 완료, 0011 토큰 버전은 push 전에 적용 필요)
+  (0011까지 적용 완료)
 - 디버깅: npx wrangler tail naverads-api --format json / DB 읽기: npx wrangler d1 execute naverads --remote --command "SELECT ..."
 - 무료 플랜만 사용: 요청 1번에 외부 호출+D1 쿼리 50번, CPU 10ms → 대량 작업은 5행씩 나눠 실행, 크론도 조금씩 나눠 진행
 - 광고 데이터(캠페인~확장소재)는 서버 DB에 없음: 브라우저(IndexedDB)가 네이버 마스터 보고서로 받아 보관(7일, 화면 "새로고침")
