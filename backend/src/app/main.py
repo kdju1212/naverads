@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from . import bulk, naver, seo
 from .access import admin_membership, current_user, membership, membership_of, resolve_account_ids, user_from_header
 from .db import Base, engine, get_db
-from .models import (AccountAccess, AdAccount, AuditLog, AutoBidRule, BulkJob, BulkJobRow, Membership, NaverApiCredential,
+from .models import (AccountAccess, AccountGoal, AdAccount, AuditLog, AutoBidRule, BulkJob, BulkJobRow, Membership, NaverApiCredential,
                      PerformanceDaily, Plan, Subscription, SyncRun, User, Workspace, WorkspaceAdAccount, now)
 from .naver import NaverApiError, client_for
 from .security import decrypt, encrypt, hash_password, make_token, verify_password
@@ -465,7 +465,7 @@ async def retry_bulk_job(job_id: int, m: Membership = Depends(membership), db: S
     return _job_out(db, bulk.retry_failed(db, m, _job(db, m, job_id)))
 
 
-# ---------- 자동입찰 (목표 순위 · KPI) ----------
+# ---------- 자동입찰 (목표 순위) ----------
 AUTO_BID_LIMIT = 20
 
 
@@ -477,13 +477,10 @@ class KeywordRef(BaseModel):
 
 class AutoBidIn(BaseModel):
     keywords: list[KeywordRef]
-    device: Literal["PC", "MOBILE"] = "PC"
-    target_rank: int = 0
+    device: Literal["PC", "MOBILE"]
+    target_rank: int
     max_bid: int
     enabled: bool = True
-    kpi: Literal["CPA", "ROAS", "CPC"] | None = None  # 있으면 순위 대신 KPI로(device·target_rank 무시)
-    kpi_target: int | None = None
-    off_cost: int | None = None
 
 
 class AutoBidKeysIn(BaseModel):
@@ -505,7 +502,7 @@ def _rule(db: Session, m: Membership, naver_id: str) -> AutoBidRule | None:
 async def list_auto_bids(m: Membership = Depends(membership), db: Session = Depends(get_db)):
     ids = resolve_account_ids(db, m, None)
     q = select(AutoBidRule).where(AutoBidRule.workspace_id == m.workspace_id, AutoBidRule.ad_account_id.in_(ids)).order_by(AutoBidRule.id)
-    return _rows(db.scalars(q), "id", "ad_account_id", "keyword_naver_id", "keyword", "device", "target_rank", "max_bid", "kpi", "kpi_target", "off_cost", "enabled",
+    return _rows(db.scalars(q), "id", "ad_account_id", "keyword_naver_id", "keyword", "device", "target_rank", "max_bid", "enabled",
                  "last_run_at", "last_result")
 
 
@@ -513,12 +510,7 @@ async def list_auto_bids(m: Membership = Depends(membership), db: Session = Depe
 async def set_auto_bids(body: AutoBidIn, m: Membership = Depends(membership), db: Session = Depends(get_db)):
     """선택한 키워드에 같은 규칙을 만들거나 덮어쓴다. 실행은 마지막으로 저장한 사람의 권한으로 한다."""
     hi_rank = 10 if body.device == "PC" else 5
-    if body.kpi:
-        if not body.kpi_target or body.kpi_target <= 0:
-            raise HTTPException(400, f"{body.kpi} 목표값을 입력하세요")
-        if body.off_cost is not None and body.off_cost <= 0:
-            raise HTTPException(400, "무전환 OFF 기준 비용은 1원 이상")
-    elif not 1 <= body.target_rank <= hi_rank:
+    if not 1 <= body.target_rank <= hi_rank:
         raise HTTPException(400, f"{body.device} 목표 순위는 1~{hi_rank}위")
     lo, hi = bulk.BID_RANGE["WEB_SITE"]
     if not lo <= body.max_bid <= hi or body.max_bid % 10:
@@ -537,13 +529,9 @@ async def set_auto_bids(body: AutoBidIn, m: Membership = Depends(membership), db
         r.ad_account_id, r.keyword = k.ad_account_id, k.keyword[:100]
         r.device, r.target_rank, r.max_bid, r.enabled, r.created_by = (body.device, body.target_rank, body.max_bid,
                                                                        body.enabled, m.user_id)
-        r.kpi, r.kpi_target, r.off_cost = (body.kpi, body.kpi_target, body.off_cost) if body.kpi else (None, None, None)
-        rule = f"{body.device} {body.target_rank}위"
-        if body.kpi:
-            rule = f"{body.kpi} {body.kpi_target}" + (f" 무전환 OFF {body.off_cost}" if body.off_cost else "")
         db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=k.ad_account_id, action="AUTO_BID_SET",
                         entity_type="keyword", naver_id=k.naver_id, field="auto_bid",
-                        after=f"{rule} 최대 {body.max_bid}" + ("" if body.enabled else " 중지")))
+                        after=f"{body.device} {body.target_rank}위 최대 {body.max_bid}" + ("" if body.enabled else " 중지")))
     db.commit()
     return {"ok": True}
 
@@ -584,6 +572,71 @@ async def run_auto_bids(body: AutoBidKeysIn | None = None, m: Membership = Depen
                                                                 AutoBidRule.keyword_naver_id.in_(nids))))
     jobs = bulk.run_auto_bids(db, m.workspace_id, rule_ids)
     return {"job_ids": [j.id for j in jobs]}
+
+
+# ---------- 계정 목표 ROAS ----------
+class AccountGoalIn(BaseModel):
+    ad_account_id: int
+    roas_target: int
+    max_bid: int
+    off_cost: int | None = None
+    enabled: bool = True
+
+
+def _goal(db: Session, m: Membership, account_id: int, edit=True) -> AccountGoal | None:
+    if account_id not in resolve_account_ids(db, m, None, edit=edit):
+        raise HTTPException(403, "이 광고 계정을 수정할 권한이 없습니다")
+    return db.scalar(select(AccountGoal).where(AccountGoal.workspace_id == m.workspace_id, AccountGoal.ad_account_id == account_id))
+
+
+@app.get("/workspaces/{ws_id}/account-goals")
+async def list_account_goals(m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    ids = resolve_account_ids(db, m, None)
+    q = select(AccountGoal).where(AccountGoal.workspace_id == m.workspace_id, AccountGoal.ad_account_id.in_(ids))
+    return _rows(db.scalars(q), "ad_account_id", "roas_target", "max_bid", "off_cost", "enabled", "last_run_at", "last_result")
+
+
+@app.put("/workspaces/{ws_id}/account-goals")
+async def set_account_goal(body: AccountGoalIn, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    """광고주 계정의 목표 ROAS를 만들거나 덮어쓴다. 실행은 마지막으로 저장한 사람의 권한으로 한다."""
+    lo, hi = bulk.BID_RANGE["WEB_SITE"]
+    if not 1 <= body.roas_target <= 100_000:
+        raise HTTPException(400, "목표 ROAS는 1~100,000%")
+    if not lo <= body.max_bid <= hi or body.max_bid % 10:
+        raise HTTPException(400, f"최대 입찰가는 {lo:,}~{hi:,}원, 10원 단위")
+    if body.off_cost is not None and body.off_cost <= 0:
+        raise HTTPException(400, "무전환 OFF 기준 비용은 1원 이상")
+    g = _goal(db, m, body.ad_account_id)
+    if g is None:
+        g = AccountGoal(workspace_id=m.workspace_id, ad_account_id=body.ad_account_id)
+        db.add(g)
+    g.roas_target, g.max_bid, g.off_cost, g.enabled, g.created_by = body.roas_target, body.max_bid, body.off_cost, body.enabled, m.user_id
+    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=body.ad_account_id, action="GOAL_SET",
+                    entity_type="account", naver_id=str(body.ad_account_id), field="roas_goal",
+                    after=f"ROAS {body.roas_target}% 최대 {body.max_bid}" + (f" 무전환 OFF {body.off_cost}" if body.off_cost else "")
+                    + ("" if body.enabled else " 중지")))
+    db.commit()
+    return {"ok": True}
+
+
+@app.delete("/workspaces/{ws_id}/account-goals/{account_id}")
+async def delete_account_goal(account_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    if g := _goal(db, m, account_id):
+        db.delete(g)
+        db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=account_id, action="GOAL_DELETE",
+                        entity_type="account", naver_id=str(account_id), field="roas_goal"))
+        db.commit()
+    return {"ok": True}
+
+
+@app.post("/workspaces/{ws_id}/account-goals/{account_id}/run")
+async def run_account_goal(account_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    """지금 실행: 오늘 실행을 새로 시작(진행 중이면 이어서)하고 한 단계만 돈다. 나머지는 10분마다 크론이 이어 간다."""
+    g = _goal(db, m, account_id)
+    if g is None:
+        raise HTTPException(404, "목표가 없습니다")
+    bulk.run_goal_step(db, g, start=True)
+    return {"last_result": g.last_result}
 
 
 # ---------- 이력·성과·대시보드 ----------

@@ -103,10 +103,6 @@ class AutoBidRule(Base):
     device: Mapped[str] = mapped_column(String(6))  # PC | MOBILE
     target_rank: Mapped[int] = mapped_column(Integer)
     max_bid: Mapped[int] = mapped_column(Integer)
-    # KPI 자동운영: kpi가 있으면 순위 대신 최근 7일 성과로 하루 한 번 조정(device·target_rank는 안 씀)
-    kpi: Mapped[str | None] = mapped_column(String(4), nullable=True)  # CPA | ROAS | CPC
-    kpi_target: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 원(CPA·CPC, VAT 포함) 또는 %(ROAS)
-    off_cost: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 7일 비용이 이 이상인데 전환 0이면 키워드 OFF
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -114,6 +110,25 @@ class AutoBidRule(Base):
 
 
 # ---- 작업·감사 ----
+class AccountGoal(Base):
+    """광고주 계정 목표 ROAS: 하루 한 번 파워링크 키워드를 광고그룹씩 나눠 최근 7일 ROAS로 조정(bulk.run_goal_step).
+    실행은 마지막으로 저장한 사람 권한으로."""
+    __tablename__ = "account_goals"
+    __table_args__ = (UniqueConstraint("workspace_id", "ad_account_id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    ad_account_id: Mapped[int] = mapped_column(ForeignKey("ad_accounts.id"))
+    roas_target: Mapped[int] = mapped_column(Integer)  # %
+    max_bid: Mapped[int] = mapped_column(Integer)
+    off_cost: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 키워드 7일 비용이 이 이상인데 전환 0이면 OFF
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    run_date: Mapped[str | None] = mapped_column(String(10), nullable=True)  # 마지막으로 시작한 날(한국 날짜)
+    state: Mapped[str | None] = mapped_column(String(4000), nullable=True)  # 진행 중 실행 JSON: 남은 광고그룹·집계·작업 ID
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_result: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+
 class BulkJob(Base):
     __tablename__ = "bulk_jobs"
     id: Mapped[int] = mapped_column(primary_key=True)

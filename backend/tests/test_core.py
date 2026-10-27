@@ -433,51 +433,60 @@ def test_next_bid():
     assert next_bid(400, 3, 3, 500) == 400 and next_bid(70, 9, 1, 500) == 80      # 목표면 그대로, 최소 10원씩
 
 
-def test_kpi_bid():
-    from app.bulk import kpi_bid
+def test_goal_bid():
+    from app.bulk import goal_bid
     s = lambda clk, cost, conv=0, rev=0: {"clkCnt": clk, "salesAmt": cost, "ccnt": conv, "convAmt": rev}  # noqa: E731
-    assert kpi_bid(500, "CPC", 300, 1000, s(9, 900)) == (500, "7일 클릭 9회 · 데이터 부족")
-    assert kpi_bid(500, "CPA", 10000, 1000, s(50, 20000))[0] == 500  # 전환 없음 → 그대로
-    assert kpi_bid(500, "CPA", 10000, 1000, s(50, 16000, 2)) == (550, "7일 CPA 8,000원 (목표 10,000원)")
-    assert kpi_bid(500, "CPA", 10000, 1000, s(50, 30000, 2))[0] == 450                # 15,000원 > 목표 → -10%
-    assert kpi_bid(500, "CPA", 10000, 1000, s(50, 19000, 2))[0] == 500                # 9,500원: 목표 근처 → 그대로
-    assert kpi_bid(500, "ROAS", 300, 1000, s(50, 10000, 1, 40000)) == (550, "7일 ROAS 400% (목표 300%)")
-    assert kpi_bid(500, "ROAS", 300, 1000, s(50, 10000, 1, 20000))[0] == 450
-    assert kpi_bid(500, "CPC", 300, 520, s(20, 4000))[0] == 520 and kpi_bid(80, "CPC", 100, 500, s(20, 4000))[0] == 70  # 최대·최소
+    assert goal_bid(500, s(9, 900, 1, 9000), 300, 1000, None, True) is None                # 클릭 부족
+    assert goal_bid(500, s(50, 20000), 300, 1000, 20000, True) == "OFF"                    # 무전환 비용 초과
+    assert goal_bid(500, s(50, 20000), 300, 1000, None, True) is None                      # OFF 기준 없음
+    assert goal_bid(500, s(50, 10000, 1, 20000), 300, 1000, None, True) == 450             # 200% < 300% → -10%
+    assert goal_bid(500, s(50, 10000, 1, 40000), 300, 1000, None, True) == 550             # 400% → +10%
+    assert goal_bid(500, s(50, 10000, 1, 40000), 300, 1000, None, False) is None           # 계정이 목표 미달이면 안 올림
+    assert goal_bid(500, s(50, 10000, 1, 31000), 300, 1000, None, True) is None            # 목표 근처
+    assert goal_bid(500, s(50, 10000, 1, 40000), 300, 520, None, True) == 520              # 최대 입찰가
+    assert goal_bid(80, s(50, 10000, 1, 10000), 300, 1000, None, True) == 70               # 최소 70원
 
 
-def test_kpi_auto_bid(monkeypatch):
-    from datetime import datetime, timezone
+def test_account_goal(monkeypatch):
+    from datetime import datetime
     from app import bulk
-    from app.bulk import run_all_auto_bids
     from app.db import SessionLocal
     from app.naver import MockNaverClient
 
-    owner, ws, acc = _account("kpi@a.com", "4005")
-    k1 = {"ad_account_id": acc, "naver_id": "kwd-4005-11", "keyword": "원피스1"}  # 300원
-    k2 = {"ad_account_id": acc, "naver_id": "kwd-4005-12", "keyword": "여름 원피스1"}  # 600원
-    url = f"/workspaces/{ws}/auto-bids"
-    assert c.put(url, headers=owner, json={"keywords": [k1], "kpi": "CPA", "max_bid": 1000}).status_code == 400  # 목표값 없음
-    stats = {"kwd-4005-11": {"clkCnt": 40, "salesAmt": 12000, "ccnt": 3, "convAmt": 90000},  # CPA 4,000원 → 올림
-             "kwd-4005-12": {"clkCnt": 40, "salesAmt": 25000, "ccnt": 0}}                     # 전환 0, 2만원 넘음 → OFF
-    monkeypatch.setattr(MockNaverClient, "entity_stats", lambda self, ids, since, until: {i: stats[i] for i in ids})
-    c.put(url, headers=owner, json={"keywords": [k1], "kpi": "CPA", "kpi_target": 5000, "max_bid": 1000})
-    c.put(url, headers=owner, json={"keywords": [k2], "kpi": "CPA", "kpi_target": 5000, "off_cost": 20000, "max_bid": 1000})
+    owner, ws, acc = _account("goal@a.com", "4006")
+    url = f"/workspaces/{ws}/account-goals"
+    goal = {"ad_account_id": acc, "roas_target": 300, "max_bid": 1000, "off_cost": 20000}
+    assert c.put(url, headers=owner, json={**goal, "max_bid": 1005}).status_code == 400
+    outsider = user("goal2@b.com")
+    ws_b = c.post("/workspaces", json={"name": "G2"}, headers=outsider).json()["id"]
+    assert c.put(f"/workspaces/{ws_b}/account-goals", headers=outsider, json=goal).status_code == 403
+    assert c.put(url, headers=owner, json=goal).json() == {"ok": True}
 
-    # 크론: 오전 9시 전에는 안 돌고, 9시 이후 하루 한 번
-    kws = store("4005")["keywords"]
-    for hour, bid in ((8, 300), (10, 330), (11, 330)):
-        t = datetime(2026, 10, 27, hour, tzinfo=bulk.KST)
-        monkeypatch.setattr(bulk, "datetime", type("D", (datetime,), {"now": staticmethod(lambda tz=None: t)}))
-        monkeypatch.setattr(bulk, "now", lambda: t.astimezone(timezone.utc))
+    stats = {"cmp-4006-pl": {"clkCnt": 100, "salesAmt": 10000, "ccnt": 5, "convAmt": 40000},   # 계정 400% → 올림 허용
+             "kwd-4006-11": {"clkCnt": 20, "salesAmt": 2000, "ccnt": 1, "convAmt": 10000},     # 500% → 300→330
+             "kwd-4006-12": {"clkCnt": 20, "salesAmt": 5000, "ccnt": 1, "convAmt": 10000},     # 200% → 600→540
+             "kwd-4006-13": {"clkCnt": 20, "salesAmt": 25000, "ccnt": 0},                      # 무전환 → OFF
+             "kwd-4006-21": {"clkCnt": 5, "salesAmt": 500, "ccnt": 1, "convAmt": 90000}}       # 클릭 부족 → 그대로
+    seen = []
+    monkeypatch.setattr(MockNaverClient, "entity_stats", lambda self, ids, since, until: seen.append(ids) or {i: stats[i] for i in ids if i in stats})
+
+    t = datetime(2026, 10, 27, 10, tzinfo=bulk.KST)
+    monkeypatch.setattr(bulk, "datetime", type("D", (datetime,), {"now": staticmethod(lambda tz=None: t)}))
+    # 지금 실행 = 1단계(시작: 캠페인 성과·광고그룹 목록). 쇼핑 캠페인은 빼고 파워링크만
+    r = c.post(f"{url}/{acc}/run", headers=owner).json()["last_result"]
+    assert "7일 계정 ROAS 400% (목표 300%)" in r and "광고그룹 2개 남음" in r and seen == [["cmp-4006-pl"]]
+
+    # 나머지는 크론이 1단계씩(광고그룹 2개), 끝나면 그날은 더 안 돈다
+    for _ in range(4):
         db = SessionLocal()
-        run_all_auto_bids(db)
+        bulk.run_all_goals(db)
         db.close()
-        assert kws["kwd-4005-11"]["bidAmt"] == bid, hour
-    assert kws["kwd-4005-12"]["userLock"] is True and kws["kwd-4005-12"]["bidAmt"] == 600
-    rules = {r["keyword_naver_id"]: r for r in c.get(url, headers=owner).json()}
-    assert rules["kwd-4005-11"]["kpi"] == "CPA" and rules["kwd-4005-11"]["last_result"] == "7일 CPA 4,000원 (목표 5,000원) · 300원 → 330원"
-    assert rules["kwd-4005-12"]["last_result"] == "7일 비용 25,000원 · 전환 없음 → 키워드 OFF"
+    kws = store("4006")["keywords"]
+    assert [kws[f"kwd-4006-1{i}"]["bidAmt"] for i in (1, 2, 3)] == [330, 540, 900] and kws["kwd-4006-13"]["userLock"] is True
+    assert kws["kwd-4006-21"]["bidAmt"] == 300
+    g = c.get(url, headers=owner).json()[0]
+    assert g["last_result"].endswith("키워드 6개 확인, 입찰가 조정 2개, OFF 1개") and len(seen) == 3
+    assert c.delete(f"{url}/{acc}", headers=owner).json() == {"ok": True} and c.get(url, headers=owner).json() == []
 
 
 def test_keyword_tool():

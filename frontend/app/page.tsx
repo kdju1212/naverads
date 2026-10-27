@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { TrendChart } from "@/components/TrendChart";
 import { Badge, Button, Card, ErrorText, inputCls, PageTitle } from "@/components/ui";
-import { fmt, Job } from "@/lib/api";
+import { api, fmt, Job } from "@/lib/api";
 import { NaverData, useNaverData } from "@/lib/naverData";
 import { useApp } from "@/lib/store";
 import { useFetch } from "@/lib/useFetch";
@@ -126,6 +126,8 @@ export default function DashboardPage() {
         )}
       </Card>
 
+      {product !== "SHOPPING" && <GoalCard accounts={rows.map((r) => ({ id: r.ad_account_id, name: r.name, roas: r.pl?.roas, days }))} />}
+
       <OpsSummary data={naver.loading ? null : naver} autoBids={dash.data?.auto_bids} connected={dash.data?.connected_accounts} />
 
       <Card title="광고주별 성과">
@@ -189,6 +191,83 @@ export default function DashboardPage() {
         </Card>
       </div>
     </div>
+  );
+}
+
+interface Goal { ad_account_id: number; roas_target: number; max_bid: number; off_cost: number | null; enabled: boolean; last_run_at: string | null; last_result: string | null }
+
+/** 광고주 계정 목표 ROAS. 서버가 매일 오전 9시 이후 파워링크 키워드를 광고그룹씩 나눠 조정한다(bulk.run_goal_step). */
+function GoalCard({ accounts }: { accounts: { id: number; name: string; roas: number | null | undefined; days: number }[] }) {
+  const { ws } = useApp();
+  const goals = useFetch<Goal[]>(ws && `/workspaces/${ws.id}/account-goals`);
+  const byId = new Map((goals.data ?? []).map((g) => [g.ad_account_id, g]));
+  return (
+    <Card title="목표 ROAS 자동운영">
+      <p className="mb-3 text-xs text-muted">
+        매일 오전 9시 이후 파워링크 키워드마다 최근 7일 ROAS를 보고, 목표 아래면 입찰가를 10% 내리고 목표보다 10% 넘게 높으면 10% 올립니다.
+        계정 전체 ROAS가 목표 아래인 날엔 올리지 않습니다. 클릭 10회 미만·전환 없는 키워드는 그대로 두고, 무전환 OFF 비용을 넣으면
+        7일 비용이 그 이상인데 전환이 0인 키워드를 끕니다. 광고그룹이 많으면 10분마다 나눠 진행합니다. 변경은 작업 이력에 남습니다.
+      </p>
+      <ErrorText error={goals.error} />
+      <div className="overflow-auto">
+        <table className="w-full text-sm">
+          <thead className="text-left text-xs text-faint">
+            <tr><th className="py-2 pr-3">광고주</th><th className="px-3 text-right">파워링크 ROAS</th><th className="px-3">목표 설정</th><th className="pl-3">최근 실행</th></tr>
+          </thead>
+          <tbody>
+            {accounts.map((a) => (
+              <GoalRow key={`${a.id}-${byId.get(a.id)?.roas_target ?? ""}`} account={a} goal={byId.get(a.id)} onDone={goals.reload} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+function GoalRow({ account, goal, onDone }: { account: { id: number; name: string; roas: number | null | undefined; days: number }; goal?: Goal; onDone: () => void }) {
+  const { ws } = useApp();
+  const [target, setTarget] = useState(goal ? String(goal.roas_target) : "");
+  const [maxBid, setMaxBid] = useState(goal ? String(goal.max_bid) : "");
+  const [offCost, setOffCost] = useState(goal?.off_cost ? String(goal.off_cost) : "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const num = (set: (v: string) => void) => (e: { target: { value: string } }) => set(e.target.value.replace(/[^0-9]/g, ""));
+  const base = ws ? `/workspaces/${ws.id}/account-goals` : "";
+  const call = async (path: string, method: string, body?: unknown) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api(base + path, { method, body });
+      onDone();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const save = (enabled: boolean) => call("", "PUT", { ad_account_id: account.id, roas_target: Number(target), max_bid: Number(maxBid), off_cost: offCost ? Number(offCost) : null, enabled });
+  return (
+    <tr className="border-t border-line align-top">
+      <td className="py-2 pr-3 font-medium">{account.name}{goal && !goal.enabled && <span className="ml-1 text-xs text-faint">(중지)</span>}</td>
+      <td className="px-3 py-2 text-right tabular-nums" title={`최근 ${account.days}일`}>{account.roas == null ? "-" : `${account.roas}%`}</td>
+      <td className="px-3 py-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <input className={`${inputCls} w-28`} inputMode="numeric" placeholder="목표 ROAS(%)" aria-label={`${account.name} 목표 ROAS`} value={target} onChange={num(setTarget)} />
+          <input className={`${inputCls} w-32`} inputMode="numeric" placeholder="최대 입찰가(원)" aria-label={`${account.name} 최대 입찰가`} value={maxBid} onChange={num(setMaxBid)} />
+          <input className={`${inputCls} w-40`} inputMode="numeric" placeholder="무전환 OFF 비용(선택)" aria-label={`${account.name} 무전환 OFF 기준 비용`}
+            title="키워드의 최근 7일 비용(VAT 포함)이 이 금액 이상인데 전환이 0이면 끕니다" value={offCost} onChange={num(setOffCost)} />
+          <Button disabled={busy || !target || !maxBid} onClick={() => save(true)}>{goal ? "저장" : "자동운영 시작"}</Button>
+          {goal && <>
+            <Button variant="secondary" disabled={busy} onClick={() => call(`/${account.id}/run`, "POST")}>지금 실행</Button>
+            <Button variant="secondary" disabled={busy} onClick={() => save(!goal.enabled)}>{goal.enabled ? "중지" : "다시 켜기"}</Button>
+            <Button variant="danger" disabled={busy} onClick={() => confirm(`${account.name}의 목표 ROAS 자동운영을 해제할까요?`) && call(`/${account.id}`, "DELETE")}>해제</Button>
+          </>}
+        </div>
+        {error && <p role="alert" className="mt-1 text-xs text-danger">{error}</p>}
+      </td>
+      <td className="pl-3 py-2 text-xs text-faint" title={goal?.last_run_at ?? undefined}>{goal?.last_result ?? "-"}</td>
+    </tr>
   );
 }
 

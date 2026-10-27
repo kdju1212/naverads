@@ -5,7 +5,8 @@
 서버는 그 계정의 수정 권한만 믿을 근거로 삼고, 실제 대상은 그 계정 API(X-Customer)로만 바꾸므로
 다른 광고주의 ID를 섞어 보내도 네이버가 거부한다."""
 import io
-from datetime import datetime, timedelta, timezone
+import json
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import HTTPException
 from openpyxl import Workbook, load_workbook
@@ -13,7 +14,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from .access import accessible_account_ids
-from .models import AdAccount, AuditLog, AutoBidRule, BulkJob, BulkJobRow, Membership, NaverApiCredential, WorkspaceAdAccount, now
+from .models import AccountGoal, AdAccount, AuditLog, AutoBidRule, BulkJob, BulkJobRow, Membership, NaverApiCredential, WorkspaceAdAccount, now
 from .naver import NaverApiError, ad_row, client_for, extension_row
 from .security import decrypt
 
@@ -201,31 +202,6 @@ def next_bid(cur: int, rank: int | None, target: int, max_bid: int) -> int:
     return max(lo, cur - max(10, cur // 10 // 10 * 10))
 
 
-KPI_MIN_CLICKS = 10  # 이보다 클릭이 적으면 평균이 흔들려 판단하지 않는다
-
-
-def kpi_bid(cur: int, kpi: str, target: int, max_bid: int, s: dict) -> tuple[int, str]:
-    """최근 7일 성과 s(clkCnt·salesAmt·ccnt·convAmt)로 다음 입찰가와 설명. 목표보다 10% 넘게 좋으면 +10%, 나쁘면 -10%.
-    shortcut: 고정 10%씩, 키워드가 많아지고 성과가 쌓이면 차이만큼 움직이게 바꾼다"""
-    clk, cost, conv, rev = s.get("clkCnt", 0), s.get("salesAmt", 0), s.get("ccnt") or 0, s.get("convAmt") or 0
-    if clk < KPI_MIN_CLICKS:
-        return cur, f"7일 클릭 {clk}회 · 데이터 부족"
-    if kpi != "CPC" and not conv:
-        return cur, f"7일 클릭 {clk}회 · 전환 없음"
-    if kpi == "ROAS":
-        actual = rev * 100 // cost if cost else 0
-        good, bad, text = actual >= target * 1.1, actual < target, f"7일 ROAS {actual:,}% (목표 {target:,}%)"
-    else:
-        actual = cost // (clk if kpi == "CPC" else conv)
-        good, bad, text = actual <= target * 0.9, actual > target, f"7일 {kpi} {actual:,}원 (목표 {target:,}원)"
-    step = max(10, cur // 10 // 10 * 10)
-    if good:
-        return max(cur, min(cur + step, max_bid // 10 * 10)), text
-    if bad:
-        return max(BID_RANGE["WEB_SITE"][0], cur - step), text
-    return cur, text
-
-
 def check_ranks(db: Session, workspace_id: int, refs) -> list[dict]:
     """지금 순위: 키워드별 PC·모바일 검색 화면에서 내 광고가 몇 위인지. refs는 권한 확인을 마친 KeywordRef."""
     out = []
@@ -255,28 +231,15 @@ def check_ranks(db: Session, workspace_id: int, refs) -> list[dict]:
     return out
 
 
-KST = timezone(timedelta(hours=9))
-KPI_RUN_HOUR = 9  # 어제 통계가 다 쌓인 뒤 하루 한 번(한국 시간)
-
-
-def _kpi_due(r: AutoBidRule, today: datetime) -> bool:
-    last = r.last_run_at and r.last_run_at.replace(tzinfo=r.last_run_at.tzinfo or timezone.utc).astimezone(KST)
-    return today.hour >= KPI_RUN_HOUR and (last is None or last.date() < today.date())
-
-
-def run_auto_bids(db: Session, workspace_id: int, rule_ids: list[int] | None = None, cron: bool = False) -> list[BulkJob]:
+def run_auto_bids(db: Session, workspace_id: int, rule_ids: list[int] | None = None) -> list[BulkJob]:
     """자동입찰 규칙 실행: 검색 화면에서 지금 순위를 읽어 목표보다 아래면 올리고 위면 내린다(next_bid, 최대 입찰가 이하).
-    KPI 규칙은 최근 7일 성과로 조정(kpi_bid)하고, 크론에서는 하루 한 번만 돈다.
     바꿀 키워드는 만든 사람별 대량 작업으로 실행한다. 권한 확인·네이버 반영 검증·감사 로그는 일반 대량 작업과 같다."""
     s = select(AutoBidRule).where(AutoBidRule.workspace_id == workspace_id, AutoBidRule.enabled.is_(True))
     if rule_ids is not None:
         s = s.where(AutoBidRule.id.in_(rule_ids))
-    today = datetime.now(KST)
-    yesterday = today.date() - timedelta(days=1)
     by_user: dict[int, list[AutoBidRule]] = {}
     for r in db.scalars(s):
-        if not (cron and r.kpi and not _kpi_due(r, today)):
-            by_user.setdefault(r.created_by, []).append(r)
+        by_user.setdefault(r.created_by, []).append(r)
     jobs = []
     for user_id, rules in by_user.items():
         m = db.scalar(select(Membership).where(Membership.workspace_id == workspace_id, Membership.user_id == user_id))
@@ -295,10 +258,7 @@ def run_auto_bids(db: Session, workspace_id: int, rule_ids: list[int] | None = N
                 current = {k["nccKeywordId"]: k for k in client.get_many("keywords", [r.keyword_naver_id for r in rs])}
                 gids = list({k["nccAdgroupId"] for k in current.values()})
                 groups = {g["nccAdgroupId"]: g for g in client.get_many("adgroups", gids)} if gids else {}
-                ads = _group_ads(client, [current[r.keyword_naver_id]["nccAdgroupId"] for r in rs
-                                          if not r.kpi and r.keyword_naver_id in current])
-                kpi_ids = [r.keyword_naver_id for r in rs if r.kpi and r.keyword_naver_id in current]
-                stats = client.entity_stats(kpi_ids, yesterday - timedelta(days=6), yesterday) if kpi_ids else {}
+                ads = _group_ads(client, gids)
             except NaverApiError as e:
                 for r in rs:
                     r.last_result = f"네이버 조회 실패: {e}"[:300]
@@ -313,29 +273,21 @@ def run_auto_bids(db: Session, workspace_id: int, rule_ids: list[int] | None = N
                 if kw.get("userLock") or grp.get("userLock"):
                     r.last_result = "키워드나 광고그룹이 OFF라 건너뜀"
                     continue
+                try:
+                    rank = _rank(client.serp_ads(kw["keyword"], r.device), ads[kw["nccAdgroupId"]])
+                except NaverApiError as e:
+                    r.last_result = f"순위 확인 실패: {e}"[:300]
+                    continue
                 cur = grp.get("bidAmt", kw["bidAmt"]) if kw.get("useGroupBidAmt") else kw["bidAmt"]
-                change = {"entity_type": "keyword", "naver_id": r.keyword_naver_id, "ad_account_id": account_id, "product": "WEB_SITE"}
-                if r.kpi:
-                    st = stats.get(r.keyword_naver_id, {})
-                    if r.off_cost and st.get("salesAmt", 0) >= r.off_cost and not st.get("ccnt"):
-                        r.last_result = f"7일 비용 {st['salesAmt']:,}원 · 전환 없음 → 키워드 OFF"
-                        changes.append({**change, "field": "status", "value": "OFF", "before": "ON"})
-                        rule_by_nid[r.keyword_naver_id] = r
-                        continue
-                    target, r.last_result = kpi_bid(cur, r.kpi, r.kpi_target, r.max_bid, st)
-                else:
-                    try:
-                        rank = _rank(client.serp_ads(kw["keyword"], r.device), ads[kw["nccAdgroupId"]])
-                    except NaverApiError as e:
-                        r.last_result = f"순위 확인 실패: {e}"[:300]
-                        continue
-                    target = next_bid(cur, rank, r.target_rank, r.max_bid)
-                    r.last_result = (f"지금 {rank}위" if rank else "지금 노출 안 됨") + f" (목표 {r.target_rank}위)"
+                target = next_bid(cur, rank, r.target_rank, r.max_bid)
+                r.last_result = f"지금 {rank}위" if rank else "지금 노출 안 됨"
+                r.last_result += f" (목표 {r.target_rank}위)"
                 if target == cur:
-                    r.last_result += " · 변경 없음" + (" (최대 입찰가)" if not r.kpi and rank != r.target_rank and cur >= r.max_bid else "")
+                    r.last_result += " · 변경 없음" + (" (최대 입찰가)" if rank != r.target_rank and cur >= r.max_bid else "")
                     continue
                 r.last_result += f" · {cur:,}원 → {target:,}원"
-                changes.append({**change, "field": "bid_amt", "value": str(target), "before": cur})
+                changes.append({"entity_type": "keyword", "naver_id": r.keyword_naver_id, "field": "bid_amt", "value": str(target),
+                                "ad_account_id": account_id, "before": cur, "product": "WEB_SITE"})
                 rule_by_nid[r.keyword_naver_id] = r
         db.commit()
         if not changes:
@@ -352,7 +304,7 @@ def run_all_auto_bids(db: Session):
     """크론용: 규칙이 있는 모든 조직. 한 조직이 실패해도 나머지는 돈다."""
     for ws_id in set(db.scalars(select(AutoBidRule.workspace_id).where(AutoBidRule.enabled.is_(True)))):
         try:
-            run_auto_bids(db, ws_id, cron=True)
+            run_auto_bids(db, ws_id)
         except Exception as e:  # noqa: BLE001
             db.rollback()
             print(f"자동입찰 실패 workspace={ws_id}: {e}")
@@ -458,3 +410,112 @@ def excel_template() -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# ---- 계정 목표 ROAS ----
+KST = timezone(timedelta(hours=9))
+GOAL_RUN_HOUR = 9  # 어제 통계가 다 쌓인 뒤 하루 한 번(한국 시간)
+GOAL_MIN_CLICKS = 10  # 이보다 클릭이 적은 키워드는 평균이 흔들려 그대로 둔다
+
+
+def goal_bid(cur: int, st: dict, target: int, max_bid: int, off_cost: int | None, allow_raise: bool) -> int | str | None:
+    """키워드 최근 7일 성과 st로 할 일: "OFF", 새 입찰가, None(그대로).
+    ROAS가 목표 아래면 -10%, 목표보다 10% 넘게 높으면 +10%(계정 ROAS가 목표 이상일 때만, 최대 입찰가까지).
+    shortcut: 고정 10%씩, 성과가 쌓이면 목표와의 차이만큼 움직이게 바꾼다"""
+    clk, cost, conv, rev = st.get("clkCnt", 0), st.get("salesAmt", 0), st.get("ccnt") or 0, st.get("convAmt") or 0
+    if off_cost and cost >= off_cost and not conv:
+        return "OFF"
+    if clk < GOAL_MIN_CLICKS or not conv or not cost:
+        return None
+    roas, step = rev * 100 / cost, max(10, cur // 10 // 10 * 10)
+    if roas < target:
+        new = max(BID_RANGE["WEB_SITE"][0], cur - step)
+    elif roas >= target * 1.1 and allow_raise:
+        new = max(cur, min(cur + step, max_bid // 10 * 10))
+    else:
+        return None
+    return new if new != cur else None
+
+
+def _goal_result(g: AccountGoal, st: dict) -> str:
+    roas = "없음" if st["roas"] is None else f"{st['roas']:,}%"
+    out = f"{st['until'][5:]}까지 7일 계정 ROAS {roas} (목표 {g.roas_target:,}%)"
+    if st["roas"] is None or st["roas"] < g.roas_target:
+        out += " · 목표 미달이라 내리기만"
+    out += f" · 키워드 {st['checked']}개 확인, 입찰가 조정 {st['bid']}개, OFF {st['off']}개"
+    return out + (f" · 진행 중(광고그룹 {len(st['groups'])}개 남음)" if st["groups"] or st.get("job") else "")
+
+
+def run_goal_step(db: Session, g: AccountGoal, start: bool = False) -> bool:
+    """한 단계만 실행한다(무료 플랜은 실행 1번에 외부 호출 50번까지): 진행 중 작업 이어 실행 → 남은 광고그룹 1개 조정 → 오늘 첫 시작.
+    start=True면 시간과 상관없이 새로 시작한다(지금 실행). 할 일이 없으면 False.
+    shortcut: 크론 1번에 1단계라 광고그룹이 수백 개면 하루에 다 못 돈다, 광고주가 많아지면 단계 수를 늘린다"""
+    today = datetime.now(KST)
+    st = json.loads(g.state) if g.state else None
+    if st is None and not start and (today.hour < GOAL_RUN_HOUR or g.run_date == today.date().isoformat()):
+        return False
+    g.last_run_at = now()
+    m = db.scalar(select(Membership).where(Membership.workspace_id == g.workspace_id, Membership.user_id == g.created_by))
+    if not m or g.ad_account_id not in accessible_account_ids(db, m, edit=True):
+        g.last_result, g.state, g.run_date = "목표를 저장한 사람에게 이 계정 수정 권한이 없습니다", None, today.date().isoformat()
+        db.commit()
+        return True
+    try:
+        client = _client(db, g.workspace_id, g.ad_account_id)
+        job = st and st.get("job") and db.get(BulkJob, st["job"])
+        if st and not (job and job.status == "RUNNING"):
+            st["job"] = None
+        if st and st["job"]:
+            execute_job(db, m, job, EXECUTE_CHUNK)
+            st["job"] = job.id if job.status == "RUNNING" else None
+        elif st is None:
+            until = today.date() - timedelta(days=1)
+            since = until - timedelta(days=6)
+            camps = [c["nccCampaignId"] for c in client.list_campaigns() if c["campaignTp"] == "WEB_SITE" and not c.get("userLock")]
+            s = client.entity_stats(camps, since, until).values() if camps else []
+            cost, rev = sum(x.get("salesAmt", 0) for x in s), sum(x.get("convAmt") or 0 for x in s)
+            groups = [x["nccAdgroupId"] for c in camps for x in client.list_adgroups(c) if not x.get("userLock")]
+            st = {"groups": groups, "roas": round(rev * 100 / cost) if cost else None, "since": since.isoformat(),
+                  "until": until.isoformat(), "checked": 0, "bid": 0, "off": 0, "job": None}
+            g.run_date = today.date().isoformat()
+        elif st["groups"]:
+            gid = st["groups"].pop(0)
+            grp = (client.get_many("adgroups", [gid]) or [{}])[0]
+            kws = [k for k in client.list_keywords(gid) if not k.get("userLock")]
+            stats = client.entity_stats([k["nccKeywordId"] for k in kws], date.fromisoformat(st["since"]),
+                                        date.fromisoformat(st["until"])) if kws else {}
+            allow = st["roas"] is not None and st["roas"] >= g.roas_target
+            changes = []
+            for k in kws:
+                cur = grp.get("bidAmt", k["bidAmt"]) if k.get("useGroupBidAmt") else k["bidAmt"]
+                act = goal_bid(cur, stats.get(k["nccKeywordId"], {}), g.roas_target, g.max_bid, g.off_cost, allow)
+                st["checked"] += 1
+                ch = {"entity_type": "keyword", "naver_id": k["nccKeywordId"], "ad_account_id": g.ad_account_id, "product": "WEB_SITE"}
+                if act == "OFF":
+                    changes.append({**ch, "field": "status", "value": "OFF", "before": "ON"})
+                    st["off"] += 1
+                elif act:
+                    changes.append({**ch, "field": "bid_amt", "value": str(act), "before": cur})
+                    st["bid"] += 1
+            if changes:
+                job = execute_job(db, m, create_job(db, m, changes, "ROAS_GOAL"), EXECUTE_CHUNK)
+                st["job"] = job.id if job.status == "RUNNING" else None
+    except NaverApiError as e:
+        g.last_result, g.state, g.run_date = f"네이버 조회 실패: {e}"[:300], None, today.date().isoformat()
+        db.commit()
+        return True
+    g.last_result = _goal_result(g, st)[:300]
+    g.state = json.dumps(st) if st["groups"] or st.get("job") else None
+    db.commit()
+    return True
+
+
+def run_all_goals(db: Session):
+    """크론용: 할 일이 있는 첫 목표 하나만 한 단계 진행(무료 플랜 호출 한도). 실패해도 다음 크론에서 다른 목표로 넘어간다."""
+    for g in db.scalars(select(AccountGoal).where(AccountGoal.enabled.is_(True)).order_by(AccountGoal.id)):
+        try:
+            if run_goal_step(db, g):
+                return
+        except Exception as e:  # noqa: BLE001
+            db.rollback()
+            print(f"목표 ROAS 실패 goal={g.id}: {e}")
