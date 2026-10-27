@@ -465,7 +465,7 @@ async def retry_bulk_job(job_id: int, m: Membership = Depends(membership), db: S
     return _job_out(db, bulk.retry_failed(db, m, _job(db, m, job_id)))
 
 
-# ---------- 자동입찰 (목표 순위) ----------
+# ---------- 자동입찰 (목표 순위 · KPI) ----------
 AUTO_BID_LIMIT = 20
 
 
@@ -477,10 +477,13 @@ class KeywordRef(BaseModel):
 
 class AutoBidIn(BaseModel):
     keywords: list[KeywordRef]
-    device: Literal["PC", "MOBILE"]
-    target_rank: int
+    device: Literal["PC", "MOBILE"] = "PC"
+    target_rank: int = 0
     max_bid: int
     enabled: bool = True
+    kpi: Literal["CPA", "ROAS", "CPC"] | None = None  # 있으면 순위 대신 KPI로(device·target_rank 무시)
+    kpi_target: int | None = None
+    off_cost: int | None = None
 
 
 class AutoBidKeysIn(BaseModel):
@@ -502,7 +505,7 @@ def _rule(db: Session, m: Membership, naver_id: str) -> AutoBidRule | None:
 async def list_auto_bids(m: Membership = Depends(membership), db: Session = Depends(get_db)):
     ids = resolve_account_ids(db, m, None)
     q = select(AutoBidRule).where(AutoBidRule.workspace_id == m.workspace_id, AutoBidRule.ad_account_id.in_(ids)).order_by(AutoBidRule.id)
-    return _rows(db.scalars(q), "id", "ad_account_id", "keyword_naver_id", "keyword", "device", "target_rank", "max_bid", "enabled",
+    return _rows(db.scalars(q), "id", "ad_account_id", "keyword_naver_id", "keyword", "device", "target_rank", "max_bid", "kpi", "kpi_target", "off_cost", "enabled",
                  "last_run_at", "last_result")
 
 
@@ -510,7 +513,12 @@ async def list_auto_bids(m: Membership = Depends(membership), db: Session = Depe
 async def set_auto_bids(body: AutoBidIn, m: Membership = Depends(membership), db: Session = Depends(get_db)):
     """선택한 키워드에 같은 규칙을 만들거나 덮어쓴다. 실행은 마지막으로 저장한 사람의 권한으로 한다."""
     hi_rank = 10 if body.device == "PC" else 5
-    if not 1 <= body.target_rank <= hi_rank:
+    if body.kpi:
+        if not body.kpi_target or body.kpi_target <= 0:
+            raise HTTPException(400, f"{body.kpi} 목표값을 입력하세요")
+        if body.off_cost is not None and body.off_cost <= 0:
+            raise HTTPException(400, "무전환 OFF 기준 비용은 1원 이상")
+    elif not 1 <= body.target_rank <= hi_rank:
         raise HTTPException(400, f"{body.device} 목표 순위는 1~{hi_rank}위")
     lo, hi = bulk.BID_RANGE["WEB_SITE"]
     if not lo <= body.max_bid <= hi or body.max_bid % 10:
@@ -529,9 +537,13 @@ async def set_auto_bids(body: AutoBidIn, m: Membership = Depends(membership), db
         r.ad_account_id, r.keyword = k.ad_account_id, k.keyword[:100]
         r.device, r.target_rank, r.max_bid, r.enabled, r.created_by = (body.device, body.target_rank, body.max_bid,
                                                                        body.enabled, m.user_id)
+        r.kpi, r.kpi_target, r.off_cost = (body.kpi, body.kpi_target, body.off_cost) if body.kpi else (None, None, None)
+        rule = f"{body.device} {body.target_rank}위"
+        if body.kpi:
+            rule = f"{body.kpi} {body.kpi_target}" + (f" 무전환 OFF {body.off_cost}" if body.off_cost else "")
         db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=k.ad_account_id, action="AUTO_BID_SET",
                         entity_type="keyword", naver_id=k.naver_id, field="auto_bid",
-                        after=f"{body.device} {body.target_rank}위 최대 {body.max_bid}" + ("" if body.enabled else " 중지")))
+                        after=f"{rule} 최대 {body.max_bid}" + ("" if body.enabled else " 중지")))
     db.commit()
     return {"ok": True}
 

@@ -103,6 +103,10 @@ class AutoBidRule(Base):
     device: Mapped[str] = mapped_column(String(6))  # PC | MOBILE
     target_rank: Mapped[int] = mapped_column(Integer)
     max_bid: Mapped[int] = mapped_column(Integer)
+    # KPI 자동운영: kpi가 있으면 순위 대신 최근 7일 성과로 하루 한 번 조정(device·target_rank는 안 씀)
+    kpi: Mapped[str | None] = mapped_column(String(4), nullable=True)  # CPA | ROAS | CPC
+    kpi_target: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 원(CPA·CPC, VAT 포함) 또는 %(ROAS)
+    off_cost: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 7일 비용이 이 이상인데 전환 0이면 키워드 OFF
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

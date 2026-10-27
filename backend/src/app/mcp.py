@@ -209,15 +209,20 @@ TOOLS = [
     {"name": "check_ranks", "description": "키워드의 지금 순위(PC·모바일 네이버 검색 화면에서 내 광고가 몇 위인지, 노출 안 되면 null). 한 번에 10개까지.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "keywords"], "properties": {**WS, "keywords": {**KEYS, "maxItems": 10}}},
      "annotations": {"readOnlyHint": True}},
-    {"name": "list_auto_bids", "description": "조직의 자동입찰 규칙 목록(기기·목표 순위·최대 입찰가·마지막 실행 결과).",
+    {"name": "list_auto_bids", "description": "조직의 자동입찰 규칙 목록(기기·목표 순위 또는 KPI·최대 입찰가·마지막 실행 결과).",
      "inputSchema": {"type": "object", "required": ["workspace_id"], "properties": WS}, "annotations": {"readOnlyHint": True}},
     {"name": "set_auto_bid", "description": "키워드에 자동입찰 규칙을 만들거나 덮어쓴다(바로 저장). 10분마다 순위를 읽어 목표보다 아래면 입찰가를 20% 올리고 "
      "위면 10% 내린다(최대 입찰가 이하). 한 번에 목표 순위로 가지 않고 몇십 분에 걸쳐 맞춘다. 조직당 20개까지. "
-     "기기·목표 순위·최대 입찰가를 사용자에게 확인받은 뒤 호출. enabled=false면 규칙을 남긴 채 중지.",
-     "inputSchema": {"type": "object", "required": ["workspace_id", "keywords", "device", "target_rank", "max_bid"], "properties": {
+     "kpi를 주면 순위 대신 KPI 자동운영: 하루 한 번(오전 9시 이후) 최근 7일 성과가 목표보다 10% 넘게 좋으면 +10%, 나쁘면 -10%, "
+     "클릭 10회 미만이나 전환 0(CPA·ROAS)이면 그대로. off_cost를 주면 7일 비용이 그 이상인데 전환 0인 키워드를 OFF. "
+     "규칙 내용을 사용자에게 확인받은 뒤 호출. enabled=false면 규칙을 남긴 채 중지.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "keywords", "max_bid"], "properties": {
          **WS, "keywords": KEYS, "device": {"enum": ["PC", "MOBILE"]},
          "target_rank": {"type": "integer", "description": "목표 순위. PC 1~10, 모바일 1~5"},
-         "max_bid": {"type": "integer", "description": "최대 입찰가(70~100,000원, 10원 단위)"}, "enabled": {"type": "boolean"}}},
+         "max_bid": {"type": "integer", "description": "최대 입찰가(70~100,000원, 10원 단위)"}, "enabled": {"type": "boolean"},
+         "kpi": {"enum": ["CPA", "ROAS", "CPC"], "description": "없으면 목표 순위(device·target_rank 필요)"},
+         "kpi_target": {"type": "integer", "description": "CPA·CPC는 원(VAT 포함), ROAS는 %"},
+         "off_cost": {"type": "integer", "description": "무전환 OFF 기준 7일 비용(원)"}}},
      "annotations": {"destructiveHint": True}},
     {"name": "delete_auto_bid", "description": "키워드의 자동입찰 규칙을 지운다(입찰가는 지금 값 그대로).",
      "inputSchema": {"type": "object", "required": ["workspace_id", "keywords"], "properties": {**WS, "keywords": KEYS}},
