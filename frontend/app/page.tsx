@@ -249,7 +249,7 @@ function GoalRow({ account, goal, onDone }: { account: { id: number; name: strin
   const save = (enabled: boolean) => call("", "PUT", { ad_account_id: account.id, roas_target: Number(target), max_bid: Number(maxBid), off_cost: offCost ? Number(offCost) : null, enabled });
   return (
     <tr className="border-t border-line align-top">
-      <td className="py-2 pr-3 font-medium">{account.name}{goal && !goal.enabled && <span className="ml-1 text-xs text-faint">(중지)</span>}</td>
+      <td className="whitespace-nowrap py-2 pr-3 font-medium">{account.name}{goal && !goal.enabled && <span className="ml-1 text-xs text-faint">(중지)</span>}</td>
       <td className="px-3 py-2 text-right tabular-nums" title={`최근 ${account.days}일`}>{account.roas == null ? "-" : `${account.roas}%`}</td>
       <td className="px-3 py-2">
         <div className="flex flex-wrap items-center gap-2">
