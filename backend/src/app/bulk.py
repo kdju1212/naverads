@@ -24,6 +24,8 @@ ALLOWED_FIELDS = {
     "keyword": {"status", "bid_amt", "create", "delete"},  # create: naver_id는 광고그룹, value는 "키워드" 또는 "키워드|입찰가"
     "ad": {"status", "bid_amt", "delete"},
     "ad_extension": {"status"},  # 파워링크 확장소재: ON/OFF만 (내용 수정은 유형별 구조 확인 후)
+    # 제외검색어: create는 naver_id=광고그룹·value=검색어, delete는 naver_id=제외검색어 ID·value=광고그룹 ID(삭제 경로에 필요)
+    "negative_keyword": {"create", "delete"},
 }
 # shortcut: 입찰가·예산 한도는 가정값, 공식 문서 확인 후 수정
 BID_RANGE = {"WEB_SITE": (70, 100_000), "SHOPPING": (50, 100_000)}
@@ -42,6 +44,8 @@ def _validate(ch: dict) -> str | None:
     etype, field, value, before, product = ch["entity_type"], ch["field"], ch["value"], ch.get("before"), ch.get("product")
     if field not in ALLOWED_FIELDS[etype]:
         return f"{etype}에서 수정할 수 없는 항목: {field}"
+    if etype == "negative_keyword":
+        return None if value else "제외검색어를 입력하세요" if field == "create" else "광고그룹 ID가 필요합니다"
     if field == "delete":
         return None
     if field == "create":
@@ -142,7 +146,12 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
             if row.ad_account_id not in clients:
                 clients[row.ad_account_id] = _client(db, m.workspace_id, row.ad_account_id)
             client = clients[row.ad_account_id]
-            if row.field == "create":
+            if row.entity_type == "negative_keyword":
+                if row.field == "create":
+                    created = client.create_restricted_keyword(row.naver_id, row.after)
+                else:
+                    client.delete_restricted_keyword(row.after, row.naver_id)
+            elif row.field == "create":
                 kw, bid = _split_new_keyword(row.after)
                 bid_amt = int(bid) if bid else BID_RANGE["WEB_SITE"][0]  # 비우면 최저 입찰가(사용자 요청 10/20)
                 created = client.create_keyword(row.naver_id, kw, bid_amt, False)
@@ -154,7 +163,11 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
             row.status, row.error = "FAILED", str(e)[:300]
             continue
         audit = dict(action="UPDATE", naver_id=row.naver_id, field=row.field, before=row.before, after=row.after)
-        if row.field == "create":
+        if row.entity_type == "negative_keyword" and row.field == "create":
+            audit.update(action="CREATE", naver_id=created["nccAdgroupRestrictKwdId"], field="negative_keyword", after=row.after)
+        elif row.entity_type == "negative_keyword":
+            audit.update(action="DELETE", field="negative_keyword", after=None)
+        elif row.field == "create":
             audit.update(action="CREATE", naver_id=created["nccKeywordId"], field="keyword", after=kw)
         elif row.field == "delete":
             if row.entity_type == "keyword":
@@ -405,11 +418,34 @@ def excel_template() -> bytes:
                  ["value", "10원 단위 숫자 또는 ON/OFF"],
                  ["키워드 등록", "entity_type=keyword, naver_id=광고그룹 ID(grp-...), field=create, value=키워드|입찰가 (입찰가 비우면 70원)"],
                  ["키워드 삭제", "entity_type=keyword, naver_id=키워드 ID(kwd-...), field=delete, value 비움"],
-                 ["소재 삭제", "entity_type=ad, naver_id=소재 ID(nad-...), field=delete, value 비움"]]:
+                 ["소재 삭제", "entity_type=ad, naver_id=소재 ID(nad-...), field=delete, value 비움"],
+                 ["제외검색어 등록", "entity_type=negative_keyword, naver_id=광고그룹 ID(grp-...), field=create, value=제외할 검색어"],
+                 ["제외검색어 삭제", "entity_type=negative_keyword, naver_id=제외검색어 ID, field=delete, value=광고그룹 ID(grp-...)"]]:
         guide.append(line)
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# ---- 예약 실행 ----
+def run_scheduled_jobs(db: Session):
+    """크론용: 예약 시각이 지난 작업 하나를 EXECUTE_CHUNK행 실행(남으면 다음 크론에서 이어서). 실행은 작업을 만든 사람 권한으로.
+    shortcut: 크론 1번에 5행이라 큰 작업은 오래 걸린다, 예약 작업이 커지면 한 번에 더 실행한다"""
+    job = db.scalar(select(BulkJob).where(BulkJob.scheduled_at <= now(), BulkJob.status.in_(("PREVIEW", "RUNNING")))
+                    .order_by(BulkJob.scheduled_at).limit(1))
+    if job is None:
+        return
+    m = db.scalar(select(Membership).where(Membership.workspace_id == job.workspace_id, Membership.user_id == job.created_by))
+    try:
+        if m is None:
+            raise HTTPException(403, "작업을 만든 사람이 조직에 없습니다")
+        execute_job(db, m, job, EXECUTE_CHUNK)
+    except HTTPException as e:  # 실행할 행이 없거나 권한이 없으면 다시 시도하지 않게 끝낸다
+        db.rollback()
+        job.status, job.executed_at = "FAILED", now()
+        db.add(AuditLog(workspace_id=job.workspace_id, user_id=job.created_by, job_id=job.id, action="JOB_SCHEDULE_FAIL",
+                        after=str(e.detail)[:50]))
+        db.commit()
 
 
 # ---- 계정 목표 ROAS ----

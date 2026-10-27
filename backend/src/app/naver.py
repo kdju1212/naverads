@@ -141,6 +141,22 @@ class RealNaverClient:
             raise NaverApiError(f"{rs['code']} {rs['message']}" if rs else f"등록 응답에 키워드 ID가 없습니다: {json.dumps(r, ensure_ascii=False)[:250]}")
         return k
 
+    # 제외검색어: 명세(ncc-heroes-ncc.json) /ncc/adgroups/{id}/restricted-keywords. shortcut: 실계정 미확인, 응답이 다르면 여기만 고친다
+    def list_restricted_keywords(self, adgroup_id):
+        return self._req("GET", f"/ncc/adgroups/{adgroup_id}/restricted-keywords", params={"type": "KEYWORD_PLUS_RESTRICT"}) or []
+
+    def create_restricted_keyword(self, adgroup_id, keyword):
+        r = self._req("POST", f"/ncc/adgroups/{adgroup_id}/restricted-keywords",
+                      json=[{"nccAdgroupId": adgroup_id, "keyword": keyword, "type": "KEYWORD_PLUS_RESTRICT"}])
+        k = r[0] if isinstance(r, list) and r else r
+        if not isinstance(k, dict) or "nccAdgroupRestrictKwdId" not in k:
+            rs = k.get("resultStatus") if isinstance(k, dict) else None
+            raise NaverApiError(f"{rs['code']} {rs['message']}" if rs else f"등록 응답에 제외검색어 ID가 없습니다: {json.dumps(r, ensure_ascii=False)[:250]}")
+        return k
+
+    def delete_restricted_keyword(self, adgroup_id, kwd_id):
+        self._req("DELETE", f"/ncc/adgroups/{adgroup_id}/restricted-keywords", params={"ids": kwd_id})
+
     def keyword_tool(self, hints):
         """연관 키워드 + 최근 30일 월 검색량. 명세(gh-pages assets/json/ncc-keywordstool.json)."""
         r = self._req("GET", "/keywordstool", params={"hintKeywords": ",".join(hints), "showDetail": "1"})
@@ -391,6 +407,22 @@ class MockNaverClient:
              "bidAmt": bid, "useGroupBidAmt": use_group_bid}
         self.s["keywords"][kid] = k
         return dict(k)
+
+    def list_restricted_keywords(self, adgroup_id):
+        return [dict(k) for k in self.s.setdefault("restricted", {}).values() if k["nccAdgroupId"] == adgroup_id]
+
+    def create_restricted_keyword(self, adgroup_id, keyword):
+        if adgroup_id not in self.s["adgroups"]:
+            raise NaverApiError("대상 광고그룹이 존재하지 않습니다")
+        rid = f"nrk-{self.customer_id}-{len(self.s.setdefault('restricted', {})) + 1}"
+        self.s["restricted"][rid] = {"nccAdgroupRestrictKwdId": rid, "nccAdgroupId": adgroup_id, "keyword": keyword, "type": "KEYWORD_PLUS_RESTRICT"}
+        return dict(self.s["restricted"][rid])
+
+    def delete_restricted_keyword(self, adgroup_id, kwd_id):
+        k = self.s.setdefault("restricted", {}).get(kwd_id)
+        if k is None or k["nccAdgroupId"] != adgroup_id:
+            raise NaverApiError("대상 제외검색어가 존재하지 않습니다")
+        del self.s["restricted"][kwd_id]
 
     def create_master_report(self, item):
         return {"id": f"mock-{item}", "item": item, "status": "REGIST"}

@@ -325,6 +325,51 @@ def test_ad_delete():
     assert ("DELETE", "ad") in acts
 
 
+def test_negative_keywords():
+    owner, ws, acc = _account("neg@a.com", "6107")
+    url, grp = f"/workspaces/{ws}/ad-accounts/{acc}/adgroups/grp-6107-pl1/negative-keywords", "grp-6107-pl1"
+    job = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [
+        ch(acc, "negative_keyword", grp, "create", "무료"), ch(acc, "negative_keyword", grp, "create", "중고"),
+        ch(acc, "negative_keyword", grp, "create", ""),  # 빈 검색어
+    ]}).json()
+    assert [r["status"] for a in job["accounts"] for r in a["rows"]] == ["VALID", "VALID", "INVALID"]
+    assert c.post(f"/workspaces/{ws}/bulk-jobs/{job['id']}/execute", headers=owner).json()["status"] == "DONE"
+    neg = c.get(url, headers=owner).json()
+    assert [n["keyword"] for n in neg] == ["무료", "중고"]
+    job = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [
+        ch(acc, "negative_keyword", neg[0]["naver_id"], "delete", grp)]}).json()
+    assert c.post(f"/workspaces/{ws}/bulk-jobs/{job['id']}/execute", headers=owner).json()["status"] == "DONE"
+    assert [n["keyword"] for n in c.get(url, headers=owner).json()] == ["중고"]
+    acts = {(h["action"], h["field"]) for h in c.get(f"/workspaces/{ws}/audit-logs", headers=owner).json()}
+    assert {("CREATE", "negative_keyword"), ("DELETE", "negative_keyword")} <= acts
+
+
+def test_schedule_job(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from app import bulk
+    from app.db import SessionLocal
+
+    owner, ws, acc = _account("sched@a.com", "6108")
+    job = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [
+        ch(acc, "campaign", "cmp-6108-pl", "status", "OFF", before="ON", product="WEB_SITE")]}).json()
+    url = f"/workspaces/{ws}/bulk-jobs/{job['id']}/schedule"
+    at = datetime.now(timezone.utc) + timedelta(days=16)
+    assert c.post(url, headers=owner, json={"scheduled_at": "2026-11-12T00:00:00"}).status_code == 400  # 시간대 없음
+    assert c.post(url, headers=owner, json={"scheduled_at": "2020-01-01T00:00:00+09:00"}).status_code == 400  # 과거
+    kst = at.astimezone(timezone(timedelta(hours=9))).isoformat()
+    assert c.post(url, headers=owner, json={"scheduled_at": kst}).json()["scheduled_at"]
+
+    run = lambda: (lambda db: (bulk.run_scheduled_jobs(db), db.close()))(SessionLocal())  # noqa: E731
+    run()  # 아직 시각 전
+    camps = store("6108")["campaigns"]
+    assert camps["cmp-6108-pl"]["userLock"] is False
+    monkeypatch.setattr(bulk, "now", lambda: at + timedelta(minutes=1))
+    run()
+    assert camps["cmp-6108-pl"]["userLock"] is True
+    assert c.get(f"/workspaces/{ws}/bulk-jobs/{job['id']}", headers=owner).json()["status"] == "DONE"
+    assert c.post(url, headers=owner, json={"scheduled_at": None}).status_code == 409  # 실행된 작업은 예약 불가
+
+
 def test_execute_in_chunks():
     from app import bulk
 

@@ -44,6 +44,8 @@ export default function BulkPage() {
             네이버 ID는 각 목록 화면에서 확인할 수 있습니다.
             키워드 등록은 <code>keyword</code> · 광고그룹 ID · <code>create</code> · <code>키워드|입찰가</code>(입찰가 비우면 70원),
             삭제는 <code>keyword</code> · 키워드 ID · <code>delete</code> · 빈칸.
+            제외검색어 등록은 <code>negative_keyword</code> · 광고그룹 ID · <code>create</code> · 검색어,
+            삭제는 <code>negative_keyword</code> · 제외검색어 ID · <code>delete</code> · 광고그룹 ID.
           </p>
           <Button variant="secondary" onClick={async () => {
             try { downloadBlob(await api<Blob>("/bulk-jobs/excel-template", { raw: true }), "bulk_template.xlsx"); }

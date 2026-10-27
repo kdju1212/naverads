@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
 import httpx
@@ -423,7 +423,7 @@ def _job_out(db: Session, job: BulkJob):
     counts = {s: sum(r.status == s for r in rows) for s in ("VALID", "INVALID", "SUCCESS", "FAILED")}
     return {"id": job.id, "status": job.status, "source": job.source, "parent_job_id": job.parent_job_id,
             "created_by": job.created_by, "created_at": job.created_at, "executed_at": job.executed_at,
-            "counts": counts, "accounts": list(by_account.values())}
+            "scheduled_at": job.scheduled_at, "counts": counts, "accounts": list(by_account.values())}
 
 
 @app.post("/workspaces/{ws_id}/bulk-jobs")
@@ -446,7 +446,7 @@ async def excel_template():
 @app.get("/workspaces/{ws_id}/bulk-jobs")
 async def list_bulk_jobs(m: Membership = Depends(membership), db: Session = Depends(get_db)):
     jobs = db.scalars(select(BulkJob).where(BulkJob.workspace_id == m.workspace_id).order_by(BulkJob.id.desc()).limit(50))
-    return _rows(jobs, "id", "status", "source", "parent_job_id", "created_by", "created_at", "executed_at")
+    return _rows(jobs, "id", "status", "source", "parent_job_id", "created_by", "created_at", "executed_at", "scheduled_at")
 
 
 @app.get("/workspaces/{ws_id}/bulk-jobs/{job_id}")
@@ -458,6 +458,39 @@ async def get_bulk_job(job_id: int, m: Membership = Depends(membership), db: Ses
 async def execute_bulk_job(job_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
     """최대 EXECUTE_CHUNK행씩 실행. 응답 status가 RUNNING이면 화면이 다시 호출한다."""
     return _job_out(db, bulk.execute_job(db, m, _job(db, m, job_id), bulk.EXECUTE_CHUNK))
+
+
+class ScheduleIn(BaseModel):
+    scheduled_at: datetime | None  # 시간대 포함(예: 2026-11-12T00:00:00+09:00). null이면 예약 취소
+
+
+@app.post("/workspaces/{ws_id}/bulk-jobs/{job_id}/schedule")
+async def schedule_bulk_job(body: ScheduleIn, job_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    """미리보기 작업을 정한 시각에 실행하도록 예약(10분마다 도는 크론이 실행하므로 최대 10분 늦을 수 있다). 실행은 작업을 만든 사람 권한으로."""
+    job = _job(db, m, job_id)
+    if job.status != "PREVIEW":
+        raise HTTPException(409, "미리보기 상태의 작업만 예약할 수 있습니다")
+    at = body.scheduled_at
+    if at is not None:
+        if at.tzinfo is None:
+            raise HTTPException(400, "시간대가 있는 시각이어야 합니다")
+        if not now() < at < now() + timedelta(days=366):
+            raise HTTPException(400, "예약 시각은 지금부터 1년 안이어야 합니다")
+        if not db.scalar(select(func.count()).select_from(BulkJobRow).where(BulkJobRow.job_id == job.id, BulkJobRow.status == "VALID")):
+            raise HTTPException(400, "실행할 수 있는 행이 없습니다")
+    # SQLite·D1은 시간대를 버리고 저장하므로 다른 시각(now(), UTC)과 비교되게 UTC로 맞춘다
+    job.scheduled_at = at and at.astimezone(timezone.utc)
+    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, job_id=job.id, action="JOB_SCHEDULE",
+                    after=at.isoformat()[:50] if at else "취소"))
+    db.commit()
+    return _job_out(db, job)
+
+
+@app.get("/workspaces/{ws_id}/ad-accounts/{account_id}/adgroups/{adgroup_id}/negative-keywords")
+async def negative_keywords(account_id: int, adgroup_id: str, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    """광고그룹의 제외검색어. 서버에 저장하지 않고 네이버에서 바로 조회한다. 등록·삭제는 대량 작업(entity_type=negative_keyword)."""
+    return [{"naver_id": k["nccAdgroupRestrictKwdId"], "adgroup_naver_id": k["nccAdgroupId"], "keyword": k["keyword"]}
+            for k in _naver(db, m, account_id, lambda c: c.list_restricted_keywords(adgroup_id))]
 
 
 @app.post("/workspaces/{ws_id}/bulk-jobs/{job_id}/retry-failed")

@@ -3,13 +3,14 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
-import { Badge, Button, Card, ErrorText, PageTitle } from "@/components/ui";
+import { Badge, Button, Card, ErrorText, inputCls, PageTitle } from "@/components/ui";
 import { api, downloadCsv, ENTITY_LABEL, FIELD_LABEL, fmt, Job } from "@/lib/api";
 import { applyJob } from "@/lib/naverData";
 import { useApp } from "@/lib/store";
 import { useFetch } from "@/lib/useFetch";
 
-const SOURCE: Record<string, string> = { UI: "화면", EXCEL: "엑셀", RETRY: "재실행", AUTO_BID: "자동입찰" };
+const SOURCE: Record<string, string> = { UI: "화면", EXCEL: "엑셀", RETRY: "재실행", AUTO_BID: "자동입찰", ROAS_GOAL: "목표 ROAS" };
+const when = (v: string) => new Date(v).toLocaleString("ko-KR");
 const value = (field: string, v: string | null) => (v == null || v === "" ? "-" : field === "bid_amt" || field === "daily_budget" ? fmt(Number(v), "원") : v);
 
 export default function JobsPage() {
@@ -39,7 +40,7 @@ function JobList() {
                 <td>{SOURCE[j.source] ?? j.source}</td>
                 <td><Badge value={j.status} /></td>
                 <td className="text-faint">{new Date(j.created_at).toLocaleString("ko-KR")}</td>
-                <td className="text-faint">{j.executed_at ? new Date(j.executed_at).toLocaleString("ko-KR") : "-"}</td>
+                <td className="text-faint">{j.executed_at ? when(j.executed_at) : j.scheduled_at ? <span className="text-info">{when(j.scheduled_at)} 예약</span> : "-"}</td>
               </tr>
             ))}
             {!loading && data?.length === 0 && <tr><td colSpan={5} className="py-6 text-center text-faint">작업이 없습니다</td></tr>}
@@ -56,10 +57,21 @@ function JobDetail({ id }: { id: string }) {
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [at, setAt] = useState("");
 
   useEffect(() => {
     if (ws) api<Job>(`/workspaces/${ws.id}/bulk-jobs/${id}`).then(setJob, (e) => setError(e.message));
   }, [ws, id]);
+
+  const schedule = async (scheduled_at: string | null) => {
+    if (!ws) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setJob(await api<Job>(`/workspaces/${ws.id}/bulk-jobs/${id}/schedule`, { method: "POST", body: { scheduled_at } }));
+    } catch (e) { setError((e as Error).message); }
+    setBusy(false);
+  };
 
   const act = async (path: string, confirmMsg?: string) => {
     if (!ws || (confirmMsg && !confirm(confirmMsg))) return;
@@ -102,6 +114,18 @@ function JobDetail({ id }: { id: string }) {
           {problemRows.length > 0 && (
             <Button variant="secondary" onClick={() => downloadCsv([["광고주", "유형", "네이버ID", "항목", "값", "상태", "사유"], ...problemRows], `job_${job.id}_errors.csv`)}>오류·실패 행 다운로드</Button>
           )}
+          {job.status === "PREVIEW" && (job.scheduled_at ? (
+            <>
+              <span className="self-center text-info">{when(job.scheduled_at)} 실행 예약됨 (최대 10분 늦을 수 있음)</span>
+              <Button variant="secondary" disabled={busy} onClick={() => schedule(null)}>예약 취소</Button>
+            </>
+          ) : (
+            <>
+              <input type="datetime-local" className={inputCls} aria-label="예약 실행 시각" value={at} onChange={(e) => setAt(e.target.value)} />
+              <Button variant="secondary" disabled={busy || c.VALID === 0 || !at}
+                onClick={() => confirm(`${new Date(at).toLocaleString("ko-KR")}에 ${c.VALID}건을 실제로 변경하도록 예약할까요?`) && schedule(new Date(at).toISOString())}>예약 실행</Button>
+            </>
+          ))}
           {job.status === "PREVIEW" && (
             <Button disabled={busy || c.VALID === 0} onClick={() => act("execute", `광고주 ${job.accounts?.length}개, ${c.VALID}건을 실제로 변경합니다. 실행할까요?`)}>
               {busy ? "실행 중…" : `${c.VALID}건 실행`}

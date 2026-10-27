@@ -25,6 +25,11 @@ export function enrichExcel(rows: Change[], d: NaverData): Change[] {
     campaign: by(d.campaigns), adgroup: by(d.adgroups), keyword: by(d.keywords), ad: by(d.ads), ad_extension: by(d.extensions),
   };
   return rows.map((r) => {
+    // 제외검색어는 보관본에 없어 광고그룹(등록은 naver_id, 삭제는 value)으로 계정만 찾는다
+    if (r.entity_type === "negative_keyword") {
+      const g = maps.adgroup.get((r.field === "delete" ? r.value : r.naver_id).trim());
+      return g ? { ...r, ad_account_id: g.ad_account_id } : { ...r, invalid: "보관된 데이터에 없는 광고그룹 ID입니다" };
+    }
     // 키워드 등록은 naver_id가 광고그룹
     const t = (r.entity_type === "keyword" && r.field === "create" ? maps.adgroup : maps[r.entity_type])?.get(r.naver_id.trim());
     if (!t) return { ...r, invalid: "보관된 데이터에 없는 ID입니다 (ID 확인, 또는 새로고침 후 다시 올리기)" };

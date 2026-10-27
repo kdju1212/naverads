@@ -139,6 +139,7 @@ class BulkJob(Base):
     parent_job_id: Mapped[int | None] = mapped_column(ForeignKey("bulk_jobs.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # 예약 실행(크론이 이 시각 이후 실행)
 
 
 class BulkJobRow(Base):

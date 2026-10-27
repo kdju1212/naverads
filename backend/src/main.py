@@ -14,7 +14,7 @@ from pyodide.ffi import to_js  # noqa: E402
 from workers import WorkerEntrypoint, asgi  # noqa: E402
 
 from app import db as app_db  # noqa: E402
-from app.bulk import run_all_auto_bids, run_all_goals  # noqa: E402
+from app.bulk import run_all_auto_bids, run_all_goals, run_scheduled_jobs  # noqa: E402
 from app.main import app, master_file_source  # noqa: E402
 
 # 마스터 보고서 파일은 FastAPI를 거치지 않고 JS fetch로 받아 그대로 넘긴다(파이썬이 본문을 다루면 CPU 한도 초과)
@@ -57,10 +57,11 @@ class Default(WorkerEntrypoint):
         return await asgi.fetch(app, request, self.env, self.ctx)
 
     async def scheduled(self, controller, env=None, ctx=None):
-        # 자동입찰·계정 목표 ROAS (wrangler.jsonc triggers.crons)
+        # 예약 실행·자동입찰·계정 목표 ROAS (wrangler.jsonc triggers.crons)
         self._bind()
         db = app_db.SessionLocal()
         try:
+            run_scheduled_jobs(db)
             run_all_auto_bids(db)
             run_all_goals(db)
         finally:

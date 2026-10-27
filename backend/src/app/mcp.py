@@ -156,11 +156,12 @@ ACC = {**WS, "ad_account_id": {"type": "integer", "description": "광고 계정 
 PERIOD = {"since": {"type": "string", "description": "시작일 YYYY-MM-DD"}, "until": {"type": "string", "description": "종료일 YYYY-MM-DD"},
           "account_ids": {"type": "array", "items": {"type": "integer"}, "description": "광고 계정 ID들. 비우면 볼 수 있는 전체"}}
 CHANGE = {"type": "object", "required": ["entity_type", "naver_id", "field", "value", "ad_account_id"], "properties": {
-    "entity_type": {"enum": ["campaign", "adgroup", "keyword", "ad", "ad_extension"]},
-    "naver_id": {"type": "string", "description": "대상 네이버 ID. 키워드 등록(create)이면 광고그룹 ID"},
+    "entity_type": {"enum": ["campaign", "adgroup", "keyword", "ad", "ad_extension", "negative_keyword"]},
+    "naver_id": {"type": "string", "description": "대상 네이버 ID. 키워드·제외검색어 등록(create)이면 광고그룹 ID, 제외검색어 삭제면 제외검색어 ID"},
     "field": {"enum": ["status", "bid_amt", "daily_budget", "create", "delete"],
-              "description": "status: ON/OFF, bid_amt: 입찰가(10원 단위), daily_budget: 캠페인 일예산, create: 키워드 등록, delete: 키워드·소재 삭제"},
-    "value": {"type": "string", "description": "새 값. create는 '키워드' 또는 '키워드|입찰가'(입찰가 비우면 70원), delete는 빈 문자열"},
+              "description": "status: ON/OFF, bid_amt: 입찰가(10원 단위), daily_budget: 캠페인 일예산, create: 키워드·제외검색어 등록, delete: 키워드·소재·제외검색어 삭제"},
+    "value": {"type": "string", "description": "새 값. 키워드 create는 '키워드' 또는 '키워드|입찰가'(입찰가 비우면 70원), "
+              "제외검색어 create는 검색어, 제외검색어 delete는 광고그룹 ID, 그 밖의 delete는 빈 문자열"},
     "ad_account_id": {"type": "integer"},
     "before": {"type": "string", "description": "목록 도구로 확인한 현재 값(같으면 미리보기에서 걸러짐)"},
     "product": {"enum": ["WEB_SITE", "SHOPPING"], "description": "캠페인·광고그룹 유형. 키워드 등록은 광고그룹 유형"},
@@ -250,6 +251,15 @@ TOOLS = [
      "한 번에 몇 행씩 실행하므로 status가 RUNNING이면 같은 job_id로 다시 호출한다.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "job_id"], "properties": {**WS, "job_id": {"type": "integer"}}},
      "annotations": {"destructiveHint": True}},
+    {"name": "schedule_job", "description": "미리보기 작업을 정한 시각에 실행하도록 예약한다(예: 11월 12일 0시에 ON). 10분마다 도는 크론이 실행해 최대 10분 늦을 수 있다. "
+     "사용자가 preview_changes 결과와 시각을 승인했을 때만 호출. scheduled_at을 null로 주면 예약 취소.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "job_id", "scheduled_at"], "properties": {
+         **WS, "job_id": {"type": "integer"},
+         "scheduled_at": {"type": ["string", "null"], "description": "시간대 포함 ISO 시각, 한국 시간이면 +09:00 (예: 2026-11-12T00:00:00+09:00)"}}},
+     "annotations": {"destructiveHint": True}},
+    {"name": "list_negative_keywords", "description": "광고그룹의 제외검색어 목록(naver_id·keyword). 등록·삭제는 preview_changes의 entity_type=negative_keyword로.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id"], "properties": {**ACC, "adgroup_id": {"type": "string"}}},
+     "annotations": {"readOnlyHint": True}},
 ]
 
 
@@ -276,6 +286,8 @@ async def _call(db, user: User, name: str, a: dict):
         return await api.create_bulk_job(api.BulkIn(changes=a["changes"]), m=m, db=db)
     if name == "execute_job":
         return await api.execute_bulk_job(int(a["job_id"]), m=m, db=db)
+    if name == "schedule_job":
+        return await api.schedule_bulk_job(api.ScheduleIn(scheduled_at=a.get("scheduled_at")), int(a["job_id"]), m=m, db=db)
     if name == "list_audit_logs":
         logs = (await api.audit_logs(None, a.get("ad_account_id"), m=m, db=db))[:min(int(a.get("limit") or 50), 500)]
         names = dict(db.execute(select(User.id, User.name).where(User.id.in_({x["user_id"] for x in logs}))).all())
@@ -300,6 +312,8 @@ async def _call(db, user: User, name: str, a: dict):
                  "use_group_bid": k.get("useGroupBidAmt")} for k in api._naver(db, m, acc, lambda c: c.list_keywords(a["adgroup_id"]))]
     if name == "list_ads":
         return [ad_row(acc, x) for x in api._naver(db, m, acc, lambda c: c.list_ads(a["adgroup_id"]))]
+    if name == "list_negative_keywords":
+        return await api.negative_keywords(acc, a["adgroup_id"], m=m, db=db)
     if name == "list_ad_extensions":
         return [extension_row(acc, x) for x in api._naver(db, m, acc, lambda c: c.list_ad_extensions(a["adgroup_id"]))]
     if name == "get_entity_performance":
@@ -345,7 +359,7 @@ async def mcp(request: Request):
             result = {"protocolVersion": v if v in PROTOCOLS else PROTOCOLS[0], "capabilities": {"tools": {}},
                       "serverInfo": {"name": "naverads", "version": "0.1.0"},
                       "instructions": "네이버 검색광고 관리. 먼저 list_ad_accounts로 조직·계정을 확인한다. "
-                                      "변경은 preview_changes → 사용자 승인 → execute_job 순서로만 한다."}
+                                      "변경은 preview_changes → 사용자 승인 → execute_job(또는 schedule_job으로 예약) 순서로만 한다."}
         elif method == "ping":
             result = {}
         elif method == "tools/list":
