@@ -141,7 +141,7 @@ class RealNaverClient:
             raise NaverApiError(f"{rs['code']} {rs['message']}" if rs else f"등록 응답에 키워드 ID가 없습니다: {json.dumps(r, ensure_ascii=False)[:250]}")
         return k
 
-    # 제외검색어: 명세(ncc-heroes-ncc.json) /ncc/adgroups/{id}/restricted-keywords. shortcut: 실계정 미확인, 응답이 다르면 여기만 고친다
+    # 제외검색어: 명세(ncc-heroes-ncc.json) /ncc/adgroups/{id}/restricted-keywords. 실계정 조회·등록·삭제 확인(10/27)
     def list_restricted_keywords(self, adgroup_id):
         return self._req("GET", f"/ncc/adgroups/{adgroup_id}/restricted-keywords", params={"type": "KEYWORD_PLUS_RESTRICT"}) or []
 
