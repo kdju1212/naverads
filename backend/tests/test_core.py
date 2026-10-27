@@ -701,3 +701,97 @@ def test_mcp_oauth_and_tools():
     h = other
     assert call("list_campaigns", workspace_id=ws, ad_account_id=acc) == ({"error": "이 조직에 접근 권한이 없습니다"}, True)
     assert call("get_daily_performance", workspace_id=ws)[1]  # 인자 누락
+
+
+def _viewer(owner, ws, acc, email):
+    v = user(email)
+    mid = c.post(f"/workspaces/{ws}/members", json={"email": email}, headers=owner).json()["membership_id"]
+    c.put(f"/workspaces/{ws}/members/{mid}/access", json={"ad_account_id": acc, "level": "VIEW"}, headers=owner)
+    return v
+
+
+def test_schedule_guards(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from app import bulk
+    from app.db import SessionLocal
+
+    owner, ws, acc = _account("guard@a.com", "6200")
+    viewer = _viewer(owner, ws, acc, "guardv@a.com")
+    job = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [
+        ch(acc, "keyword", "kwd-6200-11", "bid_amt", "400", before="300"),
+        ch(acc, "keyword", "kwd-6200-12", "bid_amt", "700", before="600"),
+        ch(acc, "adgroup", "grp-6200-pl1", "status", "OFF", before="ON", product="WEB_SITE")]}).json()
+    url = f"/workspaces/{ws}/bulk-jobs/{job['id']}"
+    at = datetime.now(timezone.utc) + timedelta(days=20)
+    # 보기 권한 직원이 남의 미리보기를 예약하면 만든 사람 권한으로 실행되므로 막는다
+    assert c.post(f"{url}/schedule", headers=viewer, json={"scheduled_at": at.isoformat()}).status_code == 403
+    assert c.post(f"{url}/schedule", headers=owner, json={"scheduled_at": at.isoformat()}).status_code == 200
+    assert c.post(f"{url}/execute", headers=owner).status_code == 409  # 크론과 겹쳐 두 번 실행되지 않게
+
+    kws = store("6200")["keywords"]
+    kws["kwd-6200-11"]["bidAmt"] = 350  # 예약 후 누가 네이버에서 직접 바꿈
+    monkeypatch.setattr(bulk, "now", lambda: at + timedelta(minutes=1))
+    db = SessionLocal()
+    bulk.run_scheduled_jobs(db)
+    db.close()
+    out = c.get(url, headers=owner).json()
+    rows = {r["naver_id"]: r for r in out["accounts"][0]["rows"]}
+    assert out["status"] == "PARTIAL" and "미리보기 이후 값이 바뀌어" in rows["kwd-6200-11"]["error"]
+    assert kws["kwd-6200-11"]["bidAmt"] == 350 and kws["kwd-6200-12"]["bidAmt"] == 700
+    assert store("6200")["adgroups"]["grp-6200-pl1"]["userLock"] is True
+
+    # 예상 못 한 오류가 나도 작업을 끝내 다음 크론이 같은 작업에 막히지 않는다
+    job2 = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [
+        ch(acc, "keyword", "kwd-6200-13", "bid_amt", "1000", before="900")]}).json()
+    c.post(f"/workspaces/{ws}/bulk-jobs/{job2['id']}/schedule", headers=owner, json={"scheduled_at": at.isoformat()})
+    monkeypatch.setattr(bulk, "execute_job", lambda *a, **k: 1 / 0)
+    db = SessionLocal()
+    bulk.run_scheduled_jobs(db)
+    db.close()
+    assert c.get(f"/workspaces/{ws}/bulk-jobs/{job2['id']}", headers=owner).json()["status"] == "FAILED"
+
+
+def test_auto_bid_guards(monkeypatch):
+    from app import bulk
+
+    owner, ws, acc = _account("cap@a.com", "6300")
+    viewer = _viewer(owner, ws, acc, "capv@a.com")
+    url = f"/workspaces/{ws}/auto-bids"
+    k = {"ad_account_id": acc, "naver_id": "kwd-6300-11", "keyword": "원피스1"}  # 300원, 5위
+    c.put(url, headers=owner, json={"keywords": [k], "device": "PC", "target_rank": 1, "max_bid": 5000})
+    kws = store("6300")["keywords"]
+    assert c.post(f"{url}/run", headers=viewer).json() == {"job_ids": []} and kws["kwd-6300-11"]["bidAmt"] == 300
+
+    monkeypatch.setattr(bulk, "AUTO_BID_DAILY_MAX", 1)
+    c.post(f"{url}/run", headers=owner)
+    assert kws["kwd-6300-11"]["bidAmt"] == 360
+    c.post(f"{url}/run", headers=owner)
+    assert kws["kwd-6300-11"]["bidAmt"] == 360
+    assert "오늘 자동 변경 1번" in c.get(url, headers=owner).json()[0]["last_result"]
+
+
+def test_goal_guards(monkeypatch):
+    from datetime import datetime
+    from app import bulk
+    from app.db import SessionLocal
+    from app.naver import MockNaverClient
+
+    owner, ws, acc = _account("goal3@a.com", "6400")
+    c.put(f"/workspaces/{ws}/auto-bids", headers=owner, json={"keywords": [{"ad_account_id": acc, "naver_id": "kwd-6400-11"}],
+                                                             "device": "PC", "target_rank": 1, "max_bid": 5000})
+    url = f"/workspaces/{ws}/account-goals"
+    c.put(url, headers=owner, json={"ad_account_id": acc, "roas_target": 300, "max_bid": 1000, "off_cost": 20000})
+    stats = {"cmp-6400-pl": {"clkCnt": 100, "salesAmt": 30000, "ccnt": 0},                  # 계정 전환 0 = 추적 안 됨일 수 있음
+             "kwd-6400-11": {"clkCnt": 20, "salesAmt": 5000, "ccnt": 1, "convAmt": 10000},  # 200%라 내릴 대상이지만 순위 자동입찰 키워드
+             "kwd-6400-13": {"clkCnt": 20, "salesAmt": 25000, "ccnt": 0}}                   # 원래면 무전환 OFF
+    monkeypatch.setattr(MockNaverClient, "entity_stats", lambda self, ids, since, until: {i: stats[i] for i in ids if i in stats})
+    t = datetime(2026, 10, 27, 10, tzinfo=bulk.KST)
+    monkeypatch.setattr(bulk, "datetime", type("D", (datetime,), {"now": staticmethod(lambda tz=None: t)}))
+    c.post(f"{url}/{acc}/run", headers=owner)
+    for _ in range(4):
+        db = SessionLocal()
+        bulk.run_all_goals(db)
+        db.close()
+    kws = store("6400")["keywords"]
+    assert kws["kwd-6400-11"]["bidAmt"] == 300 and kws["kwd-6400-13"]["userLock"] is False
+    assert "계정 전환 0건이라 무전환 OFF 안 함" in c.get(url, headers=owner).json()[0]["last_result"]

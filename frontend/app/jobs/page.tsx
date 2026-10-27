@@ -126,12 +126,12 @@ function JobDetail({ id }: { id: string }) {
                 onClick={() => confirm(`${new Date(at).toLocaleString("ko-KR")}에 ${c.VALID}건을 실제로 변경하도록 예약할까요?`) && schedule(new Date(at).toISOString())}>예약 실행</Button>
             </>
           ))}
-          {job.status === "PREVIEW" && (
+          {job.status === "PREVIEW" && !job.scheduled_at && (
             <Button disabled={busy || c.VALID === 0} onClick={() => act("execute", `광고주 ${job.accounts?.length}개, ${c.VALID}건을 실제로 변경합니다. 실행할까요?`)}>
               {busy ? "실행 중…" : `${c.VALID}건 실행`}
             </Button>
           )}
-          {job.status === "RUNNING" && (
+          {job.status === "RUNNING" && !job.scheduled_at && (
             busy ? <span className="text-faint">실행 중… 남은 {c.VALID}건</span>
               : <Button onClick={() => act("execute")}>남은 {c.VALID}건 이어서 실행</Button>
           )}

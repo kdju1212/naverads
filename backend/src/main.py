@@ -61,8 +61,11 @@ class Default(WorkerEntrypoint):
         self._bind()
         db = app_db.SessionLocal()
         try:
-            run_scheduled_jobs(db)
-            run_all_auto_bids(db)
-            run_all_goals(db)
+            for task in (run_scheduled_jobs, run_all_auto_bids, run_all_goals):
+                try:  # 하나가 죽어도 나머지는 돈다
+                    task(db)
+                except Exception as e:  # noqa: BLE001
+                    db.rollback()
+                    print(f"크론 실패 {task.__name__}: {e}")
         finally:
             db.close()

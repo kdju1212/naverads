@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from . import bulk, naver, seo
-from .access import admin_membership, current_user, membership, membership_of, resolve_account_ids, user_from_header
+from .access import ADMIN_ROLES, admin_membership, current_user, membership, membership_of, resolve_account_ids, user_from_header
 from .db import Base, engine, get_db
 from .models import (AccountAccess, AccountGoal, AdAccount, AuditLog, AutoBidRule, BulkJob, BulkJobRow, Membership, NaverApiCredential,
                      PerformanceDaily, Plan, Subscription, SyncRun, User, Workspace, WorkspaceAdAccount, now)
@@ -457,7 +457,10 @@ async def get_bulk_job(job_id: int, m: Membership = Depends(membership), db: Ses
 @app.post("/workspaces/{ws_id}/bulk-jobs/{job_id}/execute")
 async def execute_bulk_job(job_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
     """최대 EXECUTE_CHUNK행씩 실행. 응답 status가 RUNNING이면 화면이 다시 호출한다."""
-    return _job_out(db, bulk.execute_job(db, m, _job(db, m, job_id), bulk.EXECUTE_CHUNK))
+    job = _job(db, m, job_id)
+    if job.scheduled_at is not None:  # 크론과 같이 실행돼 두 번 반영되지 않게
+        raise HTTPException(409, "예약된 작업입니다. 예약을 취소한 뒤 실행하세요")
+    return _job_out(db, bulk.execute_job(db, m, job, bulk.EXECUTE_CHUNK))
 
 
 class ScheduleIn(BaseModel):
@@ -468,6 +471,8 @@ class ScheduleIn(BaseModel):
 async def schedule_bulk_job(body: ScheduleIn, job_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
     """미리보기 작업을 정한 시각에 실행하도록 예약(10분마다 도는 크론이 실행하므로 최대 10분 늦을 수 있다). 실행은 작업을 만든 사람 권한으로."""
     job = _job(db, m, job_id)
+    if job.created_by != m.user_id and m.role not in ADMIN_ROLES:  # 예약 실행은 만든 사람 권한이라 남이 대신 예약하면 권한이 넘어간다
+        raise HTTPException(403, "작업을 만든 사람이나 관리자만 예약할 수 있습니다")
     if job.status != "PREVIEW":
         raise HTTPException(409, "미리보기 상태의 작업만 예약할 수 있습니다")
     at = body.scheduled_at
@@ -597,13 +602,12 @@ async def keyword_ranks(body: AutoBidKeysIn, m: Membership = Depends(membership)
 
 @app.post("/workspaces/{ws_id}/auto-bids/run")
 async def run_auto_bids(body: AutoBidKeysIn | None = None, m: Membership = Depends(membership), db: Session = Depends(get_db)):
-    """지금 실행. keywords를 주면 그 키워드 규칙만."""
-    rule_ids = None
+    """지금 실행. keywords를 주면 그 키워드 규칙만. 부른 사람이 수정할 수 있는 계정의 규칙만 돈다."""
+    q = select(AutoBidRule.id).where(AutoBidRule.workspace_id == m.workspace_id,
+                                     AutoBidRule.ad_account_id.in_(resolve_account_ids(db, m, None, edit=True)))
     if body and body.keywords:
-        nids = [k.naver_id for k in _editable(db, m, body.keywords)]
-        rule_ids = list(db.scalars(select(AutoBidRule.id).where(AutoBidRule.workspace_id == m.workspace_id,
-                                                                AutoBidRule.keyword_naver_id.in_(nids))))
-    jobs = bulk.run_auto_bids(db, m.workspace_id, rule_ids)
+        q = q.where(AutoBidRule.keyword_naver_id.in_([k.naver_id for k in _editable(db, m, body.keywords)]))
+    jobs = bulk.run_auto_bids(db, m.workspace_id, list(db.scalars(q)))
     return {"job_ids": [j.id for j in jobs]}
 
 

@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from fastapi import HTTPException
 from openpyxl import Workbook, load_workbook
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from .access import accessible_account_ids
@@ -157,8 +157,8 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
                 created = client.create_keyword(row.naver_id, kw, bid_amt, False)
             elif row.field == "delete":
                 (client.delete_keyword if row.entity_type == "keyword" else client.delete_ad)(row.naver_id)
-            else:
-                client.update(row.entity_type, row.naver_id, row.field, row.after)
+            else:  # 예약 작업은 미리보기와 실행 사이가 길어 그 사이 바뀐 값을 덮어쓰지 않는다
+                client.update(row.entity_type, row.naver_id, row.field, row.after, expect=row.before if job.scheduled_at else None)
         except NaverApiError as e:
             row.status, row.error = "FAILED", str(e)[:300]
             continue
@@ -244,6 +244,17 @@ def check_ranks(db: Session, workspace_id: int, refs) -> list[dict]:
     return out
 
 
+AUTO_BID_DAILY_MAX = 24  # 키워드당 하루 자동 변경 횟수(크론은 하루 144번). 순위가 출렁여 입찰가가 오르내리기만 반복하는 것을 막는다
+
+
+def _auto_bid_changes_today(db: Session, workspace_id: int) -> dict[str, int]:
+    day = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    q = (select(AuditLog.naver_id, func.count()).join(BulkJob, BulkJob.id == AuditLog.job_id)
+         .where(BulkJob.workspace_id == workspace_id, BulkJob.source == "AUTO_BID", AuditLog.created_at >= day)
+         .group_by(AuditLog.naver_id))
+    return dict(db.execute(q).all())
+
+
 def run_auto_bids(db: Session, workspace_id: int, rule_ids: list[int] | None = None) -> list[BulkJob]:
     """자동입찰 규칙 실행: 검색 화면에서 지금 순위를 읽어 목표보다 아래면 올리고 위면 내린다(next_bid, 최대 입찰가 이하).
     바꿀 키워드는 만든 사람별 대량 작업으로 실행한다. 권한 확인·네이버 반영 검증·감사 로그는 일반 대량 작업과 같다."""
@@ -254,6 +265,7 @@ def run_auto_bids(db: Session, workspace_id: int, rule_ids: list[int] | None = N
     for r in db.scalars(s):
         by_user.setdefault(r.created_by, []).append(r)
     jobs = []
+    changed_today = _auto_bid_changes_today(db, workspace_id) if by_user else {}
     for user_id, rules in by_user.items():
         m = db.scalar(select(Membership).where(Membership.workspace_id == workspace_id, Membership.user_id == user_id))
         allowed = accessible_account_ids(db, m, edit=True) if m else set()
@@ -285,6 +297,9 @@ def run_auto_bids(db: Session, workspace_id: int, rule_ids: list[int] | None = N
                 # 꺼져 있으면 노출이 안 돼 입찰가만 계속 오르므로 건너뛴다. shortcut: 캠페인 OFF는 안 봄, 필요하면 캠페인도 조회
                 if kw.get("userLock") or grp.get("userLock"):
                     r.last_result = "키워드나 광고그룹이 OFF라 건너뜀"
+                    continue
+                if changed_today.get(r.keyword_naver_id, 0) >= AUTO_BID_DAILY_MAX:
+                    r.last_result = f"오늘 자동 변경 {AUTO_BID_DAILY_MAX}번을 채워 내일 다시 조정"
                     continue
                 try:
                     rank = _rank(client.serp_ads(kw["keyword"], r.device), ads[kw["nccAdgroupId"]])
@@ -440,11 +455,11 @@ def run_scheduled_jobs(db: Session):
         if m is None:
             raise HTTPException(403, "작업을 만든 사람이 조직에 없습니다")
         execute_job(db, m, job, EXECUTE_CHUNK)
-    except HTTPException as e:  # 실행할 행이 없거나 권한이 없으면 다시 시도하지 않게 끝낸다
+    except Exception as e:  # noqa: BLE001 — 권한·행 없음·예상 못 한 오류 모두 끝내야 매 크론 같은 작업에 막히지 않는다
         db.rollback()
         job.status, job.executed_at = "FAILED", now()
         db.add(AuditLog(workspace_id=job.workspace_id, user_id=job.created_by, job_id=job.id, action="JOB_SCHEDULE_FAIL",
-                        after=str(e.detail)[:50]))
+                        after=str(getattr(e, "detail", e))[:50]))
         db.commit()
 
 
@@ -478,6 +493,8 @@ def _goal_result(g: AccountGoal, st: dict) -> str:
     out = f"{st['until'][5:]}까지 7일 계정 ROAS {roas} (목표 {g.roas_target:,}%)"
     if st["roas"] is None or st["roas"] < g.roas_target:
         out += " · 목표 미달이라 내리기만"
+    if g.off_cost and not st.get("conv"):
+        out += " · 계정 전환 0건이라 무전환 OFF 안 함(전환 추적 확인)"
     out += f" · 키워드 {st['checked']}개 확인, 입찰가 조정 {st['bid']}개, OFF {st['off']}개"
     return out + (f" · 진행 중(광고그룹 {len(st['groups'])}개 남음)" if st["groups"] or st.get("job") else "")
 
@@ -509,22 +526,27 @@ def run_goal_step(db: Session, g: AccountGoal, start: bool = False) -> bool:
             since = until - timedelta(days=6)
             camps = [c["nccCampaignId"] for c in client.list_campaigns() if c["campaignTp"] == "WEB_SITE" and not c.get("userLock")]
             s = client.entity_stats(camps, since, until).values() if camps else []
-            cost, rev = sum(x.get("salesAmt", 0) for x in s), sum(x.get("convAmt") or 0 for x in s)
+            cost, rev, conv = (sum(x.get(k) or 0 for x in s) for k in ("salesAmt", "convAmt", "ccnt"))
             groups = [x["nccAdgroupId"] for c in camps for x in client.list_adgroups(c) if not x.get("userLock")]
-            st = {"groups": groups, "roas": round(rev * 100 / cost) if cost else None, "since": since.isoformat(),
+            st = {"groups": groups, "roas": round(rev * 100 / cost) if cost else None, "conv": conv, "since": since.isoformat(),
                   "until": until.isoformat(), "checked": 0, "bid": 0, "off": 0, "job": None}
             g.run_date = today.date().isoformat()
         elif st["groups"]:
             gid = st["groups"].pop(0)
             grp = (client.get_many("adgroups", [gid]) or [{}])[0]
-            kws = [k for k in client.list_keywords(gid) if not k.get("userLock")]
+            # 순위 자동입찰이 걸린 키워드는 그 규칙에 맡긴다(둘이 번갈아 올리고 내리지 않게)
+            ruled = set(db.scalars(select(AutoBidRule.keyword_naver_id).where(AutoBidRule.workspace_id == g.workspace_id,
+                                                                              AutoBidRule.enabled.is_(True))))
+            kws = [k for k in client.list_keywords(gid) if not k.get("userLock") and k["nccKeywordId"] not in ruled]
             stats = client.entity_stats([k["nccKeywordId"] for k in kws], date.fromisoformat(st["since"]),
                                         date.fromisoformat(st["until"])) if kws else {}
             allow = st["roas"] is not None and st["roas"] >= g.roas_target
+            # 계정 전체 전환이 0이면 전환 추적이 안 되는 것일 수 있어 무전환 OFF를 하지 않는다
+            off_cost = g.off_cost if st.get("conv") else None
             changes = []
             for k in kws:
                 cur = grp.get("bidAmt", k["bidAmt"]) if k.get("useGroupBidAmt") else k["bidAmt"]
-                act = goal_bid(cur, stats.get(k["nccKeywordId"], {}), g.roas_target, g.max_bid, g.off_cost, allow)
+                act = goal_bid(cur, stats.get(k["nccKeywordId"], {}), g.roas_target, g.max_bid, off_cost, allow)
                 st["checked"] += 1
                 ch = {"entity_type": "keyword", "naver_id": k["nccKeywordId"], "ad_account_id": g.ad_account_id, "product": "WEB_SITE"}
                 if act == "OFF":

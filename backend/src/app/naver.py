@@ -43,6 +43,22 @@ def _set_ad_bid(o, v):
     o["adAttr"] = {**o.get("adAttr", {}), "bidAmt": int(v), "useGroupBidAmt": False}
 
 
+def _check_expected(field, o, expect):
+    """예약 실행: 지금 값이 미리보기 때(expect)와 다르면 실패. 비교 기준이 애매한 값(그룹 입찰가를 쓰는 키워드, 예산 미사용)은 건너뛴다."""
+    if expect is None:
+        return
+    if field == "status":
+        cur = "OFF" if o.get("userLock") else "ON"
+    elif field == "daily_budget" and o.get("useDailyBudget"):
+        cur = o.get("dailyBudget")
+    elif field == "bid_amt" and not o.get("useGroupBidAmt"):
+        cur = (o.get("adAttr") if isinstance(o.get("adAttr"), dict) else o).get("bidAmt")
+    else:
+        return
+    if str(cur) != str(expect):
+        raise NaverApiError(f"미리보기 이후 값이 바뀌어 실행하지 않았습니다 (미리보기 {expect}, 지금 {cur})")
+
+
 UPDATE_SPEC = {
     ("campaign", "status"): ("campaigns", "userLock", _set_lock),
     ("campaign", "daily_budget"): ("campaigns", "budget", _set_budget),
@@ -250,11 +266,12 @@ class RealNaverClient:
             out += self._req("GET", f"/ncc/{kind}", params={"ids": ",".join(ids[i:i + 100])})
         return out
 
-    def update(self, entity_type, naver_id, field, value):
+    def update(self, entity_type, naver_id, field, value, expect=None):
         if (entity_type, field) not in VERIFIED_WRITES and os.getenv("NAVER_ALLOW_REAL_WRITE") != "1":
             raise NaverApiError("이 항목의 실계정 수정은 공식 API 검증 전이라 아직 차단되어 있습니다")
         res, fields, apply = UPDATE_SPEC[(entity_type, field)]
         obj = self._req("GET", f"/ncc/{res}/{naver_id}")
+        _check_expected(field, obj, expect)
         before = dict(obj)
         apply(obj, value)
         want = {k: v for k, v in obj.items() if before.get(k) != v}
@@ -514,13 +531,14 @@ class MockNaverClient:
     def _bid(self, k):
         return self.s["adgroups"][k["nccAdgroupId"]]["bidAmt"] if k["useGroupBidAmt"] else k["bidAmt"]
 
-    def update(self, entity_type, naver_id, field, value):
+    def update(self, entity_type, naver_id, field, value, expect=None):
         if naver_id in MOCK_FAIL_IDS:
             raise NaverApiError("Mock API 오류: 요청이 거부되었습니다")
         res, _, apply = UPDATE_SPEC[(entity_type, field)]
         obj = self.s[res].get(naver_id)
         if obj is None:
             raise NaverApiError("대상 객체가 존재하지 않습니다")
+        _check_expected(field, obj, expect)
         apply(obj, value)
 
 
