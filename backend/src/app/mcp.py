@@ -126,32 +126,36 @@ async def authorize(request: Request):
     return RedirectResponse(q["redirect_uri"] + sep + urlencode({"code": code, "state": q["state"]}), 302)
 
 
-def _tokens(uid: int) -> dict:
-    return {"access_token": make_token(uid), "token_type": "Bearer", "expires_in": TOKEN_TTL,
-            "refresh_token": sign_payload({"t": "refresh", "u": uid}, REFRESH_TTL)}
+def _tokens(user: User) -> dict:
+    v = user.token_version
+    return {"access_token": make_token(user.id, v), "token_type": "Bearer", "expires_in": TOKEN_TTL,
+            "refresh_token": sign_payload({"t": "refresh", "u": user.id, "v": v}, REFRESH_TTL)}
 
 
 @router.post("/oauth/token")
 async def token(request: Request):
     f = await request.form()
     bad = JSONResponse({"error": "invalid_grant"}, 400)
-    if f.get("grant_type") == "authorization_code":
-        c = read_payload(str(f.get("code") or ""), "code")
-        verifier = str(f.get("code_verifier") or "").encode()
-        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier).digest()).decode().rstrip("=")
-        if not c or c["r"] != f.get("redirect_uri") or c["c"] != f.get("client_id") or c["ch"] != challenge:
-            return bad
-        return _tokens(c["u"])
-    if f.get("grant_type") == "refresh_token":
-        r = read_payload(str(f.get("refresh_token") or ""), "refresh")
-        db = SessionLocal()
-        try:
-            if not r or not db.get(User, r["u"]):  # 탈퇴한 사용자는 갱신 불가
+    db = SessionLocal()
+    try:
+        if f.get("grant_type") == "authorization_code":
+            c = read_payload(str(f.get("code") or ""), "code")
+            verifier = str(f.get("code_verifier") or "").encode()
+            challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier).digest()).decode().rstrip("=")
+            if not c or c["r"] != f.get("redirect_uri") or c["c"] != f.get("client_id") or c["ch"] != challenge:
                 return bad
-        finally:
-            db.close()
-        return _tokens(r["u"])
-    return JSONResponse({"error": "unsupported_grant_type"}, 400)
+            user = db.get(User, c["u"])
+        elif f.get("grant_type") == "refresh_token":
+            r = read_payload(str(f.get("refresh_token") or ""), "refresh")
+            user = db.get(User, r["u"]) if r else None
+            # 탈퇴했거나 비밀번호 변경·모든 기기 로그아웃 이전의 갱신 토큰(버전 없는 예전 토큰은 0)
+            if user and r.get("v", 0) != user.token_version:
+                user = None
+        else:
+            return JSONResponse({"error": "unsupported_grant_type"}, 400)
+        return _tokens(user) if user else bad
+    finally:
+        db.close()
 
 
 # ---------- 도구 ----------

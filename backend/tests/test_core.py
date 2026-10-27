@@ -832,3 +832,33 @@ def test_login_limit(monkeypatch):
         login(f"spray{i}@a.com", "wrong", **ip)
     assert login("lock@a.com", "password1", **ip).status_code == 429
     assert login("lock@a.com", "password1").status_code == 200  # 다른 IP는 그대로
+
+
+def test_token_revocation():
+    import time
+    from app.security import _sign, sign_payload
+
+    r = c.post("/auth/signup", json={"email": "revoke@a.com", "password": "password1", "name": "r"}).json()
+    uid, t1 = r["id"], r["token"]
+    t2 = c.post("/auth/login", json={"email": "revoke@a.com", "password": "password1"}).json()["token"]
+    ok = lambda t: c.get("/workspaces", headers={"Authorization": f"Bearer {t}"}).status_code == 200  # noqa: E731
+    refresh = lambda payload: c.post("/oauth/token", data={"grant_type": "refresh_token", "refresh_token": sign_payload(payload, 60)})  # noqa: E731
+    msg = f"{uid}.{int(time.time()) + 60}"
+    old = f"{msg}.{_sign(msg)}"  # 버전 없는 예전 형식(배포 전 발급)
+    assert ok(t1) and ok(t2) and ok(old)
+    assert refresh({"t": "refresh", "u": uid}).status_code == 200  # 예전 Claude 연결도 그대로
+
+    # 모든 기기 로그아웃: 웹 토큰·예전 토큰·Claude 갱신 토큰 모두 무효
+    assert c.post("/auth/logout-all", headers={"Authorization": f"Bearer {t1}"}).json() == {"ok": True}
+    assert not ok(t1) and not ok(t2) and not ok(old)
+    assert refresh({"t": "refresh", "u": uid}).status_code == 400 and refresh({"t": "refresh", "u": uid, "v": 0}).status_code == 400
+    t3 = c.post("/auth/login", json={"email": "revoke@a.com", "password": "password1"}).json()["token"]
+    assert ok(t3) and refresh({"t": "refresh", "u": uid, "v": 1}).status_code == 200
+
+    # 비밀번호 변경: 지금 기기는 새 토큰, 나머지는 끊김
+    h = {"Authorization": f"Bearer {t3}"}
+    assert c.post("/auth/password", headers=h, json={"current_password": "wrong", "new_password": "password2"}).status_code == 400
+    assert c.post("/auth/password", headers=h, json={"current_password": "password1", "new_password": "short"}).status_code == 400
+    t4 = c.post("/auth/password", headers=h, json={"current_password": "password1", "new_password": "password2"}).json()["token"]
+    assert ok(t4) and not ok(t3) and refresh({"t": "refresh", "u": uid, "v": 1}).status_code == 400
+    assert c.post("/auth/login", json={"email": "revoke@a.com", "password": "password2"}).status_code == 200

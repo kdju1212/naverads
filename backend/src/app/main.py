@@ -52,7 +52,7 @@ async def signup(body: SignupIn, db: Session = Depends(get_db)):
     user = User(email=body.email, password_hash=await hash_password(body.password), name=body.name)
     db.add(user)
     db.commit()
-    return {"id": user.id, "token": make_token(user.id)}
+    return {"id": user.id, "token": make_token(user.id, user.token_version)}
 
 
 class LoginIn(BaseModel):
@@ -105,7 +105,37 @@ async def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     record_login(db, body.email, ip, ok)
     if not ok:
         raise HTTPException(401, "이메일 또는 비밀번호가 올바르지 않습니다")
-    return {"id": user.id, "token": make_token(user.id)}
+    return {"id": user.id, "token": make_token(user.id, user.token_version)}
+
+
+@app.post("/auth/logout-all")
+async def logout_all(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """모든 기기 로그아웃: 이 사용자에게 발급한 로그인·Claude 연결(MCP) 토큰을 모두 무효로 한다."""
+    user.token_version += 1
+    db.commit()
+    return {"ok": True}
+
+
+class PasswordIn(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@app.post("/auth/password")
+async def change_password(body: PasswordIn, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """비밀번호 변경. 다른 기기·Claude 연결은 끊고, 지금 기기는 새 토큰으로 계속 쓴다."""
+    ip = request.headers.get("cf-connecting-ip")
+    if login_blocked(db, user.email, ip):  # 현재 비밀번호 대입도 로그인과 같이 막는다
+        raise HTTPException(429, LOGIN_BLOCKED)
+    ok = await verify_password(body.current_password, user.password_hash)
+    record_login(db, user.email, ip, ok)
+    if not ok:
+        raise HTTPException(400, "현재 비밀번호가 올바르지 않습니다")
+    if len(body.new_password) < 8:
+        raise HTTPException(400, "비밀번호는 8자 이상")
+    user.password_hash, user.token_version = await hash_password(body.new_password), user.token_version + 1
+    db.commit()
+    return {"token": make_token(user.id, user.token_version)}
 
 
 # ---------- 조직·직원·권한 ----------

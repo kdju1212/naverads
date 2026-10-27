@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Badge, Button, Card, ErrorText, inputCls, PageTitle } from "@/components/ui";
-import { api, fmt } from "@/lib/api";
+import { api, fmt, logout } from "@/lib/api";
 import { refreshAccounts } from "@/lib/naverData";
 import { useApp } from "@/lib/store";
 import { useFetch } from "@/lib/useFetch";
@@ -21,6 +21,7 @@ export default function SettingsPage() {
         {isAdmin && <Members />}
         {/* 계정 연결·해제 시 과금 계정 수를 다시 불러온다 */}
         {isAdmin && <Subscription key={accounts.length} />}
+        <MyAccount />
       </div>
     </>
   );
@@ -176,6 +177,40 @@ function Members() {
           </tbody>
         </table>
       </div>
+    </Card>
+  );
+}
+
+function MyAccount() {
+  const [pw, setPw] = useState({ current_password: "", new_password: "" });
+  const [done, setDone] = useState(false);
+  const { error, busy, run } = useAction();
+  const change = () => run(async () => {
+    const r = await api<{ token: string }>("/auth/password", { method: "POST", body: pw });
+    // 같은 사용자라 setToken처럼 브라우저 보관 데이터를 지우지 않는다
+    try { localStorage.setItem("token", r.token); } catch { /* 저장 불가 환경 */ }
+    setPw({ current_password: "", new_password: "" });
+    setDone(true);
+  });
+  const logoutAll = () => confirm("이 기기와 다른 모든 기기, Claude 연결에서 로그아웃합니다. Claude는 다시 연결해야 합니다. 진행할까요?")
+    && run(async () => { await api("/auth/logout-all", { method: "POST" }); await logout(); });
+  return (
+    <Card title="내 계정">
+      <form className="flex flex-wrap items-end gap-2" onSubmit={(e) => { e.preventDefault(); change(); }}>
+        <label className="text-sm">현재 비밀번호
+          <input type="password" autoComplete="current-password" required className={`${inputCls} mt-1 block`}
+            value={pw.current_password} onChange={(e) => setPw({ ...pw, current_password: e.target.value })} />
+        </label>
+        <label className="text-sm">새 비밀번호 (8자 이상)
+          <input type="password" autoComplete="new-password" required minLength={8} className={`${inputCls} mt-1 block`}
+            value={pw.new_password} onChange={(e) => setPw({ ...pw, new_password: e.target.value })} />
+        </label>
+        <Button type="submit" disabled={busy}>비밀번호 변경</Button>
+        <Button type="button" variant="secondary" disabled={busy} onClick={logoutAll}>모든 기기에서 로그아웃</Button>
+      </form>
+      {done && <p className="mt-2 text-sm text-info" role="status">비밀번호를 바꿨습니다. 다른 기기와 Claude 연결은 로그아웃되었습니다.</p>}
+      <ErrorText error={error} />
+      <p className="mt-3 text-xs text-faint">비밀번호를 바꾸거나 모든 기기에서 로그아웃하면 Claude 연결도 끊겨 다시 연결해야 합니다.</p>
     </Card>
   );
 }

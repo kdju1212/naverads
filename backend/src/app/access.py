@@ -11,9 +11,9 @@ ADMIN_ROLES = {"OWNER", "ADMIN"}
 
 
 def user_from_header(db: Session, authorization: str) -> User:
-    uid = read_token(authorization.removeprefix("Bearer ").strip())
-    user = db.get(User, uid) if uid else None
-    if not user:
+    t = read_token(authorization.removeprefix("Bearer ").strip())
+    user = db.get(User, t[0]) if t else None
+    if not user or user.token_version != t[1]:  # 비밀번호 변경·모든 기기 로그아웃 이전 토큰
         raise HTTPException(401, "로그인이 필요합니다")
     return user
 

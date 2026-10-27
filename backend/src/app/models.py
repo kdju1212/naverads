@@ -18,6 +18,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     name: Mapped[str] = mapped_column(String(100))
+    token_version: Mapped[int] = mapped_column(Integer, default=0)  # 올리면 이전 토큰이 모두 무효(비밀번호 변경·모든 기기 로그아웃)
 
 
 class LoginFailure(Base):
