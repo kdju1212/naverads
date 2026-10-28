@@ -5,17 +5,18 @@ import base64
 import hashlib
 import html
 import json
-from datetime import date
+import secrets
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from . import bulk, main as api
 from .access import membership_of, user_from_header
 from .db import SessionLocal
-from .models import User
+from .models import OAuthUsed, User, now
 from .naver import _status, ad_row, adgroup_row, extension_row
 from .security import TOKEN_TTL, make_token, read_payload, sign_payload, verify_password
 
@@ -127,16 +128,30 @@ async def authorize(request: Request):
 
 def code_redirect(q: dict, user_id: int) -> RedirectResponse:
     """로그인한 사용자의 인가 코드를 Claude로 보낸다(비밀번호·Google 로그인 공통)."""
-    # shortcut: 코드를 저장하지 않아 5분 안에는 재사용될 수 있다(PKCE 검증값이 있어야 하므로 요청한 클라이언트만 가능)
+    # 코드는 5분짜리 서명값이고, 한 번 쓰면 /oauth/token이 기록해 다시 못 쓴다
     code = sign_payload({"t": "code", "u": user_id, "c": q["client_id"], "r": q["redirect_uri"], "ch": q["code_challenge"]}, CODE_TTL)
     sep = "&" if "?" in q["redirect_uri"] else "?"
     return RedirectResponse(q["redirect_uri"] + sep + urlencode({"code": code, "state": q["state"]}), 302)
 
 
 def _tokens(user: User) -> dict:
-    v = user.token_version
-    return {"access_token": make_token(user.id, v), "token_type": "Bearer", "expires_in": TOKEN_TTL,
-            "refresh_token": sign_payload({"t": "refresh", "u": user.id, "v": v}, REFRESH_TTL)}
+    return {"access_token": make_token(user.id, user.token_version, user.mcp_version), "token_type": "Bearer", "expires_in": TOKEN_TTL,
+            "refresh_token": sign_payload({"t": "refresh", "u": user.id, "v": user.token_version, "m": user.mcp_version,
+                                           "j": secrets.token_hex(8)}, REFRESH_TTL)}
+
+
+# 갱신 토큰을 이 시간 안에 다시 쓰면 Claude의 재시도로 보고 거절만, 그 뒤면 탈취로 보고 Claude 연결을 모두 끊는다
+REUSE_GRACE = timedelta(seconds=60)
+
+
+def _use_once(db, token: str, exp: int) -> datetime | None:
+    """처음 쓰는 토큰이면 기록하고 None, 이미 쓴 토큰이면 처음 쓴 시각."""
+    key = hashlib.sha256(token.encode()).hexdigest()
+    if used := db.get(OAuthUsed, key):
+        return used.used_at.replace(tzinfo=used.used_at.tzinfo or timezone.utc)  # SQLite·D1은 시간대 없이 돌려준다
+    db.execute(delete(OAuthUsed).where(OAuthUsed.expires_at < now()))  # 만료된 기록은 지워 표가 커지지 않게
+    db.add(OAuthUsed(key=key, used_at=now(), expires_at=datetime.fromtimestamp(exp, timezone.utc)))
+    return None
 
 
 @router.post("/oauth/token")
@@ -146,21 +161,31 @@ async def token(request: Request):
     db = SessionLocal()
     try:
         if f.get("grant_type") == "authorization_code":
-            c = read_payload(str(f.get("code") or ""), "code")
+            raw = str(f.get("code") or "")
+            c = read_payload(raw, "code")
             verifier = str(f.get("code_verifier") or "").encode()
             challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier).digest()).decode().rstrip("=")
-            if not c or c["r"] != f.get("redirect_uri") or c["c"] != f.get("client_id") or c["ch"] != challenge:
+            if not c or c["r"] != f.get("redirect_uri") or c["c"] != f.get("client_id") or c["ch"] != challenge or _use_once(db, raw, c["exp"]):
                 return bad
             user = db.get(User, c["u"])
         elif f.get("grant_type") == "refresh_token":
-            r = read_payload(str(f.get("refresh_token") or ""), "refresh")
+            raw = str(f.get("refresh_token") or "")
+            r = read_payload(raw, "refresh")
             user = db.get(User, r["u"]) if r else None
-            # 탈퇴했거나 비밀번호 변경·모든 기기 로그아웃 이전의 갱신 토큰(버전 없는 예전 토큰은 0)
-            if user and r.get("v", 0) != user.token_version:
+            # 탈퇴했거나 비밀번호 변경·모든 기기 로그아웃·Claude 연결 끊기 이전의 갱신 토큰(버전 없는 예전 토큰은 0)
+            if user and (r.get("v", 0) != user.token_version or r.get("m", 0) != user.mcp_version):
+                user = None
+            if user and (first := _use_once(db, raw, r["exp"])):
+                if now() - first > REUSE_GRACE:
+                    user.mcp_version += 1
+                    db.commit()
                 user = None
         else:
             return JSONResponse({"error": "unsupported_grant_type"}, 400)
-        return _tokens(user) if user else bad
+        if not user:
+            return bad
+        db.commit()
+        return _tokens(user)
     finally:
         db.close()
 

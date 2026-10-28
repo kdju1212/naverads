@@ -13,7 +13,8 @@ ADMIN_ROLES = {"OWNER", "ADMIN"}
 def user_from_header(db: Session, authorization: str) -> User:
     t = read_token(authorization.removeprefix("Bearer ").strip())
     user = db.get(User, t[0]) if t else None
-    if not user or user.token_version != t[1]:  # 비밀번호 변경·모든 기기 로그아웃 이전 토큰
+    # 비밀번호 변경·모든 기기 로그아웃 이전 토큰, 또는 Claude 연결 끊기 이전의 Claude 토큰
+    if not user or user.token_version != t[1] or (t[2] is not None and t[2] != user.mcp_version):
         raise HTTPException(401, "로그인이 필요합니다")
     return user
 

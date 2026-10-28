@@ -54,6 +54,11 @@ class Default(WorkerEntrypoint):
 
     async def fetch(self, request):
         self._bind()
+        # 요청 횟수 제한: IP당 1분 600번(wrangler.jsonc ratelimits). 로그인 실패 제한은 따로 있다(app.main)
+        ip = request.headers.get("cf-connecting-ip")
+        if ip and (lim := getattr(self.env, "LIMITER", None)):
+            if not (await lim.limit(to_js({"key": ip}, dict_converter=js.Object.fromEntries))).success:
+                return _response(json.dumps({"detail": "요청이 너무 많습니다. 1분 뒤 다시 시도하세요"}, ensure_ascii=False), 429)
         m = MASTER_FILE.search(request.url.split("?")[0])
         if m and request.method == "GET":  # OPTIONS(사전 요청)는 FastAPI CORS가 처리
             return await _master_file(request, *m.groups())

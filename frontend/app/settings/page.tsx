@@ -193,6 +193,15 @@ function MyAccount() {
     setPw({ current_password: "", new_password: "" });
     setDone(true);
   });
+  const [leave, setLeave] = useState("");
+  const [claudeOff, setClaudeOff] = useState(false);
+  const disconnectClaude = () => confirm("Claude 연결만 끊습니다. 이 웹 로그인은 그대로입니다. 진행할까요?")
+    && run(async () => { await api("/auth/disconnect-claude", { method: "POST" }); setClaudeOff(true); });
+  const deleteAccount = () => confirm("탈퇴하면 혼자 소유한 조직은 연결 계정·작업 이력까지 모두 지워지고 되돌릴 수 없습니다. 탈퇴할까요?")
+    && run(async () => {
+      await api("/auth/delete-account", { method: "POST", body: me?.has_password ? { password: leave } : { email: leave } });
+      await logout();
+    });
   const logoutAll = () => confirm("이 기기와 다른 모든 기기, Claude 연결에서 로그아웃합니다. Claude는 다시 연결해야 합니다. 진행할까요?")
     && run(async () => { await api("/auth/logout-all", { method: "POST" }); await logout(); });
   return (
@@ -211,10 +220,25 @@ function MyAccount() {
         <Button type="submit" disabled={busy}>비밀번호 변경</Button>
         </>}
         <Button type="button" variant="secondary" disabled={busy} onClick={logoutAll}>모든 기기에서 로그아웃</Button>
+        <Button type="button" variant="secondary" disabled={busy} onClick={disconnectClaude}>Claude 연결만 끊기</Button>
       </form>
+      {claudeOff && <p className="mt-2 text-sm text-info" role="status">Claude 연결을 끊었습니다. 다시 쓰려면 Claude에서 다시 연결하세요.</p>}
       {done && <p className="mt-2 text-sm text-info" role="status">비밀번호를 바꿨습니다. 다른 기기와 Claude 연결은 로그아웃되었습니다.</p>}
       <ErrorText error={error} />
       <p className="mt-3 text-xs text-faint">{me?.has_password && "비밀번호를 바꾸거나 "}모든 기기에서 로그아웃하면 Claude 연결도 끊겨 다시 연결해야 합니다.</p>
+      {me && (
+        <details className="mt-4 border-t border-line pt-3">
+          <summary className="cursor-pointer text-sm text-faint">회원 탈퇴</summary>
+          <form className="mt-2 flex flex-wrap items-end gap-2" onSubmit={(e) => { e.preventDefault(); deleteAccount(); }}>
+            <label className="text-sm">{me.has_password ? "비밀번호 확인" : `이메일 확인 (${me.email})`}
+              <input type={me.has_password ? "password" : "email"} autoComplete={me.has_password ? "current-password" : "off"} required
+                className={`${inputCls} mt-1 block`} value={leave} onChange={(e) => setLeave(e.target.value)} />
+            </label>
+            <Button type="submit" variant="danger" disabled={busy}>탈퇴</Button>
+          </form>
+          <p className="mt-2 text-xs text-faint">혼자 소유한 조직은 연결 계정·작업 이력까지 모두 지워집니다. 다른 조직에서는 빠지기만 합니다.</p>
+        </details>
+      )}
     </Card>
   );
 }

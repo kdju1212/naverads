@@ -129,6 +129,65 @@ async def logout_all(user: User = Depends(current_user), db: Session = Depends(g
     return {"ok": True}
 
 
+@app.post("/auth/disconnect-claude")
+async def disconnect_claude(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Claude 연결만 끊기: Claude(MCP) 토큰만 무효로 하고 웹 로그인은 그대로 둔다."""
+    user.mcp_version += 1
+    db.commit()
+    return {"ok": True}
+
+
+def _delete_workspace(db: Session, ws_id: int):
+    """조직과 그 데이터를 모두 지운다. 광고 계정은 다른 조직에 연결 기록이 없을 때만 지운다. 참조하는 표부터 지운다(D1은 외래 키 검사)."""
+    acc_ids = list(db.scalars(select(WorkspaceAdAccount.ad_account_id).where(WorkspaceAdAccount.workspace_id == ws_id)))
+    db.execute(delete(AuditLog).where(AuditLog.workspace_id == ws_id))
+    db.execute(delete(BulkJobRow).where(BulkJobRow.job_id.in_(select(BulkJob.id).where(BulkJob.workspace_id == ws_id))))
+    for model in (BulkJob, AutoBidRule, AccountGoal, Subscription):
+        db.execute(delete(model).where(model.workspace_id == ws_id))
+    db.execute(delete(AccountAccess).where(AccountAccess.membership_id.in_(select(Membership.id).where(Membership.workspace_id == ws_id))))
+    for model in (Membership, WorkspaceAdAccount, NaverApiCredential):
+        db.execute(delete(model).where(model.workspace_id == ws_id))
+    shared = set(db.scalars(select(WorkspaceAdAccount.ad_account_id).where(WorkspaceAdAccount.ad_account_id.in_(acc_ids))))
+    if orphan := [a for a in acc_ids if a not in shared]:
+        for model in (PerformanceDaily, SyncRun, BulkJobRow, AuditLog):
+            db.execute(delete(model).where(model.ad_account_id.in_(orphan)))
+        db.execute(delete(AdAccount).where(AdAccount.id.in_(orphan)))
+    db.execute(delete(Workspace).where(Workspace.id == ws_id))
+
+
+class DeleteMeIn(BaseModel):
+    password: str = ""  # 비밀번호 계정은 비밀번호로 확인
+    email: str = ""  # Google 계정은 이메일을 다시 입력해 확인
+
+
+@app.post("/auth/delete-account")
+async def delete_account(body: DeleteMeIn, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """회원 탈퇴. 혼자 소유한 조직은 데이터까지 지우고, 다른 조직에서는 빠진다.
+    작업 이력·감사 기록이 남는 다른 조직을 위해 사용자 행은 지우지 않고 개인정보를 지운 '탈퇴한 사용자'로 남긴다."""
+    if user.password_hash == GOOGLE_ONLY:
+        if body.email.strip().lower() != user.email.lower():
+            raise HTTPException(400, "이메일이 일치하지 않습니다")
+    else:
+        ip = request.headers.get("cf-connecting-ip")
+        if login_blocked(db, user.email, ip):
+            raise HTTPException(429, LOGIN_BLOCKED)
+        ok = await verify_password(body.password, user.password_hash)
+        record_login(db, user.email, ip, ok)
+        if not ok:
+            raise HTTPException(400, "비밀번호가 올바르지 않습니다")
+    for m in list(db.scalars(select(Membership).where(Membership.user_id == user.id))):
+        owners = db.scalar(select(func.count(Membership.id)).where(Membership.workspace_id == m.workspace_id, Membership.role == "OWNER"))
+        if m.role == "OWNER" and owners == 1:
+            _delete_workspace(db, m.workspace_id)
+        else:
+            db.execute(delete(AccountAccess).where(AccountAccess.membership_id == m.id))
+            db.delete(m)
+    user.email, user.name, user.password_hash = f"deleted-{user.id}@deleted.invalid", "탈퇴한 사용자", "deleted$"
+    user.token_version, user.mcp_version = user.token_version + 1, user.mcp_version + 1
+    db.commit()
+    return {"ok": True}
+
+
 class PasswordIn(BaseModel):
     current_password: str
     new_password: str

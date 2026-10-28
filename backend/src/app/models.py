@@ -19,6 +19,7 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     name: Mapped[str] = mapped_column(String(100))
     token_version: Mapped[int] = mapped_column(Integer, default=0)  # 올리면 이전 토큰이 모두 무효(비밀번호 변경·모든 기기 로그아웃)
+    mcp_version: Mapped[int] = mapped_column(Integer, default=0)  # 올리면 Claude(MCP) 토큰만 무효
 
 
 class LoginFailure(Base):
@@ -27,6 +28,14 @@ class LoginFailure(Base):
     key: Mapped[str] = mapped_column(String(330), primary_key=True)
     count: Mapped[int] = mapped_column(Integer)
     first_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class OAuthUsed(Base):
+    """한 번 쓴 인가 코드·갱신 토큰(sha256). expires_at이 지나면 토큰 자체가 만료라 지워도 된다."""
+    __tablename__ = "oauth_used"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class Workspace(Base):

@@ -923,3 +923,75 @@ def test_google_login(monkeypatch):
 
     monkeypatch.setenv("APP_ENV", "prod")  # 운영은 비밀번호 가입 막힘
     assert c.post("/auth/signup", json={"email": "x@a.com", "password": "password1", "name": "x"}).status_code == 403
+
+
+def test_mcp_token_security(monkeypatch):
+    import base64
+    import hashlib
+    from datetime import timedelta
+    from urllib.parse import parse_qs, urlparse
+    from app import mcp
+
+    web = user("mcpsec@a.com")
+    cb = "http://localhost:3333/callback"
+    client_id = c.post("/oauth/register", json={"redirect_uris": [cb]}).json()["client_id"]
+
+    def connect():
+        verifier = hashlib.sha256(os.urandom(8)).hexdigest()
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+        q = {"client_id": client_id, "redirect_uri": cb, "code_challenge": challenge, "code_challenge_method": "S256", "state": "s"}
+        r = c.post("/oauth/authorize", data={**q, "email": "mcpsec@a.com", "password": "password1"}, follow_redirects=False)
+        tok = {"grant_type": "authorization_code", "code": parse_qs(urlparse(r.headers["location"]).query)["code"][0],
+               "redirect_uri": cb, "client_id": client_id, "code_verifier": verifier}
+        t = c.post("/oauth/token", data=tok).json()
+        assert c.post("/oauth/token", data=tok).status_code == 400  # 인가 코드는 한 번만
+        return t
+    refresh = lambda rt: c.post("/oauth/token", data={"grant_type": "refresh_token", "refresh_token": rt})  # noqa: E731
+    ok = lambda t: c.get("/workspaces", headers={"Authorization": f"Bearer {t}"}).status_code == 200  # noqa: E731
+
+    # 갱신 토큰 교체: 쓰면 새 갱신 토큰, 옛 것은 거절(60초 안 재사용은 재시도로 보고 거절만)
+    t0 = connect()
+    t1 = refresh(t0["refresh_token"]).json()
+    assert t1["refresh_token"] != t0["refresh_token"]
+    assert refresh(t0["refresh_token"]).status_code == 400 and ok(t1["access_token"])
+    # 늦게 재사용 = 탈취로 보고 Claude 연결 전부 끊기(웹 로그인은 그대로)
+    monkeypatch.setattr(mcp, "REUSE_GRACE", timedelta(0))
+    assert refresh(t0["refresh_token"]).status_code == 400
+    assert not ok(t1["access_token"]) and refresh(t1["refresh_token"]).status_code == 400 and ok(web["Authorization"][7:])
+
+    # Claude 연결만 끊기
+    t2 = connect()
+    assert ok(t2["access_token"])
+    assert c.post("/auth/disconnect-claude", headers=web).json() == {"ok": True}
+    assert not ok(t2["access_token"]) and refresh(t2["refresh_token"]).status_code == 400 and ok(web["Authorization"][7:])
+    assert ok(connect()["access_token"])  # 다시 연결하면 된다
+
+
+def test_delete_account():
+    from sqlalchemy import text
+    from app.db import engine
+
+    owner = user("leaver@a.com")
+    ws = c.post("/workspaces", json={"name": "혼자"}, headers=owner).json()["id"]
+    cred = c.post(f"/workspaces/{ws}/credentials", json={"label": "m", "api_key": "k", "secret_key": "s"}, headers=owner).json()["id"]
+    acc = c.post(f"/workspaces/{ws}/ad-accounts", json={"credential_id": cred, "customer_id": "7117", "name": "m"}, headers=owner).json()["id"]
+    assert c.post(f"/workspaces/{ws}/ad-accounts/{acc}/sync", headers=owner).json()["status"] == "SUCCESS"
+    assert c.put(f"/workspaces/{ws}/auto-bids", headers=owner, json={"keywords": [{"ad_account_id": acc, "naver_id": "nkw-1"}], "device": "PC",
+                                                                    "target_rank": 3, "max_bid": 500}).status_code == 200
+    staff = user("leaver-staff@a.com")
+    c.post(f"/workspaces/{ws}/members", json={"email": "leaver-staff@a.com"}, headers=owner)
+    # 남의 조직의 직원이기도 하다 → 그 조직은 남고 나만 빠진다
+    boss = user("leaver-boss@a.com")
+    other = c.post("/workspaces", json={"name": "남의 조직"}, headers=boss).json()["id"]
+    c.post(f"/workspaces/{other}/members", json={"email": "leaver@a.com"}, headers=boss)
+
+    assert c.post("/auth/delete-account", headers=owner, json={"password": "wrong"}).status_code == 400
+    assert c.post("/auth/delete-account", headers=owner, json={"password": "password1"}).json() == {"ok": True}
+    assert c.get("/workspaces", headers=owner).status_code == 401  # 토큰 무효
+    assert c.get("/workspaces", headers=staff).json() == []  # 혼자 소유한 조직은 직원 것까지 사라짐
+    assert [m["email"] for m in c.get(f"/workspaces/{other}/members", headers=boss).json()] == ["leaver-boss@a.com"]
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM ad_accounts WHERE id = :a"), {"a": acc}).scalar() == 0
+        assert conn.execute(text("PRAGMA foreign_key_check")).fetchall() == []  # D1은 외래 키를 검사한다
+    assert c.post("/auth/login", json={"email": "leaver@a.com", "password": "password1"}).status_code == 401
+    assert c.post("/auth/signup", json={"email": "leaver@a.com", "password": "password1", "name": "다시"}).status_code == 200

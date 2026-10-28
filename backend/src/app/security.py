@@ -58,20 +58,21 @@ def _sign(msg: str) -> str:
     return hmac.new(_secret().encode(), msg.encode(), hashlib.sha256).hexdigest()
 
 
-def make_token(user_id: int, version: int = 0) -> str:
-    msg = f"{user_id}.{version}.{int(time.time()) + TOKEN_TTL}"
+def make_token(user_id: int, version: int = 0, mcp: int | None = None) -> str:
+    """mcp: Claude 연결 토큰이면 사용자의 mcp_version(Claude 연결만 끊기용)."""
+    msg = ".".join(map(str, [user_id, version, *([mcp] if mcp is not None else []), int(time.time()) + TOKEN_TTL]))
     return f"{msg}.{_sign(msg)}"
 
 
-def read_token(token: str) -> tuple[int, int] | None:
-    """(사용자 ID, 토큰 버전). 버전 없는 예전 토큰(점 2개)은 버전 0 — 배포 때 모두 로그아웃되지 않게."""
+def read_token(token: str) -> tuple[int, int, int | None] | None:
+    """(사용자 ID, 토큰 버전, Claude 연결 버전 또는 None). 버전 없는 예전 토큰(점 2개)은 버전 0 — 배포 때 모두 로그아웃되지 않게."""
     parts = token.split(".")
-    if len(parts) not in (3, 4) or not all(p.isdigit() for p in parts[:-1]):
+    if len(parts) not in (3, 4, 5) or not all(p.isdigit() for p in parts[:-1]):
         return None
     *body, sig = parts
     if not hmac.compare_digest(sig, _sign(".".join(body))) or int(body[-1]) < time.time():
         return None
-    return int(body[0]), int(body[1]) if len(body) == 3 else 0
+    return int(body[0]), int(body[1]) if len(body) >= 3 else 0, int(body[2]) if len(body) == 4 else None
 
 
 def sign_payload(data: dict, ttl: int | None = None) -> str:
