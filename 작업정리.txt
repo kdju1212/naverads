@@ -12,7 +12,7 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
 - 배포: main에 push하면 Cloudflare Workers Builds가 프론트(naverads)·백엔드(naverads-api) 자동 배포
   GitHub 커밋의 Workers Builds 두 개가 성공한 뒤 확인 (프론트가 먼저 뜨면 잠깐 "Not Found" → 새로고침)
 - DB 변경은 자동 배포 안 됨 → push 전에 backend 폴더에서: npx wrangler d1 migrations apply naverads --remote
-  (0011까지 적용 완료)
+  (0012까지 적용 완료, 10/28)
 - 디버깅: npx wrangler tail naverads-api --format json / DB 읽기: npx wrangler d1 execute naverads --remote --command "SELECT ..."
 - 무료 플랜만 사용: 요청 1번에 외부 호출+D1 쿼리 50번, CPU 10ms → 대량 작업은 5행씩 나눠 실행, 크론도 조금씩 나눠 진행
 - 광고 데이터(캠페인~확장소재)는 서버 DB에 없음: 브라우저(IndexedDB)가 네이버 마스터 보고서로 받아 보관(7일, 화면 "새로고침")
@@ -108,12 +108,10 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
 ----------------------------------------------------------------
 [지금 할 수 있는 확인]
 1. 예약 작업 "값 바뀌면 실패"가 실계정에서 맞게 도는지 (NAVER_ALLOW_REAL_WRITE는 10/27 꺼진 것 확인, 제외검색어·예약 실행도 확인 완료)
-2. [직접] 토큰 강제 폐기 — 점검 전용 계정(.test-account)으로 운영 사이트에서 확인 (10/27 로컬 테스트·배포만 됨)
-   - 설정 맨 아래 "내 계정" 카드가 보이는지
-   - 비밀번호 변경 → 다른 브라우저에 로그인해 둔 것이 끊기는지, 지금 화면은 그대로인지 (확인 후 비밀번호를 .test-account에 맞게 되돌리기)
-   - "모든 기기에서 로그아웃" → 로그인 화면으로 가는지
-   - 주의: 운영 실계정(김동주)으로 하면 쓰고 있는 Claude 연결도 끊겨 다시 연결해야 함
-   - 로그인 실패 제한: 5번 틀리면 15분 막히는지 (그 계정은 15분 로그인 불가)
+2. [직접] 설정 화면 새 버튼 — 점검 전용 계정(.test-account)으로 'Claude 연결만 끊기' 눌러보기, '회원 탈퇴' 펼쳐 보이는지만(누르지 말 것)
+   (토큰 강제 폐기·비밀번호 변경·모든 기기 로그아웃·로그인 5번 실패 차단은 10/28 API로 운영 확인 완료)
+   - 10/29: Claude 연결이 저절로 끊기지 않았는지(갱신 토큰 교체 확인)
+   - 대시보드·키워드 화면에서 디자인 바뀐 것(필터·증감 색·회색 막대·완료 알림) 한 번 보기
 3. (10/27 로컬 Mock으로 화면 확인 완료: 목표 ROAS 칸·예약 입력/취소·제외검색어 칸) 실계정 화면은 직접 한 번 보기
 4. 엑셀로 소재 삭제, MCP 확장소재 등록, 네이버에서 직접 지운 항목이 앱 새로고침 후 사라지는지
 
