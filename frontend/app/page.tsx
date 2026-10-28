@@ -14,6 +14,8 @@ interface AccountPerf { ad_account_id: number; name: string; WEB_SITE: Perf | nu
 interface Daily { date: string; impressions: number; clicks: number; cost: number; conversions: number | null; revenue: number | null }
 interface Dashboard { connected_accounts: number; recent_jobs: Job[]; failed_jobs: number[]; sync_errors: { ad_account_id: number; error: string; at: string }[]; auto_bids: number }
 
+// 목표 ROAS 자동운영은 광고가 나가고 전환 추적이 생긴 뒤에(10/28 사용자 요청으로 숨김). 서버 기능은 그대로
+const SHOW_GOALS = false;
 const DAY = 86400000;
 // 네이버 통계의 하루는 한국 날짜(toISOString은 UTC라 오전 9시 전엔 어제가 그제로 잡힌다)
 const day = (d: Date) => d.toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
@@ -128,7 +130,7 @@ export default function DashboardPage() {
         )}
       </Card>
 
-      {product !== "SHOPPING" && <GoalCard accounts={rows.map((r) => ({ id: r.ad_account_id, name: r.name, roas: r.pl?.roas, days }))} />}
+      {SHOW_GOALS && product !== "SHOPPING" && <GoalCard accounts={rows.map((r) => ({ id: r.ad_account_id, name: r.name, roas: r.pl?.roas, days }))} />}
 
       <OpsSummary data={naver.loading ? null : naver} autoBids={dash.data?.auto_bids} connected={dash.data?.connected_accounts} />
 
