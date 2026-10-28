@@ -28,7 +28,7 @@ export function usePerf<T extends Target>() {
     setError(null);
     const until = new Date(Date.now() - 864e5);
     const since = new Date(until.getTime() - (days - 1) * 864e5);
-    const day = (d: Date) => d.toLocaleDateString("sv-SE"); // YYYY-MM-DD (브라우저 시간대)
+    const day = (d: Date) => d.toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" }); // YYYY-MM-DD, 네이버 통계의 하루는 한국 날짜
     try {
       const byAcc = new Map<number, string[]>();
       picked.forEach((r) => byAcc.set(r.ad_account_id, [...(byAcc.get(r.ad_account_id) ?? []), r.naver_id]));

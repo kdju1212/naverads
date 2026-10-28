@@ -54,7 +54,7 @@ class Default(WorkerEntrypoint):
 
     async def fetch(self, request):
         self._bind()
-        # 요청 횟수 제한: IP당 1분 600번(wrangler.jsonc ratelimits). 로그인 실패 제한은 따로 있다(app.main)
+        # 요청 횟수 제한: IP당 1분 1500번(wrangler.jsonc ratelimits). 로그인 실패 제한은 따로 있다(app.main)
         ip = request.headers.get("cf-connecting-ip")
         if ip and (lim := getattr(self.env, "LIMITER", None)):
             if not (await lim.limit(to_js({"key": ip}, dict_converter=js.Object.fromEntries))).success:

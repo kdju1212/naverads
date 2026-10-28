@@ -6,8 +6,9 @@
   "compatibility_flags": ["python_workers"],
   "observability": { "enabled": true },
   "triggers": { "crons": ["*/10 * * * *"] },
-  // 요청 횟수 제한(src/main.py): IP당 1분 600번. 사무실 하나에서 여러 직원이 써도 걸리지 않게 넉넉히
-  "ratelimits": [{ "name": "LIMITER", "namespace_id": "1001", "simple": { "limit": 600, "period": 60 } }],
+  // 요청 횟수 제한(src/main.py): IP당 1분 1500번. 광고 데이터 받기(계정마다 보고서 6개를 2초마다 확인)를
+  // 사무실 한 IP에서 여러 직원이 동시에 해도 걸리지 않게 넉넉히. 초당 수십 번씩 두드리는 것만 막는다
+  "ratelimits": [{ "name": "LIMITER", "namespace_id": "1001", "simple": { "limit": 1500, "period": 60 } }],
   "d1_databases": [
     { "binding": "DB", "database_name": "naverads", "database_id": "f6603131-365a-425e-ae58-ed357b5f08b4", "migrations_dir": "migrations" }
   ]

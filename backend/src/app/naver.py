@@ -546,5 +546,5 @@ class MockNaverClient:
 
 def client_for(credential, customer_id: str, decrypt):
     if credential.is_mock:
-        return MockNaverClient(customer_id)
+        return MockNaverClient(customer_id.rpartition("-")[2])  # 저장된 Mock 번호는 mock{조직}-{번호}
     return RealNaverClient(credential.api_key, decrypt(credential.secret_key_enc), customer_id)

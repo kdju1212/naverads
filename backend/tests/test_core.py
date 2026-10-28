@@ -376,10 +376,10 @@ def test_schedule_job(monkeypatch):
 def test_execute_in_chunks():
     from app import bulk
 
-    owner, ws, acc = _account("chunk@a.com", "8008")
+    owner, ws, acc = _account("chunk@a.com", "8018")
     n = bulk.EXECUTE_CHUNK + 2
     job = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [
-        ch(acc, "keyword", "grp-8008-pl1", "create", f"묶음{i}", product="WEB_SITE") for i in range(n)]}).json()
+        ch(acc, "keyword", "grp-8018-pl1", "create", f"묶음{i}", product="WEB_SITE") for i in range(n)]}).json()
     url = f"/workspaces/{ws}/bulk-jobs/{job['id']}/execute"
     first = c.post(url, headers=owner).json()  # 요청이 끊긴 RUNNING 작업도 이렇게 이어 간다
     assert first["status"] == "RUNNING" and first["counts"]["SUCCESS"] == bulk.EXECUTE_CHUNK and first["counts"]["VALID"] == 2
@@ -1025,3 +1025,23 @@ def test_audit_fixes(monkeypatch):
     db.commit()
     db.close()
     assert any(x["action"] == "JOB_SCHEDULE_FAIL" for x in c.get(f"/workspaces/{ws}/audit-logs", headers=boss).json())
+
+
+def test_mock_cannot_squat_customer_id():
+    # Mock 연결은 실제 광고주 번호를 차지하지 않는다(조직별 번호) → 진짜 계정 연결이 막히지 않는다
+    from app.db import SessionLocal
+    from app.models import AdAccount
+    codes = []
+    for name in ("squat-a@a.com", "squat-b@a.com"):
+        h = user(name)
+        ws = c.post("/workspaces", json={"name": name}, headers=h).json()["id"]
+        cred = c.post(f"/workspaces/{ws}/credentials", json={"label": "m", "api_key": "k", "secret_key": "s"}, headers=h).json()["id"]
+        r = c.post(f"/workspaces/{ws}/ad-accounts", json={"credential_id": cred, "customer_id": "4285993", "name": "x"}, headers=h)
+        codes.append(r.status_code)
+        if r.status_code == 200:
+            assert r.json()["customer_id"] == f"mock{ws}-4285993"
+            assert c.post(f"/workspaces/{ws}/ad-accounts/{r.json()['id']}/sync", headers=h).json()["status"] == "SUCCESS"  # Mock 동작 그대로
+    assert codes == [200, 409]  # 다른 조직은 같은 Mock 번호를 못 씀(가짜 캠페인 ID가 겹침)
+    db = SessionLocal()
+    assert db.query(AdAccount).filter(AdAccount.customer_id == "4285993").count() == 0
+    db.close()

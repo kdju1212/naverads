@@ -409,14 +409,23 @@ async def connect_account(body: ConnectIn, m: Membership = Depends(admin_members
     cred = db.get(NaverApiCredential, body.credential_id)
     if not cred or cred.workspace_id != m.workspace_id:
         raise HTTPException(404, "자격증명을 찾을 수 없습니다")
+    # 광고 계정은 고객 ID로 조직 간에 공유된다. Mock은 아무나 만들 수 있어, 실제 광고주 번호를 먼저 차지해
+    # 진짜 계정 연결을 막지 못하게 조직별 번호(mock{조직}-{번호})로 따로 둔다
+    cid = f"mock{m.workspace_id}-{body.customer_id}" if cred.is_mock else body.customer_id
+    # 가짜 캠페인 ID는 번호로 만들어져 성과 표(캠페인 ID가 전체에서 하나)에서 겹치므로 Mock 번호는 조직끼리 겹치지 않게
+    # (예전 방식으로 번호 그대로 저장된 Mock 계정도 같은 번호로 본다)
+    if cred.is_mock and db.scalar(select(AdAccount.id).where(
+            or_(AdAccount.customer_id.like(f"mock%-{body.customer_id}"), AdAccount.customer_id == body.customer_id),
+            AdAccount.customer_id != cid)):
+        raise HTTPException(409, "다른 조직이 Mock으로 쓰는 번호입니다. 다른 숫자를 넣어 주세요")
     try:
-        client = client_for(cred, body.customer_id, decrypt)
+        client = client_for(cred, cid, decrypt)
         client.list_campaigns()  # 이 자격증명으로 해당 계정에 실제 접근 가능한지 검증
     except NaverApiError as e:
         raise HTTPException(400, f"광고 계정 접근 검증 실패: {e}")
-    acc = db.scalar(select(AdAccount).where(AdAccount.customer_id == body.customer_id))
+    acc = db.scalar(select(AdAccount).where(AdAccount.customer_id == cid))
     if acc is None:
-        acc = AdAccount(customer_id=body.customer_id, name=body.name, is_mock=cred.is_mock)
+        acc = AdAccount(customer_id=cid, name=body.name, is_mock=cred.is_mock)
         db.add(acc)
         db.flush()
     elif acc.is_mock != cred.is_mock:

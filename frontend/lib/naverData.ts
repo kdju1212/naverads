@@ -30,6 +30,15 @@ const MAX_AGE = 7 * 24 * 3600_000;
 const POLL_MS = 2000;
 const POLL_TRIES = 120; // 보고서 생성 최대 4분 대기
 const LOOKUP_CHUNK = 200; // 서버 한 번에 500개까지(네이버에는 100개씩)
+// 계정마다 보고서 6개를 2초마다 확인하므로 한꺼번에 받으면 요청 횟수 제한(IP당 1분 1500번)에 걸린다
+const FETCH_AT_ONCE = 2;
+let fetching = 0;
+const waiting: (() => void)[] = [];
+async function oneSlot<T>(fn: () => Promise<T>): Promise<T> {
+  while (fetching >= FETCH_AT_ONCE) await new Promise<void>((r) => waiting.push(r));
+  fetching++;
+  try { return await fn(); } finally { fetching--; waiting.shift()?.(); }
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const withId = <T extends { naver_id: string }>(rows: T[]) => rows.map((r) => ({ ...r, id: r.naver_id }));
@@ -106,7 +115,7 @@ export async function ensureAccount(wsId: number, accountId: number, force = fal
       setEntry(k, { data: saved, loading: false });
       return;
     }
-    const data = await fetchAccount(wsId, accountId);
+    const data = await oneSlot(() => fetchAccount(wsId, accountId));
     await saveLocal(k, data);
     setEntry(k, { data, loading: false });
     toast("네이버에서 광고 데이터를 받았습니다");

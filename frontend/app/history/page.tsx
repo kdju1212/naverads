@@ -14,7 +14,8 @@ interface Log {
 }
 interface Member { user_id: number; name: string; email: string }
 
-const ACTION: Record<string, string> = { UPDATE: "변경", CREATE: "생성", DELETE: "삭제", ACCOUNT_CONNECT: "계정 연결", ACCOUNT_DISCONNECT: "계정 해제", ACCESS_SET: "권한 배정", AUTO_BID_SET: "자동입찰 설정", AUTO_BID_DELETE: "자동입찰 해제" };
+const ACTION: Record<string, string> = { UPDATE: "변경", CREATE: "생성", DELETE: "삭제", ACCOUNT_CONNECT: "계정 연결", ACCOUNT_DISCONNECT: "계정 해제", ACCESS_SET: "권한 배정", AUTO_BID_SET: "자동입찰 설정", AUTO_BID_DELETE: "자동입찰 해제",
+  JOB_SCHEDULE: "예약", JOB_SCHEDULE_FAIL: "예약 실행 실패", GOAL_SET: "목표 ROAS 설정", GOAL_DELETE: "목표 ROAS 해제" };
 
 export default function HistoryPage() {
   const { ws, selected, accountName } = useApp();
