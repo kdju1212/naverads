@@ -143,9 +143,14 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
     광고 데이터는 계정 2개씩 받기·요청 제한 IP당 1분 1500번, 프론트는 빌드 전에 npm test(package.json build), 이력 한글 이름,
     성과 기간 한국 날짜, 자격증명 등록 기본값 실계정
     남은 것:
-    - [직접] 백엔드 배포 전 테스트: Cloudflare 대시보드 naverads-api > Settings > Build > Build command 에
-      uv run --group local pytest -q  (실패하면 배포 안 됨, 처음 한 번 빌드 로그로 되는지 확인)
-    - 동기화는 캠페인마다 네이버 호출 1번 → 캠페인 약 45개 넘는 계정은 무료 플랜 요청당 호출 한도로 동기화 실패
+    - 백엔드 배포 전 테스트: 10/28 대시보드 Build command에 uv run --group local pytest -q 넣음, 이후 빌드 3번 성공
+      [직접] 빌드 로그에 "passed"가 찍히는지 한 번 확인(테스트가 실제로 도는지)
+    - 10/28 동기화를 캠페인 30개씩 나눠 받기(화면이 이어서 호출) → 캠페인 많은 계정도 동기화 가능
+    - 10/28 로컬 Mock(계정 7개)으로 화면 확인: 대시보드 증감 색, 상태 필터, 계정 검색, 회색 막대, 완료 토스트, 이력, 설정 정상
+      그래프 세로축 숫자 잘림·Mock 번호 표시·확장소재 카드 여백 고침
+    - [직접] 운영 DB에 예전 방식 Mock 계정이 있는지: backend에서
+      npx wrangler d1 execute naverads --remote --command "SELECT id, customer_id, is_mock FROM ad_accounts"
+      (is_mock=1인데 customer_id가 숫자만이면 예전 방식. 있어도 동작은 그대로)
     - 같은 작업을 두 곳에서 동시에 '실행'하면 같은 행을 두 번 처리할 수 있음(화면은 버튼을 막아 둠, Claude가 겹쳐 부를 때만)
     - docs/ 설계 문서 자체는 10/18 그대로(필요할 때 갱신)
     - lib/changes.ts(엑셀 행에 계정·이전 값 채우기) 테스트 없음
