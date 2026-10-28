@@ -862,3 +862,59 @@ def test_token_revocation():
     t4 = c.post("/auth/password", headers=h, json={"current_password": "password1", "new_password": "password2"}).json()["token"]
     assert ok(t4) and not ok(t3) and refresh({"t": "refresh", "u": uid, "v": 1}).status_code == 400
     assert c.post("/auth/login", json={"email": "revoke@a.com", "password": "password2"}).status_code == 200
+
+
+def test_google_login(monkeypatch):
+    import base64
+    from urllib.parse import parse_qs, urlsplit
+    from app.security import read_token, sign_payload
+
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "gid")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "gsecret")
+    claims = {"aud": "gid", "email": "GLink@a.com", "email_verified": True, "name": "구글"}
+
+    class Tok:
+        def json(self):
+            body = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+            return {"id_token": f"h.{body}.s"}
+    sent = {}
+    monkeypatch.setattr("app.main.httpx.post", lambda url, data, **kw: sent.update(data) or Tok())
+
+    def login(**params):
+        r = c.get("/auth/google/start", params=params, follow_redirects=False)
+        assert r.status_code == 302 and r.headers["location"].startswith("https://accounts.google.com/")
+        state = parse_qs(urlsplit(r.headers["location"]).query)["state"][0]
+        return c.get("/auth/google/callback", params={"state": state, "code": "c1"}, follow_redirects=False)
+
+    web = "http://localhost:3000/login"
+    assert c.get("/auth/google/start", params={"redirect": "https://evil.com/login"}).status_code == 400  # 토큰을 남의 사이트로 안 보냄
+    c.post("/auth/signup", json={"email": "glink@a.com", "password": "password1", "name": "기존"})
+    r = login(redirect=web)
+    assert sent["client_secret"] == "gsecret" and sent["redirect_uri"].endswith("/auth/google/callback")
+    loc = r.headers["location"]
+    assert loc.startswith(web + "#token=")
+    uid = read_token(parse_qs(urlsplit(loc).fragment)["token"][0])[0]
+    assert c.post("/auth/login", json={"email": "glink@a.com", "password": "password1"}).json()["id"] == uid  # 같은 이메일은 기존 계정
+
+    claims.update(email="new-g@a.com")  # 처음 보는 이메일은 가입, 비밀번호 로그인은 안 됨
+    assert "#token=" in login(redirect=web).headers["location"]
+    assert c.post("/auth/login", json={"email": "new-g@a.com", "password": "google$"}).status_code == 401
+    claims.update(email_verified=False)
+    assert "#error=" in login(redirect=web).headers["location"]
+    claims.update(email_verified=True)
+
+    # 다른 브라우저(쿠키 없음)에서 콜백을 열면 거절 — 로그인 CSRF
+    r = c.get("/auth/google/start", params={"redirect": web}, follow_redirects=False)
+    state = parse_qs(urlsplit(r.headers["location"]).query)["state"][0]
+    c.cookies.clear()
+    assert c.get("/auth/google/callback", params={"state": state, "code": "c1"}).status_code == 400
+
+    # Claude 연결 로그인 화면에서 Google로: 인가 코드가 Claude 주소로
+    cb = "https://claude.ai/api/mcp/auth_callback"
+    q = {"client_id": sign_payload({"t": "client", "r": [cb]}), "redirect_uri": cb, "code_challenge": "x", "code_challenge_method": "S256", "state": "s1"}
+    assert "/auth/google/start?" in c.get("/oauth/authorize", params=q).text
+    loc = login(**q).headers["location"]
+    assert loc.startswith(cb + "?code=") and loc.endswith("&state=s1")
+
+    monkeypatch.setenv("APP_ENV", "prod")  # 운영은 비밀번호 가입 막힘
+    assert c.post("/auth/signup", json={"email": "x@a.com", "password": "password1", "name": "x"}).status_code == 403

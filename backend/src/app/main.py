@@ -1,10 +1,16 @@
+import base64
+import hmac
+import json
+import os
+import secrets
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
@@ -15,7 +21,7 @@ from .db import Base, engine, get_db
 from .models import (AccountAccess, AccountGoal, AdAccount, AuditLog, AutoBidRule, BulkJob, BulkJobRow, LoginFailure, Membership, NaverApiCredential,
                      PerformanceDaily, Plan, Subscription, SyncRun, User, Workspace, WorkspaceAdAccount, now)
 from .naver import NaverApiError, client_for
-from .security import decrypt, encrypt, hash_password, make_token, verify_password
+from .security import decrypt, encrypt, hash_password, make_token, read_payload, sign_payload, verify_password
 from .sync import sync_account
 
 app = FastAPI(title="네이버 광고 통합 관리 API")
@@ -45,6 +51,8 @@ class SignupIn(BaseModel):
 
 @app.post("/auth/signup")
 async def signup(body: SignupIn, db: Session = Depends(get_db)):
+    if os.getenv("APP_ENV", "dev") != "dev":  # 운영 가입은 Google로만(이메일 인증). 비밀번호 가입은 로컬·테스트용
+        raise HTTPException(403, "회원가입은 Google로 계속하기를 이용하세요")
     if len(body.password) < 8:
         raise HTTPException(400, "비밀번호는 8자 이상")
     if db.scalar(select(User).where(User.email == body.email)):
@@ -136,6 +144,79 @@ async def change_password(body: PasswordIn, request: Request, user: User = Depen
     user.password_hash, user.token_version = await hash_password(body.new_password), user.token_version + 1
     db.commit()
     return {"token": make_token(user.id, user.token_version)}
+
+
+# ---------- Google 로그인 (가입은 Google로만: 이메일 인증을 Google이 대신) ----------
+GOOGLE_AUTH, GOOGLE_TOKEN = "https://accounts.google.com/o/oauth2/v2/auth", "https://oauth2.googleapis.com/token"
+# 로그인 토큰을 붙여 돌려보내므로 이 웹 주소로만 보낸다
+WEB_ORIGINS = {"https://naverads.djkim0509.workers.dev", "http://localhost:3000"}
+GOOGLE_ONLY = "google$"  # 비밀번호 없는 계정: 어떤 비밀번호와도 맞지 않는다(verify_password)
+STATE_COOKIE = "g_state"
+
+
+def _google_callback_url(request: Request) -> str:
+    return str(request.base_url).rstrip("/") + "/auth/google/callback"
+
+
+def _google_done(st: dict, user: User | None = None, error: str = ""):
+    """웹은 로그인 화면 #token=…(조각은 서버 로그·Referer에 안 남음), Claude 연결은 인가 코드로."""
+    if "q" in st:
+        res = mcp.code_redirect(st["q"], user.id) if user else mcp._login_page(st["q"], error, 400)
+    else:
+        res = RedirectResponse(st["r"] + "#" + urlencode({"token": make_token(user.id, user.token_version)} if user else {"error": error}), 302)
+    res.delete_cookie(STATE_COOKIE, path="/auth/google")
+    return res
+
+
+@app.get("/auth/google/start")
+async def google_start(request: Request, redirect: str = ""):
+    p = request.query_params
+    if "client_id" in p:  # Claude 연결 로그인 화면에서 옴
+        q, err = mcp._auth_params(p)
+        if err:
+            return mcp._login_page(None, err, 400)
+        st = {"q": q}
+    elif f"{(u := urlsplit(redirect)).scheme}://{u.netloc}" in WEB_ORIGINS:
+        st = {"r": redirect}
+    else:
+        raise HTTPException(400, "허용되지 않은 주소입니다")
+    if not os.getenv("GOOGLE_CLIENT_ID"):
+        return _google_done(st, error="Google 로그인이 아직 설정되지 않았습니다")
+    # 로그인 CSRF 방지: 시작한 브라우저의 쿠키와 state의 값이 같아야 콜백을 받는다
+    nonce = secrets.token_urlsafe(16)
+    state = sign_payload({"t": "google", "n": nonce, **st}, 600)
+    res = RedirectResponse(GOOGLE_AUTH + "?" + urlencode({"client_id": os.getenv("GOOGLE_CLIENT_ID"), "redirect_uri": _google_callback_url(request),
+                                                         "response_type": "code", "scope": "openid email profile", "state": state,
+                                                         "prompt": "select_account"}), 302)
+    res.set_cookie(STATE_COOKIE, nonce, max_age=600, path="/auth/google", httponly=True, samesite="lax", secure=request.url.scheme == "https")
+    return res
+
+
+@app.get("/auth/google/callback")
+async def google_callback(request: Request, state: str = "", code: str = "", db: Session = Depends(get_db)):
+    st = read_payload(state, "google")
+    if not st or not hmac.compare_digest(st["n"], request.cookies.get(STATE_COOKIE, "")):
+        raise HTTPException(400, "로그인 요청이 만료되었거나 다른 브라우저에서 시작되었습니다. 처음부터 다시 시도하세요")
+    if not code:
+        return _google_done(st, error="Google 로그인이 취소되었습니다")
+    client_id = os.getenv("GOOGLE_CLIENT_ID", "")
+    try:
+        r = httpx.post(GOOGLE_TOKEN, data={"code": code, "client_id": client_id, "client_secret": os.getenv("GOOGLE_CLIENT_SECRET", ""),
+                                           "redirect_uri": _google_callback_url(request), "grant_type": "authorization_code"}, timeout=15)
+        seg = r.json()["id_token"].split(".")[1]
+        # Google에서 HTTPS로 직접 받은 id_token이라 서명 검증 없이 내용만 읽는다(Google 문서가 허용하는 방식)
+        info = json.loads(base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4)))
+    except (httpx.HTTPError, KeyError, IndexError, ValueError):
+        return _google_done(st, error="Google 로그인에 실패했습니다. 다시 시도하세요")
+    if info.get("aud") != client_id or not info.get("email_verified") or not info.get("email"):
+        return _google_done(st, error="인증된 Google 이메일이 아닙니다")
+    email = info["email"].lower()
+    user = db.scalar(select(User).where(func.lower(User.email) == email))  # 같은 이메일의 기존 계정이면 그 계정으로 로그인
+    if not user:
+        user = User(email=email, password_hash=GOOGLE_ONLY, name=(info.get("name") or email.split("@")[0])[:100])
+        db.add(user)
+        db.commit()
+    return _google_done(st, user=user)
 
 
 # ---------- 조직·직원·권한 ----------

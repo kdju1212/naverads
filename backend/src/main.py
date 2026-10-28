@@ -47,6 +47,9 @@ async def _master_file(request, ws_id, account_id, job_id):
 class Default(WorkerEntrypoint):
     def _bind(self):
         os.environ.setdefault("APP_SECRET", self.env.APP_SECRET)  # Workers는 os.environ을 채우지 않는다
+        for k in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"):  # 설정 전엔 없다 → Google 로그인만 "설정 전" 안내
+            if v := getattr(self.env, k, None):
+                os.environ.setdefault(k, str(v))
         app_db.bind_d1(self.env.DB)
 
     async def fetch(self, request):

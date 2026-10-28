@@ -83,6 +83,7 @@ def _login_page(q: dict | None, error: str = "", status: int = 200) -> HTMLRespo
 <label>이메일<input name="email" type="email" autocomplete="username" required></label>
 <label>비밀번호<input name="password" type="password" autocomplete="current-password" required></label>
 <button>로그인하고 연결</button></form>
+<a class="google" href="/auth/google/start?{e(urlencode(q))}">Google로 로그인하고 연결</a>
 <p class="sub">로그인하면 {target} 의 Claude가 내 권한 안에서 광고 계정을 조회·수정할 수 있습니다.</p>"""
     err = f'<p class="err" role="alert">{e(error)}</p>' if error else ""
     return HTMLResponse(f"""<!doctype html><html lang="ko"><head><meta charset="utf-8">
@@ -92,6 +93,7 @@ main{{background:#fff;border:1px solid #e3e5e8;border-radius:12px;padding:28px;w
 h1{{font-size:20px;margin:0 0 16px}}label{{display:block;font-size:14px;margin-bottom:12px}}
 input:not([type=hidden]){{display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:10px;border:1px solid #c9ccd1;border-radius:8px;font-size:15px}}
 button{{width:100%;padding:11px;border:0;border-radius:8px;background:#03c75a;color:#fff;font-size:15px;font-weight:600;cursor:pointer}}
+.google{{display:block;margin-top:10px;padding:10px;border:1px solid #c9ccd1;border-radius:8px;text-align:center;color:#111;text-decoration:none;font-size:15px}}
 .sub{{font-size:13px;color:#555}}.err{{color:#c62828;font-size:14px}}</style></head>
 <body><main><h1>네이버 광고 관리 · Claude 연결</h1>{err}{form}</main></body></html>""", status)
 
@@ -120,8 +122,13 @@ async def authorize(request: Request):
         db.close()
     if not ok:
         return _login_page(q, "이메일 또는 비밀번호가 올바르지 않습니다", 401)
+    return code_redirect(q, user.id)
+
+
+def code_redirect(q: dict, user_id: int) -> RedirectResponse:
+    """로그인한 사용자의 인가 코드를 Claude로 보낸다(비밀번호·Google 로그인 공통)."""
     # shortcut: 코드를 저장하지 않아 5분 안에는 재사용될 수 있다(PKCE 검증값이 있어야 하므로 요청한 클라이언트만 가능)
-    code = sign_payload({"t": "code", "u": user.id, "c": q["client_id"], "r": q["redirect_uri"], "ch": q["code_challenge"]}, CODE_TTL)
+    code = sign_payload({"t": "code", "u": user_id, "c": q["client_id"], "r": q["redirect_uri"], "ch": q["code_challenge"]}, CODE_TTL)
     sep = "&" if "?" in q["redirect_uri"] else "?"
     return RedirectResponse(q["redirect_uri"] + sep + urlencode({"code": code, "state": q["state"]}), 302)
 
