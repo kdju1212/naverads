@@ -18,11 +18,14 @@ from .access import membership_of, user_from_header
 from .db import SessionLocal
 from .models import OAuthUsed, User, now
 from .naver import _status, ad_row, adgroup_row, extension_row
-from .security import TOKEN_TTL, make_token, read_payload, sign_payload, verify_password
+from .security import make_token, read_payload, sign_payload, verify_password
 
 router = APIRouter()
 CODE_TTL = 300
-REFRESH_TTL = 60 * 60 * 24 * 30
+# Claude 연결: 출입증은 짧게(새면 1시간 안에 쓸모없음), 만료되면 Claude가 갱신 토큰으로 알아서 새로 받는다.
+# 갱신 토큰은 쓸 때마다 교체되므로, 7일 동안 한 번도 안 쓰면 다시 로그인
+ACCESS_TTL = 60 * 60
+REFRESH_TTL = 60 * 60 * 24 * 7
 # 공개 등록(DCR)이라 아무나 클라이언트를 만들 수 있으므로, 로그인 결과(코드)는 Claude와 내 PC(Claude Code)로만 보낸다
 CLAUDE_CALLBACKS = {"https://claude.ai/api/mcp/auth_callback", "https://claude.com/api/mcp/auth_callback"}
 
@@ -135,7 +138,7 @@ def code_redirect(q: dict, user_id: int) -> RedirectResponse:
 
 
 def _tokens(user: User) -> dict:
-    return {"access_token": make_token(user.id, user.token_version, user.mcp_version), "token_type": "Bearer", "expires_in": TOKEN_TTL,
+    return {"access_token": make_token(user.id, user.token_version, user.mcp_version, ACCESS_TTL), "token_type": "Bearer", "expires_in": ACCESS_TTL,
             "refresh_token": sign_payload({"t": "refresh", "u": user.id, "v": user.token_version, "m": user.mcp_version,
                                            "j": secrets.token_hex(8)}, REFRESH_TTL)}
 

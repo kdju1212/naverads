@@ -9,7 +9,7 @@ import time
 
 from cryptography.fernet import Fernet
 
-TOKEN_TTL = 60 * 60 * 12
+TOKEN_TTL = 60 * 60 * 12  # 웹 로그인(재발급 장치가 없어 업무 하루치)
 
 
 # 사용 시점에 읽는다: Workers에서는 Secret이 모듈 로드 후(첫 요청)에야 들어온다
@@ -58,9 +58,9 @@ def _sign(msg: str) -> str:
     return hmac.new(_secret().encode(), msg.encode(), hashlib.sha256).hexdigest()
 
 
-def make_token(user_id: int, version: int = 0, mcp: int | None = None) -> str:
+def make_token(user_id: int, version: int = 0, mcp: int | None = None, ttl: int = TOKEN_TTL) -> str:
     """mcp: Claude 연결 토큰이면 사용자의 mcp_version(Claude 연결만 끊기용)."""
-    msg = ".".join(map(str, [user_id, version, *([mcp] if mcp is not None else []), int(time.time()) + TOKEN_TTL]))
+    msg = ".".join(map(str, [user_id, version, *([mcp] if mcp is not None else []), int(time.time()) + ttl]))
     return f"{msg}.{_sign(msg)}"
 
 

@@ -954,6 +954,10 @@ def test_mcp_token_security(monkeypatch):
 
     # 갱신 토큰 교체: 쓰면 새 갱신 토큰, 옛 것은 거절(60초 안 재사용은 재시도로 보고 거절만)
     t0 = connect()
+    import time
+    from app.security import read_payload
+    assert t0["expires_in"] == 3600 and int(t0["access_token"].split(".")[3]) - time.time() <= 3600  # 출입증 1시간
+    assert 6 * 86400 < read_payload(t0["refresh_token"], "refresh")["exp"] - time.time() <= 7 * 86400  # 갱신 토큰 7일
     t1 = refresh(t0["refresh_token"]).json()
     assert t1["refresh_token"] != t0["refresh_token"]
     assert refresh(t0["refresh_token"]).status_code == 400 and ok(t1["access_token"])
