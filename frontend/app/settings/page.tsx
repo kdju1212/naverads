@@ -182,6 +182,7 @@ function Members() {
 }
 
 function MyAccount() {
+  const { data: me } = useFetch<{ email: string; has_password: boolean }>("/auth/me");
   const [pw, setPw] = useState({ current_password: "", new_password: "" });
   const [done, setDone] = useState(false);
   const { error, busy, run } = useAction();
@@ -196,7 +197,9 @@ function MyAccount() {
     && run(async () => { await api("/auth/logout-all", { method: "POST" }); await logout(); });
   return (
     <Card title="내 계정">
+      {me && !me.has_password && <p className="mb-2 text-sm">Google로 로그인한 계정입니다 ({me.email}). 비밀번호는 Google에서 관리합니다.</p>}
       <form className="flex flex-wrap items-end gap-2" onSubmit={(e) => { e.preventDefault(); change(); }}>
+        {me?.has_password && <>
         <label className="text-sm">현재 비밀번호
           <input type="password" autoComplete="current-password" required className={`${inputCls} mt-1 block`}
             value={pw.current_password} onChange={(e) => setPw({ ...pw, current_password: e.target.value })} />
@@ -206,11 +209,12 @@ function MyAccount() {
             value={pw.new_password} onChange={(e) => setPw({ ...pw, new_password: e.target.value })} />
         </label>
         <Button type="submit" disabled={busy}>비밀번호 변경</Button>
+        </>}
         <Button type="button" variant="secondary" disabled={busy} onClick={logoutAll}>모든 기기에서 로그아웃</Button>
       </form>
       {done && <p className="mt-2 text-sm text-info" role="status">비밀번호를 바꿨습니다. 다른 기기와 Claude 연결은 로그아웃되었습니다.</p>}
       <ErrorText error={error} />
-      <p className="mt-3 text-xs text-faint">비밀번호를 바꾸거나 모든 기기에서 로그아웃하면 Claude 연결도 끊겨 다시 연결해야 합니다.</p>
+      <p className="mt-3 text-xs text-faint">{me?.has_password && "비밀번호를 바꾸거나 "}모든 기기에서 로그아웃하면 Claude 연결도 끊겨 다시 연결해야 합니다.</p>
     </Card>
   );
 }

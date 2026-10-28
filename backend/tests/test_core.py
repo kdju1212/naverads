@@ -897,8 +897,13 @@ def test_google_login(monkeypatch):
     assert c.post("/auth/login", json={"email": "glink@a.com", "password": "password1"}).json()["id"] == uid  # 같은 이메일은 기존 계정
 
     claims.update(email="new-g@a.com")  # 처음 보는 이메일은 가입, 비밀번호 로그인은 안 됨
-    assert "#token=" in login(redirect=web).headers["location"]
+    loc = login(redirect=web).headers["location"]
+    assert "#token=" in loc
     assert c.post("/auth/login", json={"email": "new-g@a.com", "password": "google$"}).status_code == 401
+    gh = {"Authorization": f"Bearer {parse_qs(urlsplit(loc).fragment)['token'][0]}"}
+    assert c.get("/auth/me", headers=gh).json()["has_password"] is False  # 화면이 비밀번호 변경을 숨긴다
+    assert c.post("/auth/password", headers=gh, json={"current_password": "google$", "new_password": "password2"}).status_code == 400
+    assert c.get("/auth/me", headers={"Authorization": f"Bearer {c.post('/auth/login', json={'email': 'glink@a.com', 'password': 'password1'}).json()['token']}"}).json()["has_password"]
     claims.update(email_verified=False)
     assert "#error=" in login(redirect=web).headers["location"]
     claims.update(email_verified=True)

@@ -116,6 +116,11 @@ async def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     return {"id": user.id, "token": make_token(user.id, user.token_version)}
 
 
+@app.get("/auth/me")
+async def me(user: User = Depends(current_user)):
+    return {"id": user.id, "email": user.email, "name": user.name, "has_password": user.password_hash != GOOGLE_ONLY}
+
+
 @app.post("/auth/logout-all")
 async def logout_all(user: User = Depends(current_user), db: Session = Depends(get_db)):
     """모든 기기 로그아웃: 이 사용자에게 발급한 로그인·Claude 연결(MCP) 토큰을 모두 무효로 한다."""
@@ -132,6 +137,8 @@ class PasswordIn(BaseModel):
 @app.post("/auth/password")
 async def change_password(body: PasswordIn, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
     """비밀번호 변경. 다른 기기·Claude 연결은 끊고, 지금 기기는 새 토큰으로 계속 쓴다."""
+    if user.password_hash == GOOGLE_ONLY:
+        raise HTTPException(400, "Google로 로그인한 계정은 비밀번호가 없습니다")
     ip = request.headers.get("cf-connecting-ip")
     if login_blocked(db, user.email, ip):  # 현재 비밀번호 대입도 로그인과 같이 막는다
         raise HTTPException(429, LOGIN_BLOCKED)
