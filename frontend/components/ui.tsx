@@ -1,6 +1,6 @@
 "use client";
 
-import { ButtonHTMLAttributes, ReactNode } from "react";
+import { ButtonHTMLAttributes, ReactNode, useEffect, useState } from "react";
 
 /** 디자인 시스템: design-system/MASTER.md. 색은 globals.css @theme 토큰 */
 export function Button({ variant = "primary", className = "", ...p }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "ghost" | "danger" }) {
@@ -65,3 +65,23 @@ export function PageTitle({ children, desc }: { children: ReactNode; desc?: Reac
 }
 
 export const inputCls = "rounded-control border border-line-strong bg-surface px-2.5 py-[5px] text-[13px] leading-5 text-ink placeholder:text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-focus";
+
+/** toast("…")(lib/api)를 오른쪽 아래에 4초 보여준다(design-system/MASTER.md 알림) */
+export function Toaster() {
+  const [list, setList] = useState<{ id: number; msg: string }[]>([]);
+  useEffect(() => {
+    let seq = 0;
+    const on = (e: Event) => {
+      const msg = (e as CustomEvent<string>).detail, id = ++seq;
+      setList((l) => (l.some((t) => t.msg === msg) ? l : [...l, { id, msg }])); // 계정 여러 개가 같은 알림을 띄워도 하나만
+      setTimeout(() => setList((l) => l.filter((t) => t.id !== id)), 4000);
+    };
+    window.addEventListener("app-toast", on);
+    return () => window.removeEventListener("app-toast", on);
+  }, []);
+  return (
+    <div role="status" aria-live="polite" className="fixed bottom-4 right-4 z-50 flex flex-col gap-2">
+      {list.map((t) => <div key={t.id} className="rounded-panel border border-line bg-surface px-4 py-2.5 text-sm shadow-pop">{t.msg}</div>)}
+    </div>
+  );
+}

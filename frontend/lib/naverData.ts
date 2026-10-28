@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useSyncExternalStore } from "react";
-import { api, Job } from "./api";
+import { api, Job, toast } from "./api";
 import { loadLocal, localKeys, removeLocal, saveLocal } from "./localData";
 import { idsFrom, Keyword, keywordsFrom, parseTsv } from "./masterReport";
 import { useApp } from "./store";
@@ -109,6 +109,7 @@ export async function ensureAccount(wsId: number, accountId: number, force = fal
     const data = await fetchAccount(wsId, accountId);
     await saveLocal(k, data);
     setEntry(k, { data, loading: false });
+    toast("네이버에서 광고 데이터를 받았습니다");
   } catch (e) {
     setEntry(k, { loading: false, error: (e as Error).message });
   }

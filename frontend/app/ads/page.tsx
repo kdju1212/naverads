@@ -26,8 +26,8 @@ export default function AdsPage() {
 
   const common: Col<Ad>[] = [
     { key: "acc", label: "광고주", value: (r) => accountName(r.ad_account_id) },
-    { key: "status", label: "상태", value: (r) => r.status, render: (r) => <Badge value={r.status} /> },
-    { key: "inspect", label: "검수", value: (r) => inspectLabel(r.inspect_status) },
+    { key: "status", filter: true, label: "상태", value: (r) => r.status, render: (r) => <Badge value={r.status} /> },
+    { key: "inspect", filter: true, label: "검수", value: (r) => inspectLabel(r.inspect_status) },
   ];
   const cols: Col<Ad>[] = tab === "TEXT_45" ? [
     common[0],

@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { api, logout, Product } from "@/lib/api";
 import { useApp } from "@/lib/store";
-import { Button, Card, ErrorText, inputCls } from "./ui";
+import { Button, Card, ErrorText, inputCls, Toaster } from "./ui";
 
 const NAV: [string, [string, string][]][] = [
   ["성과", [["/", "대시보드"]]],
@@ -56,6 +56,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <TopBar />
         <main className="flex-1 p-6">{children}</main>
       </div>
+      <Toaster />
     </div>
   );
 }
@@ -64,6 +65,9 @@ function TopBar() {
   const { ws, workspaces, setWsId, accounts, selected, setSelected, product, setProduct } = useApp();
   const failed = accounts.filter((a) => a.last_sync?.status === "FAILED").length;
   const neverSynced = accounts.filter((a) => !a.last_sync).length;
+  const [find, setFind] = useState("");
+  const needle = find.trim().toLowerCase();
+  const shownAccounts = needle ? accounts.filter((a) => `${a.name} ${a.customer_id}`.toLowerCase().includes(needle)) : accounts;
 
   return (
     <header className="flex min-h-14 flex-wrap items-center gap-2 border-b border-line bg-surface px-6 py-2 text-[13px]">
@@ -80,10 +84,13 @@ function TopBar() {
           <span className="text-muted">광고 계정</span> <b className="font-semibold">{selected.length === 0 ? `전체 ${accounts.length}` : `${selected.length}개 선택`}</b> <span aria-hidden="true" className="text-faint">▾</span>
         </summary>
         <div className="absolute z-20 mt-1 max-h-80 w-72 overflow-auto rounded-panel border border-line bg-surface p-1.5 shadow-pop">
+          {accounts.length > 5 && (
+            <input className={`${inputCls} mb-1 w-full`} placeholder="계정 이름·번호 검색" value={find} onChange={(e) => setFind(e.target.value)} aria-label="광고 계정 검색" />
+          )}
           <label className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-subtle">
             <input type="checkbox" checked={selected.length === 0} onChange={() => setSelected([])} /> 전체 계정
           </label>
-          {accounts.map((a) => (
+          {shownAccounts.map((a) => (
             <label key={a.id} className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-subtle">
               <input type="checkbox" checked={selected.includes(a.id)}
                 onChange={() => setSelected(selected.includes(a.id) ? selected.filter((x) => x !== a.id) : [...selected, a.id])} />
@@ -91,6 +98,7 @@ function TopBar() {
               <span className="ml-auto text-xs text-faint">{a.customer_id}</span>
             </label>
           ))}
+          {accounts.length > 0 && shownAccounts.length === 0 && <p className="px-2 py-1.5 text-faint">검색 결과가 없습니다.</p>}
           {accounts.length === 0 && <p className="px-2 py-1.5 text-faint">연결된 계정이 없습니다. 설정에서 연결하세요.</p>}
         </div>
       </details>

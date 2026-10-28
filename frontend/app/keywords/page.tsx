@@ -34,7 +34,7 @@ export default function KeywordsPage() {
     { key: "acc", label: "광고주", value: (r) => accountName(r.ad_account_id) },
     { key: "grp", label: "광고그룹", value: (r) => groupName.get(r.adgroup_naver_id) ?? null },
     { key: "kw", label: "키워드", value: (r) => r.keyword },
-    { key: "status", label: "상태", value: (r) => r.status, render: (r) => <Badge value={r.status} /> },
+    { key: "status", filter: true, label: "상태", value: (r) => r.status, render: (r) => <Badge value={r.status} /> },
     { key: "bid", label: "입찰가", num: true, value: (r) => r.bid_amt, render: (r) => (r.use_group_bid ? "그룹 입찰가" : fmt(r.bid_amt, "원")) },
     rank.col,
     ...perf.cols,

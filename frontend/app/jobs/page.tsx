@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { Badge, Button, Card, ErrorText, inputCls, PageTitle } from "@/components/ui";
-import { api, downloadCsv, ENTITY_LABEL, FIELD_LABEL, fmt, Job } from "@/lib/api";
+import { api, downloadCsv, ENTITY_LABEL, FIELD_LABEL, fmt, Job, toast } from "@/lib/api";
 import { applyJob } from "@/lib/naverData";
 import { useApp } from "@/lib/store";
 import { useFetch } from "@/lib/useFetch";
@@ -84,7 +84,10 @@ function JobDetail({ id }: { id: string }) {
         setJob(j);
         j = await api<Job>(`/workspaces/${ws.id}/bulk-jobs/${id}/execute`, { method: "POST" });
       }
-      if (path === "execute") await applyJob(ws.id, j); // 화면 보관본에도 반영
+      if (path === "execute") {
+        await applyJob(ws.id, j); // 화면 보관본에도 반영
+        toast(`작업 #${j.id} 실행 완료: 성공 ${j.counts.SUCCESS}건${j.counts.FAILED ? `, 실패 ${j.counts.FAILED}건` : ""}`);
+      }
       if (String(j.id) !== id) router.push(`/jobs?id=${j.id}`); else setJob(j);
     } catch (e) { setError((e as Error).message); }
     setBusy(false);

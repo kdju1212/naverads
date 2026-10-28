@@ -36,12 +36,13 @@ type Total = NonNullable<ReturnType<typeof sum>>;
 
 const pct = (v: number | null | undefined, suffix = "%") => (v == null ? "-" : `${v}${suffix}`);
 
-/** 직전 같은 기간 대비. 좋고 나쁨은 지표마다 달라(광고비 증가 등) 색 없이 화살표와 숫자만 */
-function Delta({ now, prev }: { now: number | null | undefined; prev: number | null | undefined }) {
+/** 직전 같은 기간 대비. better: 오르면 좋음 1, 내리면 좋음 -1, 좋고 나쁨이 없음 0(광고비·CPC는 늘려서 늘 수도 있어 색 없이) */
+function Delta({ now, prev, better }: { now: number | null | undefined; prev: number | null | undefined; better: 1 | -1 | 0 }) {
   if (now == null || prev == null) return null;
   if (prev === 0) return now === 0 ? <span className="text-xs text-faint">변동 없음</span> : <span className="text-xs text-faint">이전 기간 0</span>;
   const r = Math.round(((now - prev) / prev) * 1000) / 10;
-  return <span className="text-xs text-faint tabular-nums">{r > 0 ? "▲" : r < 0 ? "▼" : ""} {Math.abs(r)}% <span className="text-faint">이전 기간 대비</span></span>;
+  const tone = r * better > 0 ? "text-accent" : r * better < 0 ? "text-danger" : "text-faint";
+  return <span className="text-xs text-faint tabular-nums"><span className={tone}>{r > 0 ? "▲" : r < 0 ? "▼" : ""} {Math.abs(r)}%</span> 이전 기간 대비</span>;
 }
 
 export default function DashboardPage() {
@@ -68,9 +69,9 @@ export default function DashboardPage() {
   const series = daily.data ?? [];
   const dates = series.map((d) => d.date);
 
-  const kpis: [string, keyof Total, string][] = [
-    ["광고비", "cost", "원"], ["노출수", "impressions", ""], ["클릭수", "clicks", ""], ["CTR", "ctr", "%"],
-    ["CPC", "cpc", "원"], ["전환수", "conversions", ""], ["매출", "revenue", "원"], ["ROAS", "roas", "%"],
+  const kpis: [string, keyof Total, string, 1 | -1 | 0][] = [
+    ["광고비", "cost", "원", 0], ["노출수", "impressions", "", 1], ["클릭수", "clicks", "", 1], ["CTR", "ctr", "%", 1],
+    ["CPC", "cpc", "원", 0], ["전환수", "conversions", "", 1], ["매출", "revenue", "원", 1], ["ROAS", "roas", "%", 1],
   ];
 
   return (
@@ -84,13 +85,13 @@ export default function DashboardPage() {
       <ErrorText error={perf.error ?? daily.error ?? dash.error} />
 
       <div className="grid grid-cols-2 gap-px overflow-hidden rounded-panel border border-line bg-line lg:grid-cols-4">
-        {kpis.map(([label, k, unit]) => (
+        {kpis.map(([label, k, unit, better]) => (
           <div key={label} className="bg-surface px-4 py-3">
             <div className="text-xs font-medium text-muted">{label}</div>
             <div className="mt-1 text-2xl font-bold tabular-nums">
               {perf.loading ? "…" : unit === "%" ? pct(total?.[k]) : fmt(total?.[k], unit)}
             </div>
-            <div className="mt-0.5 h-4">{!perf.loading && !prev.loading && <Delta now={total?.[k]} prev={prevTotal?.[k]} />}</div>
+            <div className="mt-0.5 h-4">{!perf.loading && !prev.loading && <Delta now={total?.[k]} prev={prevTotal?.[k]} better={better} />}</div>
           </div>
         ))}
       </div>

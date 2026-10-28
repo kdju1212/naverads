@@ -25,6 +25,11 @@ export interface Job {
   accounts: { ad_account_id: number | null; name: string | null; rows: JobRow[] }[] | null;
 }
 
+/** 작업 완료 알림(components/ui Toaster가 보여준다) */
+export function toast(msg: string) {
+  window.dispatchEvent(new CustomEvent("app-toast", { detail: msg }));
+}
+
 export function getToken(): string | null {
   try { return localStorage.getItem("token"); } catch { return null; }
 }

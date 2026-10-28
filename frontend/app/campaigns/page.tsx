@@ -20,7 +20,7 @@ export default function CampaignsPage() {
     { key: "acc", label: "광고주", value: (r) => accountName(r.ad_account_id) },
     { key: "tp", label: "유형", value: (r) => r.campaign_tp, render: (r) => <Badge value={r.campaign_tp} /> },
     { key: "name", label: "캠페인", value: (r) => r.name },
-    { key: "status", label: "상태", value: (r) => r.status, render: (r) => <Badge value={r.status} /> },
+    { key: "status", filter: true, label: "상태", value: (r) => r.status, render: (r) => <Badge value={r.status} /> },
     { key: "budget", label: "일예산", num: true, value: (r) => r.daily_budget, render: (r) => fmt(r.daily_budget, "원") },
   ];
   return (

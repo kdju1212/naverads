@@ -9,6 +9,7 @@ export interface Col<T> {
   value: (r: T) => string | number | null; // 정렬·검색 기준
   render?: (r: T) => ReactNode;
   num?: boolean;
+  filter?: boolean; // 표 위에 이 칸 값으로 거르는 선택 상자(상태·검수 등)
 }
 
 export function DataTable<T extends { id: string | number }>({ rows, cols, selected, onSelect, loading, empty = "데이터가 없습니다", toolbar }: {
@@ -22,10 +23,20 @@ export function DataTable<T extends { id: string | number }>({ rows, cols, selec
 }) {
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<{ key: string; dir: 1 | -1 } | null>(null);
+  const [picked, setPicked] = useState<Record<string, string>>({});
+  const filterCols = cols.filter((c) => c.filter);
+  const options = useMemo(() => Object.fromEntries(filterCols.map((c) =>
+    [c.key, [...new Set(rows.map((r) => String(c.value(r) ?? "")))].filter(Boolean).sort()])), [rows, filterCols]);
+  const active = Object.entries(picked).filter(([, v]) => v);
 
   const view = useMemo(() => {
     const needle = q.trim().toLowerCase();
     let out = needle ? rows.filter((r) => cols.some((c) => String(c.value(r) ?? "").toLowerCase().includes(needle))) : rows;
+    for (const [k, v] of Object.entries(picked)) {
+      if (!v) continue;
+      const col = cols.find((c) => c.key === k);
+      if (col) out = out.filter((r) => String(col.value(r) ?? "") === v);
+    }
     if (sort) {
       const col = cols.find((c) => c.key === sort.key)!;
       out = [...out].sort((a, b) => {
@@ -36,7 +47,7 @@ export function DataTable<T extends { id: string | number }>({ rows, cols, selec
       });
     }
     return out;
-  }, [rows, cols, q, sort]);
+  }, [rows, cols, q, sort, picked]);
 
   const allChecked = !!selected && view.length > 0 && view.every((r) => selected.has(r.id));
   const toggleAll = () => {
@@ -56,6 +67,13 @@ export function DataTable<T extends { id: string | number }>({ rows, cols, selec
     <div className="overflow-hidden rounded-panel border border-line bg-surface">
       <div className={`flex flex-wrap items-center gap-2 border-b border-line px-3 py-2 ${selected && selected.size > 0 ? "bg-primary-soft" : ""}`}>
         <input className={`${inputCls} w-64`} placeholder="검색 (이름, ID, 광고주…)" value={q} onChange={(e) => setQ(e.target.value)} aria-label="표 검색" />
+        {filterCols.map((c) => (
+          <select key={c.key} className={inputCls} aria-label={`${c.label} 필터`} value={picked[c.key] ?? ""}
+            onChange={(e) => setPicked({ ...picked, [c.key]: e.target.value })}>
+            <option value="">{c.label} 전체</option>
+            {options[c.key].map((v) => <option key={v} value={v}>{v}</option>)}
+          </select>
+        ))}
         <span className="text-xs text-faint">
           {view.length.toLocaleString()}건{selected && selected.size > 0 && <> · <b className="font-semibold text-primary">{selected.size}건 선택</b></>}
         </span>
@@ -77,11 +95,20 @@ export function DataTable<T extends { id: string | number }>({ rows, cols, selec
               ))}
             </tr>
           </thead>
-          <tbody>
+          <tbody aria-busy={loading}>
             {loading ? (
-              <tr><td colSpan={cols.length + 1} className="px-3 py-8 text-center text-faint">불러오는 중…</td></tr>
+              // 행 모양 회색 막대 5줄(design-system/MASTER.md 표)
+              [0, 1, 2, 3, 4].map((i) => (
+                <tr key={i} className="h-10 border-t border-line first:border-t-0" aria-hidden="true">
+                  {selected && <td className="px-3" />}
+                  {cols.map((c) => <td key={c.key} className="px-3"><div className="h-3 animate-pulse rounded bg-line" /></td>)}
+                </tr>
+              ))
             ) : view.length === 0 ? (
-              <tr><td colSpan={cols.length + 1} className="px-3 py-8 text-center text-faint">{empty}</td></tr>
+              <tr><td colSpan={cols.length + 1} className="px-3 py-8 text-center text-faint">
+                {q || active.length ? <>조건에 맞는 항목이 없습니다{" "}
+                  <button className="cursor-pointer text-primary underline" onClick={() => { setQ(""); setPicked({}); }}>필터 지우기</button></> : empty}
+              </td></tr>
             ) : view.map((r) => (
               <tr key={r.id} className={`h-10 border-t border-line first:border-t-0 ${selected?.has(r.id) ? "bg-primary-soft" : "hover:bg-subtle"}`}>
                 {selected && (

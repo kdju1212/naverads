@@ -70,8 +70,8 @@ export default function ExtensionsPage() {
     { key: "owner", label: "연결 대상", value: (r) => ownerName.get(r.owner_naver_id) ?? r.owner_naver_id },
     { key: "type", label: "유형", value: (r) => TYPE_LABEL[r.ext_type] ?? r.ext_type },
     { key: "content", label: "내용", value: (r) => strings(r.payload).join(" · ").slice(0, 120) || null },
-    { key: "status", label: "상태", value: (r) => r.status, render: (r) => <Badge value={r.status} /> },
-    { key: "inspect", label: "검수", value: (r) => inspectLabel(r.inspect_status) },
+    { key: "status", filter: true, label: "상태", value: (r) => r.status, render: (r) => <Badge value={r.status} /> },
+    { key: "inspect", filter: true, label: "검수", value: (r) => inspectLabel(r.inspect_status) },
   ];
 
   return (
