@@ -459,14 +459,14 @@ def test_real_stats(monkeypatch):
     assert calls[-1] == ("DELETE", "/ncc/ad-extensions", {"ids": "ext-1"})  # 경로 방식은 실계정 404
 
     class Page:
-        status_code, text = 200, "<a i=nad-a001-01-2>x</a><a i=nad-a001-01-1></a><b nad-a001-01-2></b>"
+        status_code, text, url = 200, "<a i=nad-a001-01-2>x</a><a i=nad-a001-01-1></a><b nad-a001-01-2></b>", "u"
 
     got = {}
     monkeypatch.setattr("app.naver.httpx.get", lambda url, **kw: got.setdefault("url", url) and Page)
     assert RealNaverClient("k", "s", "1").serp_ads("원 피스", "MOBILE") == ["nad-a001-01-2", "nad-a001-01-1"]  # 노출 순서, 중복 제거
     assert got["url"].startswith("https://m.ad.search.naver.com/") and got["url"].endswith("%EC%9B%90%20%ED%94%BC%EC%8A%A4")
-    Page.text = "<html>차단</html>"  # 광고 ID가 하나도 없으면 '내 광고 없음'이 아니라 실패
-    with pytest.raises(NaverApiError):
+    Page.text = "<html><title>보안 확인</title>차단</html>"  # 광고 ID가 하나도 없으면 '내 광고 없음'이 아니라 실패
+    with pytest.raises(NaverApiError, match="제목: 보안 확인"):
         RealNaverClient("k", "s", "1").serp_ads("원피스", "PC")
 
 

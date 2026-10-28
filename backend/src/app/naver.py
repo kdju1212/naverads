@@ -233,7 +233,9 @@ class RealNaverClient:
             raise NaverApiError(f"검색 화면 네트워크 오류: {e}") from e
         ids = list(dict.fromkeys(SERP_AD_ID.findall(r.text))) if r.status_code < 400 else []
         if not ids:  # 차단·화면 변경을 '내 광고 없음'으로 오해해 입찰가를 올리지 않도록 실패로 본다
-            raise NaverApiError(f"검색 화면에서 광고 목록을 읽지 못했습니다 ({r.status_code})")
+            # 받은 화면 길이·제목·최종 주소: 차단·보안문자/해외 화면/광고 칸만 빠짐을 구분하려고 남긴다
+            title = (m := re.search(r"<title[^>]*>(.*?)</title>", r.text, re.S | re.I)) and m.group(1).strip()[:80]
+            raise NaverApiError(f"검색 화면에서 광고 목록을 읽지 못했습니다 ({r.status_code}, {len(r.text)}자, 제목: {title or '없음'}, {r.url})")
         return ids
 
     # 마스터 보고서(명세: gh-pages assets/json/master-report.json). 파일은 헤더 없는 TSV, 칸 구성은 브라우저(lib/naverData.ts) 참고
