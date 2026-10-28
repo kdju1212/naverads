@@ -22,6 +22,8 @@ interface AppState {
 }
 
 const Ctx = createContext<AppState | null>(null);
+/** 로그인 없이 보는 화면(약관·방침은 가입 전에 읽을 수 있어야 한다) */
+export const PUBLIC_PATHS = ["/login", "/terms", "/privacy"];
 
 function stored(key: string) {
   try { return localStorage.getItem(key); } catch { return null; }
@@ -40,7 +42,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [selected, setSelectedState] = useState<number[]>([]);
   // 상단 바는 로딩이 끝난 뒤에만 그려지므로 서버 렌더와 어긋나지 않는다
   const [product, setProductState] = useState<Product>(() => (stored("product") as Product) ?? "");
-  const authed = pathname !== "/login";
+  const authed = !PUBLIC_PATHS.includes(pathname);
   const ready = !authed || loaded;
 
   const applyWorkspaces = useCallback((list: Workspace[]) => {

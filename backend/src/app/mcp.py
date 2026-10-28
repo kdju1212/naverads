@@ -27,6 +27,7 @@ CODE_TTL = 300
 ACCESS_TTL = 60 * 60
 REFRESH_TTL = 60 * 60 * 24 * 7
 # 공개 등록(DCR)이라 아무나 클라이언트를 만들 수 있으므로, 로그인 결과(코드)는 Claude와 내 PC(Claude Code)로만 보낸다
+WEB = "https://naverads.djkim0509.workers.dev"  # 약관·방침 링크용 웹 주소
 CLAUDE_CALLBACKS = {"https://claude.ai/api/mcp/auth_callback", "https://claude.com/api/mcp/auth_callback"}
 
 
@@ -88,7 +89,8 @@ def _login_page(q: dict | None, error: str = "", status: int = 200) -> HTMLRespo
 <label>비밀번호<input name="password" type="password" autocomplete="current-password" required></label>
 <button>로그인하고 연결</button></form>
 <a class="google" href="/auth/google/start?{e(urlencode(q))}">Google로 로그인하고 연결</a>
-<p class="sub">로그인하면 {target} 의 Claude가 내 권한 안에서 광고 계정을 조회·수정할 수 있습니다.</p>"""
+<p class="sub">로그인하면 {target} 의 Claude가 내 권한 안에서 광고 계정을 조회·수정할 수 있습니다.
+<a href="{WEB}/terms">이용약관</a> · <a href="{WEB}/privacy">개인정보처리방침</a></p>"""
     err = f'<p class="err" role="alert">{e(error)}</p>' if error else ""
     return HTMLResponse(f"""<!doctype html><html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Claude 연결</title>

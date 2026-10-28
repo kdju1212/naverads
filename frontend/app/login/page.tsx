@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Button, ErrorText, inputCls } from "@/components/ui";
@@ -46,7 +47,10 @@ export default function LoginPage() {
         <p className="mb-5 mt-1 text-sm text-faint">파워링크 · 쇼핑검색광고를 여러 광고주 계정에서 한 번에</p>
         <div className="flex flex-col gap-3">
           <Button type="button" variant="secondary" onClick={google}>Google로 계속하기</Button>
-          <p className="text-center text-xs text-faint">처음이면 Google로 계속하면 가입됩니다</p>
+          <p className="text-center text-xs text-faint">
+            처음이면 Google로 계속하면 가입되며, <Link href="/terms" className="underline">이용약관</Link>과{" "}
+            <Link href="/privacy" className="underline">개인정보처리방침</Link>에 동의하는 것으로 봅니다
+          </p>
           <div className="my-1 border-t border-line" />
           <label className="flex flex-col gap-1 text-sm">이메일<input className={inputCls} type="email" value={form.email} onChange={set("email")} required autoComplete="email" /></label>
           <label className="flex flex-col gap-1 text-sm">비밀번호

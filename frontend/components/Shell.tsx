@@ -4,7 +4,7 @@ import Link from "next/link"; // 메뉴 링크는 화면에 보이면 미리 받
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { api, logout, Product } from "@/lib/api";
-import { useApp } from "@/lib/store";
+import { PUBLIC_PATHS, useApp } from "@/lib/store";
 import { Button, Card, ErrorText, inputCls, Toaster } from "./ui";
 
 const NAV: [string, [string, string][]][] = [
@@ -21,7 +21,7 @@ const POWERLINK_ONLY = ["/keywords", "/keyword-register", "/auto-bids", "/extens
 export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const app = useApp();
-  if (pathname === "/login") return <>{children}</>;
+  if (PUBLIC_PATHS.includes(pathname)) return <>{children}</>;
   if (!app.ready) return <div className="p-10 text-center text-faint">불러오는 중…</div>;
   if (!app.ws) return <CreateWorkspace />;
 
@@ -51,6 +51,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
             );
           })}
         </nav>
+        <div className="px-5 pb-4 text-xs text-faint">
+          <Link href="/terms" className="hover:text-ink">이용약관</Link> · <Link href="/privacy" className="font-semibold hover:text-ink">개인정보처리방침</Link>
+        </div>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar />
