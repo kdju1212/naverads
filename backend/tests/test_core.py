@@ -1045,3 +1045,16 @@ def test_mock_cannot_squat_customer_id():
     db = SessionLocal()
     assert db.query(AdAccount).filter(AdAccount.customer_id == "4285993").count() == 0
     db.close()
+
+
+def test_sync_in_chunks(monkeypatch):
+    # 캠페인이 많으면 나눠 받는다(무료 플랜 요청당 호출 한도): Mock 캠페인 2개를 1개씩
+    from app import sync
+    owner, ws, acc = _account("sync-chunk@a.com", "6501")
+    monkeypatch.setattr(sync, "SYNC_CHUNK", 1)
+    url = f"/workspaces/{ws}/ad-accounts/{acc}/sync"
+    r = c.post(url, headers=owner).json()
+    assert r == {"status": "RUNNING", "error": None, "next_offset": 1}
+    assert c.post(f"{url}?offset=1", headers=owner).json()["status"] == "SUCCESS"
+    perf = c.get(f"/workspaces/{ws}/performance/accounts", headers=owner).json()[0]
+    assert perf["WEB_SITE"]["cost"] > 0 and perf["SHOPPING"]["cost"] > 0  # 두 캠페인 모두 받음

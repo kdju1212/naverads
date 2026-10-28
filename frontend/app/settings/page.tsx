@@ -51,7 +51,10 @@ function Accounts({ isAdmin }: { isAdmin: boolean }) {
   const doSync = async (id: number) => {
     setSyncing(id);
     try {
-      const r = await api<{ status: string; error: string | null }>(`/workspaces/${ws!.id}/ad-accounts/${id}/sync`, { method: "POST" });
+      type Sync = { status: string; error: string | null; next_offset: number | null };
+      const call = (offset = 0) => api<Sync>(`/workspaces/${ws!.id}/ad-accounts/${id}/sync?offset=${offset}`, { method: "POST" });
+      let r = await call();
+      while (r.status === "RUNNING") r = await call(r.next_offset!); // 캠페인이 많으면 서버가 나눠 받는다
       if (r.status === "FAILED") throw new Error(`동기화 실패: ${r.error}`);
       await refreshAccounts(ws!.id, [id]); // 광고 데이터는 브라우저 보관본을 새로 받는다(서버는 성과 통계만)
     } finally {

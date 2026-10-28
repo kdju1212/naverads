@@ -473,7 +473,8 @@ def _last_syncs(db: Session, ids) -> dict[int, SyncRun]:
 
 
 @app.post("/workspaces/{ws_id}/ad-accounts/{account_id}/sync")
-async def sync(account_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+async def sync(account_id: int, offset: int = 0, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    """캠페인이 많으면 나눠 받는다: status가 RUNNING이면 화면이 next_offset으로 다시 부른다."""
     resolve_account_ids(db, m, [account_id])
     link = db.scalar(select(WorkspaceAdAccount).where(WorkspaceAdAccount.workspace_id == m.workspace_id,
                                                       WorkspaceAdAccount.ad_account_id == account_id))
@@ -482,8 +483,10 @@ async def sync(account_id: int, m: Membership = Depends(membership), db: Session
         client = client_for(db.get(NaverApiCredential, link.credential_id), acc.customer_id, decrypt)
     except NaverApiError as e:
         raise HTTPException(400, str(e))
-    run = sync_account(db, acc, client)
-    return {"status": run.status, "error": run.error}
+    run, nxt = sync_account(db, acc, client, max(offset, 0))
+    if run is None:
+        return {"status": "RUNNING", "error": None, "next_offset": nxt}
+    return {"status": run.status, "error": run.error, "next_offset": None}
 
 
 @app.get("/workspaces/{ws_id}/keyword-tool")
