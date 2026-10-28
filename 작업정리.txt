@@ -132,6 +132,8 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
     - 키: Cloudflare 대시보드 naverads-api Secret GOOGLE_CLIENT_ID·GOOGLE_CLIENT_SECRET, 리디렉션 URI …/auth/google/callback
     - ✔ 웹 Google 로그인 운영 확인(10/28). Claude 연결 화면의 Google 로그인은 아직 미확인. 동의 화면이 '프로덕션'이어야 아무나 로그인
     - 남은 것: Google로 가입한 계정은 비밀번호가 없어 설정의 '비밀번호 변경'을 못 씀(누르면 현재 비밀번호 틀림)
+14-1. 10/28 이용약관(/terms)·개인정보처리방침(/privacy) 배포(d92433f), 운영자 정보는 frontend/lib/legal.ts, 시행일 2026-10-29
+    초안이라 유료 출시 전 법률 검토 권장(국외 이전·책임 제한). 유료 전환·약관 변경 시 사전 공지 기간 지킬 것
 15. 다음 달 예산 증액 — 개발 중, 광고주 승인 후 실행하는 흐름으로
 16. 보안 → 10/28 배포(56a8f60, 마이그레이션 0012): 요청 횟수 제한(IP당 1분 600번, Workers ratelimits — 무료 플랜 배포 성공),
     Claude 인가 코드 1회 사용·갱신 토큰 교체(60초 뒤 재사용은 탈취로 보고 Claude 연결 전부 끊기), 설정 'Claude 연결만 끊기', 회원 탈퇴
