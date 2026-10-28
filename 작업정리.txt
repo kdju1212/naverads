@@ -131,7 +131,7 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
 13. (선택) 연관 키워드 클릭수·클릭률, 디자인 남은 것(계정 검색, 상태 필터, 증감 색, 로딩 막대, 완료 알림)
 14. 회원가입 → 10/28 Google 로그인으로 해결(배포 81cfffa). 가입은 Google로만(운영 비밀번호 가입 403), 같은 이메일은 기존 계정으로 로그인
     - 키: Cloudflare 대시보드 naverads-api Secret GOOGLE_CLIENT_ID·GOOGLE_CLIENT_SECRET, 리디렉션 URI …/auth/google/callback
-    - [직접] 실제 Google 로그인 한 번 확인(웹·Claude 연결 화면), Google 동의 화면이 '프로덕션'이어야 아무나 로그인
+    - ✔ 웹 Google 로그인 운영 확인(10/28). Claude 연결 화면의 Google 로그인은 아직 미확인. 동의 화면이 '프로덕션'이어야 아무나 로그인
     - 남은 것: Google로 가입한 계정은 비밀번호가 없어 설정의 '비밀번호 변경'을 못 씀(누르면 현재 비밀번호 틀림)
 15. 다음 달 예산 증액 — 개발 중, 광고주 승인 후 실행하는 흐름으로
 16. 보안(마이그레이션·설정 필요라 보류): (로그인 실패 제한·토큰 강제 폐기·비밀번호 변경은 10/27 완료)
