@@ -1040,6 +1040,7 @@ def test_mock_cannot_squat_customer_id():
         codes.append(r.status_code)
         if r.status_code == 200:
             assert r.json()["customer_id"] == f"mock{ws}-4285993"
+            assert c.get(f"/workspaces/{ws}/ad-accounts", headers=h).json()[0]["customer_id"] == "4285993"  # 화면엔 넣은 번호만
             assert c.post(f"/workspaces/{ws}/ad-accounts/{r.json()['id']}/sync", headers=h).json()["status"] == "SUCCESS"  # Mock 동작 그대로
     assert codes == [200, 409]  # 다른 조직은 같은 Mock 번호를 못 씀(가짜 캠페인 ID가 겹침)
     db = SessionLocal()

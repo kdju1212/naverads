@@ -125,7 +125,7 @@ function NewExtension({ wsId, groups, accountName, onCreated }: {
 
   return (
     <Card title="새 확장소재" className="mb-4">
-      <form onSubmit={submit} className="flex flex-col gap-2 p-4">
+      <form onSubmit={submit} className="flex flex-col gap-2">
         <div className="flex flex-wrap gap-2">
           <select className={inputCls} value={form.adgroup_id} onChange={set("adgroup_id")} required aria-label="광고그룹">
             <option value="">광고그룹 선택</option>

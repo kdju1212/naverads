@@ -461,7 +461,8 @@ async def disconnect_account(account_id: int, m: Membership = Depends(admin_memb
 async def list_accounts(m: Membership = Depends(membership), db: Session = Depends(get_db)):
     ids = resolve_account_ids(db, m, None)
     last = _last_syncs(db, ids)
-    return [{"id": acc.id, "customer_id": acc.customer_id, "name": acc.name, "is_mock": acc.is_mock,
+    # Mock은 mock{조직}-{번호}로 저장하지만(connect_account) 화면에는 넣은 번호만
+    return [{"id": acc.id, "customer_id": acc.customer_id.rpartition("-")[2], "name": acc.name, "is_mock": acc.is_mock,
              "last_sync": (s := last.get(acc.id)) and {"status": s.status, "error": s.error, "at": s.finished_at}}
             for acc in db.scalars(select(AdAccount).where(AdAccount.id.in_(ids)))]
 

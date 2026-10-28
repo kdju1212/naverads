@@ -61,7 +61,7 @@ export function TrendChart({ title, dates, values, unit = "" }: { title: string;
             {ticks.map((t) => (
               <g key={t}>
                 <line x1={PAD.left} x2={w - PAD.right} y1={y(t)} y2={y(t)} stroke="#e3e8ef" strokeWidth={1} />
-                <text x={PAD.left - 6} y={y(t)} dy="0.32em" textAnchor="end" fontSize={11} fill="#667085">{t.toLocaleString("ko-KR")}</text>
+                <text x={PAD.left - 6} y={y(t)} dy="0.32em" textAnchor="end" fontSize={11} fill="#667085">{t.toLocaleString("ko-KR", { notation: "compact" })}</text>
               </g>
             ))}
             {labelIdx.map((i) => (
