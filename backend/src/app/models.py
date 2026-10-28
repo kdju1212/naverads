@@ -1,5 +1,5 @@
 """DB 모델. 설계는 docs/DB_SCHEMA.md."""
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
@@ -9,6 +9,14 @@ from .db import Base
 
 def now():
     return datetime.now(timezone.utc)
+
+
+KST = timezone(timedelta(hours=9))
+
+
+def today_kst() -> date:
+    """네이버 통계의 '하루'는 한국 날짜다. 서버 시계(UTC)의 date.today()는 오전 9시 전까지 하루 늦다."""
+    return datetime.now(KST).date()
 
 
 # ---- 테넌트·권한 ----

@@ -116,7 +116,7 @@ async def authorize(request: Request):
     try:  # 웹 로그인과 같은 실패 횟수 제한
         if api.login_blocked(db, email, ip):
             return _login_page(q, api.LOGIN_BLOCKED, 429)
-        user = db.scalar(select(User).where(User.email == email))
+        user = api.user_by_email(db, email)
         ok = bool(user) and await verify_password(str(form.get("password") or ""), user.password_hash)
         api.record_login(db, email, ip, ok)
     finally:

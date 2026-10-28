@@ -15,7 +15,8 @@ interface Daily { date: string; impressions: number; clicks: number; cost: numbe
 interface Dashboard { connected_accounts: number; recent_jobs: Job[]; failed_jobs: number[]; sync_errors: { ad_account_id: number; error: string; at: string }[]; auto_bids: number }
 
 const DAY = 86400000;
-const day = (d: Date) => d.toISOString().slice(0, 10);
+// 네이버 통계의 하루는 한국 날짜(toISOString은 UTC라 오전 9시 전엔 어제가 그제로 잡힌다)
+const day = (d: Date) => d.toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
 
 type Agg = { impressions: number | null; cost: number | null; clicks: number | null; conversions: number | null; revenue: number | null };
 

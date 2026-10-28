@@ -145,8 +145,11 @@ def test_full_flow():
     perf_a1_cost = p1["WEB_SITE"]["cost"] + p1["SHOPPING"]["cost"]
     dash = c.get(f"/workspaces/{ws}/dashboard", headers=owner).json()
     assert dash["connected_accounts"] == 2 and job["id"] in dash["failed_jobs"] and dash["auto_bids"] == 0
-    from datetime import date, timedelta
-    until = date.today() - timedelta(days=1)
+    rj = next(j for j in dash["recent_jobs"] if j["id"] == job["id"])
+    assert rj["counts"]["SUCCESS"] + rj["counts"]["FAILED"] > 0 and rj["accounts"] is None  # 행은 안 읽고 개수만
+    from datetime import timedelta
+    from app.models import today_kst
+    until = today_kst() - timedelta(days=1)
     daily = c.get(f"/workspaces/{ws}/performance/daily?since={until - timedelta(days=6)}&until={until}&account_ids={a1}",
                   headers=owner).json()
     pl = c.get(f"/workspaces/{ws}/performance/daily?since={until - timedelta(days=6)}&until={until}&account_ids={a1}&product=WEB_SITE",
@@ -995,3 +998,30 @@ def test_delete_account():
         assert conn.execute(text("PRAGMA foreign_key_check")).fetchall() == []  # D1은 외래 키를 검사한다
     assert c.post("/auth/login", json={"email": "leaver@a.com", "password": "password1"}).status_code == 401
     assert c.post("/auth/signup", json={"email": "leaver@a.com", "password": "password1", "name": "다시"}).status_code == 200
+
+
+def test_audit_fixes(monkeypatch):
+    # 이메일은 대소문자 구분 없이: 로그인·직원 추가
+    h = user("CaseMix@a.com")
+    assert c.post("/auth/login", json={"email": "casemix@A.com", "password": "password1"}).status_code == 200
+    assert c.post("/auth/signup", json={"email": "casemix@a.com", "password": "password1", "name": "x"}).status_code == 409
+    boss = user("case-boss@a.com")
+    ws = c.post("/workspaces", json={"name": "대소문자"}, headers=boss).json()["id"]
+    assert c.post(f"/workspaces/{ws}/members", json={"email": "CASEMIX@a.com"}, headers=boss).status_code == 200
+    assert {x["email"] for x in c.get(f"/workspaces/{ws}/members", headers=h).json()} == {"case-boss@a.com", "casemix@a.com"}
+
+    # 대량 작업 행 수 상한
+    from app import bulk
+    monkeypatch.setattr(bulk, "MAX_JOB_ROWS", 2)
+    ch = {"entity_type": "campaign", "naver_id": "cmp-1", "field": "status", "value": "OFF"}
+    r = c.post(f"/workspaces/{ws}/bulk-jobs", json={"changes": [ch] * 3}, headers=boss)
+    assert r.status_code == 400 and "2행까지" in r.json()["detail"]
+
+    # 계정 없는 기록(예약 등)도 이력에 보인다
+    from app.db import SessionLocal
+    from app.models import AuditLog
+    db = SessionLocal()
+    db.add(AuditLog(workspace_id=ws, user_id=1, action="JOB_SCHEDULE_FAIL", after="테스트"))
+    db.commit()
+    db.close()
+    assert any(x["action"] == "JOB_SCHEDULE_FAIL" for x in c.get(f"/workspaces/{ws}/audit-logs", headers=boss).json())

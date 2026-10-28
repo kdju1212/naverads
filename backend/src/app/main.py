@@ -12,14 +12,14 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from . import bulk, naver, seo
 from .access import ADMIN_ROLES, admin_membership, current_user, membership, membership_of, resolve_account_ids, user_from_header
 from .db import Base, engine, get_db
 from .models import (AccountAccess, AccountGoal, AdAccount, AuditLog, AutoBidRule, BulkJob, BulkJobRow, LoginFailure, Membership, NaverApiCredential,
-                     PerformanceDaily, Plan, Subscription, SyncRun, User, Workspace, WorkspaceAdAccount, now)
+                     PerformanceDaily, Plan, Subscription, SyncRun, User, Workspace, WorkspaceAdAccount, now, today_kst)
 from .naver import NaverApiError, client_for
 from .security import decrypt, encrypt, hash_password, make_token, read_payload, sign_payload, verify_password
 from .sync import sync_account
@@ -55,12 +55,17 @@ async def signup(body: SignupIn, db: Session = Depends(get_db)):
         raise HTTPException(403, "회원가입은 Google로 계속하기를 이용하세요")
     if len(body.password) < 8:
         raise HTTPException(400, "비밀번호는 8자 이상")
-    if db.scalar(select(User).where(User.email == body.email)):
+    if user_by_email(db, body.email):
         raise HTTPException(409, "이미 가입된 이메일입니다")
-    user = User(email=body.email, password_hash=await hash_password(body.password), name=body.name)
+    user = User(email=body.email.lower(), password_hash=await hash_password(body.password), name=body.name)
     db.add(user)
     db.commit()
     return {"id": user.id, "token": make_token(user.id, user.token_version)}
+
+
+def user_by_email(db: Session, email: str) -> User | None:
+    """이메일은 대소문자를 구분하지 않는다(Google 가입은 소문자로 저장)."""
+    return db.scalar(select(User).where(func.lower(User.email) == email.strip().lower()))
 
 
 class LoginIn(BaseModel):
@@ -108,7 +113,7 @@ async def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     ip = request.headers.get("cf-connecting-ip")
     if login_blocked(db, body.email, ip):
         raise HTTPException(429, LOGIN_BLOCKED)
-    user = db.scalar(select(User).where(User.email == body.email))
+    user = user_by_email(db, body.email)
     ok = bool(user) and await verify_password(body.password, user.password_hash)
     record_login(db, body.email, ip, ok)
     if not ok:
@@ -277,7 +282,7 @@ async def google_callback(request: Request, state: str = "", code: str = "", db:
     if info.get("aud") != client_id or not info.get("email_verified") or not info.get("email"):
         return _google_done(st, error="인증된 Google 이메일이 아닙니다")
     email = info["email"].lower()
-    user = db.scalar(select(User).where(func.lower(User.email) == email))  # 같은 이메일의 기존 계정이면 그 계정으로 로그인
+    user = user_by_email(db, email)  # 같은 이메일의 기존 계정이면 그 계정으로 로그인
     if not user:
         user = User(email=email, password_hash=GOOGLE_ONLY, name=(info.get("name") or email.split("@")[0])[:100])
         db.add(user)
@@ -319,17 +324,17 @@ class MemberIn(BaseModel):
 @app.get("/workspaces/{ws_id}/members")
 async def list_members(m: Membership = Depends(membership), db: Session = Depends(get_db)):
     q = select(Membership, User).join(User, User.id == Membership.user_id).where(Membership.workspace_id == m.workspace_id)
-    out = []
-    for mem, u in db.execute(q):
-        access = db.scalars(select(AccountAccess).where(AccountAccess.membership_id == mem.id)).all()
-        out.append({"membership_id": mem.id, "user_id": u.id, "email": u.email, "name": u.name, "role": mem.role,
-                    "access": [{"ad_account_id": a.ad_account_id, "level": a.level} for a in access]})
-    return out
+    members = db.execute(q).all()
+    access: dict[int, list] = {}
+    for a in db.scalars(select(AccountAccess).where(AccountAccess.membership_id.in_([mem.id for mem, _ in members]))):
+        access.setdefault(a.membership_id, []).append({"ad_account_id": a.ad_account_id, "level": a.level})
+    return [{"membership_id": mem.id, "user_id": u.id, "email": u.email, "name": u.name, "role": mem.role, "access": access.get(mem.id, [])}
+            for mem, u in members]
 
 
 @app.post("/workspaces/{ws_id}/members")
 async def add_member(body: MemberIn, m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
-    user = db.scalar(select(User).where(User.email == body.email))
+    user = user_by_email(db, body.email)
     if not user:
         raise HTTPException(404, "가입된 사용자가 아닙니다")  # shortcut: 초대 메일 없음, 가입 후 추가. 초대 플로우는 2단계
     if db.scalar(select(Membership).where(Membership.workspace_id == m.workspace_id, Membership.user_id == user.id)):
@@ -446,12 +451,16 @@ async def disconnect_account(account_id: int, m: Membership = Depends(admin_memb
 @app.get("/workspaces/{ws_id}/ad-accounts")
 async def list_accounts(m: Membership = Depends(membership), db: Session = Depends(get_db)):
     ids = resolve_account_ids(db, m, None)
-    out = []
-    for acc in db.scalars(select(AdAccount).where(AdAccount.id.in_(ids))):
-        last = db.scalar(select(SyncRun).where(SyncRun.ad_account_id == acc.id).order_by(SyncRun.id.desc()))
-        out.append({"id": acc.id, "customer_id": acc.customer_id, "name": acc.name, "is_mock": acc.is_mock,
-                    "last_sync": last and {"status": last.status, "error": last.error, "at": last.finished_at}})
-    return out
+    last = _last_syncs(db, ids)
+    return [{"id": acc.id, "customer_id": acc.customer_id, "name": acc.name, "is_mock": acc.is_mock,
+             "last_sync": (s := last.get(acc.id)) and {"status": s.status, "error": s.error, "at": s.finished_at}}
+            for acc in db.scalars(select(AdAccount).where(AdAccount.id.in_(ids)))]
+
+
+def _last_syncs(db: Session, ids) -> dict[int, SyncRun]:
+    """계정별 마지막 동기화를 쿼리 한 번으로(계정마다 따로 조회하면 무료 플랜 요청당 쿼리 한도를 넘는다)."""
+    latest = select(func.max(SyncRun.id)).where(SyncRun.ad_account_id.in_(ids)).group_by(SyncRun.ad_account_id)
+    return {s.ad_account_id: s for s in db.scalars(select(SyncRun).where(SyncRun.id.in_(latest)))}
 
 
 @app.post("/workspaces/{ws_id}/ad-accounts/{account_id}/sync")
@@ -898,7 +907,9 @@ async def run_account_goal(account_id: int, m: Membership = Depends(membership),
 async def audit_logs(user_id: int | None = None, account_id: int | None = None, m: Membership = Depends(membership),
                db: Session = Depends(get_db)):
     ids = resolve_account_ids(db, m, [account_id] if account_id else None)
-    s = select(AuditLog).where(AuditLog.workspace_id == m.workspace_id, AuditLog.ad_account_id.in_(ids))
+    # 예약·예약 실패처럼 계정이 없는 기록은 계정을 고르지 않았을 때 같이 보인다
+    in_scope = AuditLog.ad_account_id.in_(ids) if account_id else or_(AuditLog.ad_account_id.in_(ids), AuditLog.ad_account_id.is_(None))
+    s = select(AuditLog).where(AuditLog.workspace_id == m.workspace_id, in_scope)
     if user_id:
         s = s.where(AuditLog.user_id == user_id)
     return _rows(db.scalars(s.order_by(AuditLog.id.desc()).limit(500)), "id", "user_id", "ad_account_id", "job_id", "action",
@@ -940,7 +951,7 @@ async def performance_entities(body: EntityPerfIn, m: Membership = Depends(membe
     """키워드·광고그룹·소재별 기간 합계. 서버에 저장하지 않고 네이버에서 바로 조회한다. 기간을 비우면 어제까지 7일."""
     if not 1 <= len(body.ids) <= ENTITY_PERF_LIMIT:
         raise HTTPException(400, f"성과 조회는 한 번에 1~{ENTITY_PERF_LIMIT}개입니다")
-    until = body.until or date.today() - timedelta(days=1)
+    until = body.until or today_kst() - timedelta(days=1)
     since = body.since or until - timedelta(days=6)
     if since > until or (until - since).days > 92:
         raise HTTPException(400, "기간은 93일 이내")
@@ -956,7 +967,7 @@ async def performance_entities(body: EntityPerfIn, m: Membership = Depends(membe
 @app.get("/workspaces/{ws_id}/performance/accounts")
 async def performance_accounts(since: date | None = None, until: date | None = None, account_ids: str | None = None,
                          m: Membership = Depends(membership), db: Session = Depends(get_db)):
-    until = until or date.today() - timedelta(days=1)
+    until = until or today_kst() - timedelta(days=1)
     since = since or until - timedelta(days=6)
     return _account_performance(db, resolve_account_ids(db, m, _ids(account_ids)), since, until)
 
@@ -988,18 +999,18 @@ async def performance_daily(since: date, until: date, account_ids: str | None = 
 async def dashboard(account_ids: str | None = None, m: Membership = Depends(membership), db: Session = Depends(get_db)):
     ids = resolve_account_ids(db, m, None)
     selected = resolve_account_ids(db, m, _ids(account_ids))
-    until = date.today() - timedelta(days=1)
     jobs = db.scalars(select(BulkJob).where(BulkJob.workspace_id == m.workspace_id, BulkJob.status != "PREVIEW")
                       .order_by(BulkJob.id.desc()).limit(10)).all()
-    failed_syncs = []
-    for i in ids:
-        last = db.scalar(select(SyncRun).where(SyncRun.ad_account_id == i).order_by(SyncRun.id.desc()))
-        if last and last.status == "FAILED":
-            failed_syncs.append({"ad_account_id": i, "error": last.error, "at": last.finished_at})
+    # 엑셀 작업은 행이 수천 개일 수 있어 행을 다 읽지 않고 상태별 개수만 센다(무료 플랜 CPU 한도)
+    counts: dict[int, dict] = {j.id: dict.fromkeys(("VALID", "INVALID", "SUCCESS", "FAILED"), 0) for j in jobs}
+    for job_id, status, n in db.execute(select(BulkJobRow.job_id, BulkJobRow.status, func.count())
+                                        .where(BulkJobRow.job_id.in_(list(counts))).group_by(BulkJobRow.job_id, BulkJobRow.status)):
+        counts[job_id][status] = n
+    failed_syncs = [{"ad_account_id": i, "error": s.error, "at": s.finished_at} for i, s in _last_syncs(db, ids).items() if s.status == "FAILED"]
     return {
         "connected_accounts": len(ids),
-        "accounts": _account_performance(db, ids, until - timedelta(days=6), until),
-        "recent_jobs": [_job_out(db, j) | {"accounts": None} for j in jobs],
+        "recent_jobs": [_rows([j], "id", "status", "source", "parent_job_id", "created_by", "created_at", "executed_at", "scheduled_at")[0]
+                        | {"counts": counts[j.id], "accounts": None} for j in jobs],
         "failed_jobs": [j.id for j in jobs if j.status in ("PARTIAL", "FAILED")],
         "sync_errors": failed_syncs,
         "auto_bids": db.scalar(select(func.count()).select_from(AutoBidRule).where(

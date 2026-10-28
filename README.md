@@ -5,6 +5,8 @@ SMB 전문 광고대행사용 네이버 광고(파워링크·쇼핑검색 상품
 - 기준 문서: `Naver_Ads_SaaS_PROJECT_CONTEXT.md`
 - 기획/설계: `docs/PRD.md`, `docs/SCREEN_SPEC.md`, `docs/DB_SCHEMA.md`, `docs/IMPLEMENTATION_PLAN.md`
 - 진행 상태: `docs/IMPLEMENTATION_STATUS.md`
+- **최신 진행 상황·할 일은 `작업정리.txt`가 기준이다.** `docs/`는 10/18 설계 당시 문서라 그 뒤 바뀐 것(마이그레이션 0002~0012, Google 로그인,
+  자동입찰·목표 ROAS, 광고 데이터 브라우저 보관 등)이 빠져 있다. DB 구조는 `backend/src/app/models.py`와 `backend/migrations/`를 본다.
 
 ## 웹 (Next.js 정적 사이트 on Cloudflare Workers)
 주소: https://naverads.djkim0509.workers.dev

@@ -14,7 +14,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from .access import accessible_account_ids
-from .models import AccountGoal, AdAccount, AuditLog, AutoBidRule, BulkJob, BulkJobRow, Membership, NaverApiCredential, WorkspaceAdAccount, now
+from .models import KST, AccountGoal, AdAccount, AuditLog, AutoBidRule, BulkJob, BulkJobRow, Membership, NaverApiCredential, WorkspaceAdAccount, now
 from .naver import NaverApiError, ad_row, client_for, extension_row
 from .security import decrypt
 
@@ -31,6 +31,8 @@ ALLOWED_FIELDS = {
 BID_RANGE = {"WEB_SITE": (70, 100_000), "SHOPPING": (50, 100_000)}
 MIN_BUDGET = 50
 EXCEL_HEADER = ["entity_type", "naver_id", "field", "value"]
+# shortcut: 무료 플랜 CPU 한도 안에서 미리보기를 만들려고 정한 값(실측 아님), 큰 엑셀이 필요해지면 실측 후 올리거나 나눠 저장
+MAX_JOB_ROWS = 1000
 
 
 def _split_new_keyword(value: str) -> tuple[str, str]:
@@ -84,6 +86,8 @@ def create_job(db: Session, m: Membership, changes: list[dict], source: str, par
     """changes: entity_type, naver_id, field, value, ad_account_id, before?, product?, ad_type?, invalid?(화면이 찾은 오류)"""
     if not changes:
         raise HTTPException(400, "변경 내용이 없습니다")
+    if len(changes) > MAX_JOB_ROWS:
+        raise HTTPException(400, f"한 번에 {MAX_JOB_ROWS:,}행까지입니다. 나눠서 올려 주세요")
     allowed = accessible_account_ids(db, m, edit=True)
     job = BulkJob(workspace_id=m.workspace_id, created_by=m.user_id, source=source, parent_job_id=parent_job_id)
     db.add(job)
@@ -464,7 +468,6 @@ def run_scheduled_jobs(db: Session):
 
 
 # ---- 계정 목표 ROAS ----
-KST = timezone(timedelta(hours=9))
 GOAL_RUN_HOUR = 9  # 어제 통계가 다 쌓인 뒤 하루 한 번(한국 시간)
 GOAL_MIN_CLICKS = 10  # 이보다 클릭이 적은 키워드는 평균이 흔들려 그대로 둔다
 

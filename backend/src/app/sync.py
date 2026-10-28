@@ -1,11 +1,11 @@
 """성과 통계 동기화(캠페인별 일별). 광고 데이터 사본은 서버에 두지 않는다(브라우저가 마스터 보고서로 받음).
 계정 연결 시 접근 확인도 이것으로 한다."""
-from datetime import date, timedelta
+from datetime import timedelta
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from .models import AdAccount, PerformanceDaily, SyncRun, now
+from .models import AdAccount, PerformanceDaily, SyncRun, now, today_kst
 from .naver import NaverApiError
 
 STATS_DAYS = 30
@@ -28,7 +28,7 @@ def sync_account(db: Session, account: AdAccount, client) -> SyncRun:
 
 
 def _sync_stats(db: Session, account: AdAccount, client, campaigns: dict[str, str]):
-    until = date.today() - timedelta(days=1)
+    until = today_kst() - timedelta(days=1)
     since = until - timedelta(days=STATS_DAYS - 1)
     # 네이버에서 지운 캠페인의 통계는 지운다
     db.execute(delete(PerformanceDaily).where(PerformanceDaily.ad_account_id == account.id,
