@@ -382,6 +382,38 @@ def test_execute_runs_each_row_once():
     assert "연결이 끊겼습니다" in next(r for a in out["accounts"] for r in a["rows"] if r["after"] == "한번0")["error"]
 
 
+def test_credential_key_rotation(monkeypatch):
+    from cryptography.fernet import Fernet
+    from sqlalchemy import select
+
+    from app.bulk import rotate_credentials
+    from app.db import SessionLocal
+    from app.models import NaverApiCredential
+    from app.security import _fernet, decrypt, encrypt
+
+    monkeypatch.delenv("CRED_KEY", raising=False)
+    old = encrypt("비밀")                                   # 예전 방식(APP_SECRET 열쇠)
+    monkeypatch.setenv("CRED_KEY", Fernet.generate_key().decode())
+    assert decrypt(old) == "비밀"                           # 옮기기 전에도 풀린다
+    new = encrypt("새것")
+    _fernet(os.environ["CRED_KEY"]).decrypt(new.encode())   # 새 값은 CRED_KEY 열쇠로
+
+    owner = user("rot@a.com")
+    ws = c.post("/workspaces", json={"name": "열쇠"}, headers=owner).json()["id"]
+    db = SessionLocal()
+    try:
+        db.add(NaverApiCredential(workspace_id=ws, label="예전", api_key="k", secret_key_enc=old, is_mock=False))
+        db.commit()
+        rotate_credentials(db)
+        rows = db.scalars(select(NaverApiCredential).where(NaverApiCredential.workspace_id == ws)).all()
+    finally:
+        db.close()
+    assert _fernet(os.environ["CRED_KEY"]).decrypt(rows[0].secret_key_enc.encode()).decode() == "비밀"
+    monkeypatch.setenv("APP_SECRET", "다른 값")             # APP_SECRET이 바뀌어(새어) 있어도 CRED_KEY로 풀린다
+    monkeypatch.setenv("APP_ENV", "prod")
+    assert decrypt(rows[0].secret_key_enc) == "비밀"
+
+
 def test_master_report_limit_clears_and_retries():
     from app.naver import NaverApiError, RealNaverClient
 

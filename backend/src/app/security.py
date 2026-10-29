@@ -7,7 +7,7 @@ import os
 import secrets
 import time
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 
 TOKEN_TTL = 60 * 60 * 12  # 웹 로그인(재발급 장치가 없어 업무 하루치)
 
@@ -93,9 +93,28 @@ def read_payload(token: str, kind: str) -> dict | None:
     return data
 
 
+# 네이버 비밀키 암호화 열쇠는 CRED_KEY(로그인 서명용 APP_SECRET과 따로). 둘 중 하나만 새서는 비밀키를 풀 수 없다.
+# CRED_KEY가 없거나 아직 옮기지 않은 예전 값은 APP_SECRET 열쇠로 푼다(크론이 rotate로 옮긴다)
+def _keys() -> MultiFernet:
+    cred = os.getenv("CRED_KEY", "")
+    return MultiFernet(([_fernet(cred)] if cred else []) + [_fernet(_secret())])
+
+
 def encrypt(s: str) -> str:
-    return _fernet(_secret()).encrypt(s.encode()).decode()
+    return _keys().encrypt(s.encode()).decode()
 
 
 def decrypt(s: str) -> str:
-    return _fernet(_secret()).decrypt(s.encode()).decode()
+    return _keys().decrypt(s.encode()).decode()
+
+
+def rotated(s: str) -> str | None:
+    """CRED_KEY로 다시 암호화한 값. 이미 CRED_KEY로 돼 있거나 CRED_KEY가 없으면 None."""
+    cred = os.getenv("CRED_KEY", "")
+    if not cred:
+        return None
+    try:
+        _fernet(cred).decrypt(s.encode())
+        return None
+    except InvalidToken:
+        return _keys().rotate(s.encode()).decode()

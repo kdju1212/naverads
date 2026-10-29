@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from .access import accessible_account_ids
 from .models import KST, AccountGoal, AdAccount, AuditLog, AutoBidRule, BulkJob, BulkJobRow, Membership, NaverApiCredential, WorkspaceAdAccount, now
 from .naver import NaverApiError, ad_row, client_for, extension_row
-from .security import decrypt
+from .security import decrypt, rotated
 
 ALLOWED_FIELDS = {
     # 캠페인 create: naver_id는 유형(WEB_SITE|SHOPPING), value는 "이름|일예산"
@@ -503,6 +503,15 @@ def excel_template() -> bytes:
 
 
 # ---- 예약 실행 ----
+def rotate_credentials(db: Session):
+    """크론용: 예전 열쇠(APP_SECRET)로 암호화된 네이버 비밀키를 CRED_KEY로 다시 암호화한다."""
+    for cred in db.scalars(select(NaverApiCredential)):
+        new = rotated(cred.secret_key_enc)
+        if new:
+            cred.secret_key_enc = new
+    db.commit()
+
+
 def run_scheduled_jobs(db: Session):
     """크론용: 예약 시각이 지난 작업 하나를 EXECUTE_CHUNK행 실행(남으면 다음 크론에서 이어서). 실행은 작업을 만든 사람 권한으로.
     shortcut: 크론 1번에 5행이라 큰 작업은 오래 걸린다, 예약 작업이 커지면 한 번에 더 실행한다"""

@@ -29,3 +29,4 @@ npx wrangler d1 migrations apply naverads --remote                # 스키마 �
 uv run pywrangler deploy                                          # 배포
 ```
 Secret: `npx wrangler secret put APP_SECRET` (설정 완료).
+`CRED_KEY`: 네이버 비밀키 암호화 열쇠(APP_SECRET과 따로). 잃어버리면 저장된 비밀키를 못 풀어 다시 등록해야 하니 따로 보관.
