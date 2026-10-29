@@ -356,6 +356,32 @@ def test_campaign_adgroup_delete_only_when_off():
     assert {("DELETE", "campaign"), ("DELETE", "adgroup")} <= acts
 
 
+def test_execute_runs_each_row_once():
+    from app import bulk
+    from app.db import SessionLocal
+    from app.models import BulkJob, BulkJobRow, Membership
+    from sqlalchemy import select
+
+    owner, ws, acc = _account("once@a.com", "6208")
+    job = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [
+        ch(acc, "keyword", "grp-6208-pl1", "create", f"한번{i}", product="WEB_SITE") for i in range(3)]}).json()
+    db = SessionLocal()
+    try:
+        # 다른 요청이 첫 행을 이미 실행 중인 상황: 이 요청은 그 행을 건너뛴다
+        first = db.scalars(select(BulkJobRow).where(BulkJobRow.job_id == job["id"]).order_by(BulkJobRow.id)).first()
+        first.status = "RUNNING"
+        db.commit()
+        m = db.scalar(select(Membership).where(Membership.workspace_id == ws))
+        bulk.execute_job(db, m, db.get(BulkJob, job["id"]))
+    finally:
+        db.close()
+    names = [k["keyword"] for k in store("6208")["keywords"].values()]
+    assert "한번0" not in names and {"한번1", "한번2"} <= set(names)
+    out = c.get(f"/workspaces/{ws}/bulk-jobs/{job['id']}", headers=owner).json()
+    assert out["status"] == "PARTIAL"  # 끝까지 RUNNING인 행은 반영 여부를 몰라 실패로
+    assert "연결이 끊겼습니다" in next(r for a in out["accounts"] for r in a["rows"] if r["after"] == "한번0")["error"]
+
+
 def test_master_report_limit_clears_and_retries():
     from app.naver import NaverApiError, RealNaverClient
 

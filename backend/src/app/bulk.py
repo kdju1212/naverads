@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from fastapi import HTTPException
 from openpyxl import Workbook, load_workbook
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from .access import accessible_account_ids
@@ -182,6 +182,11 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
         if row.ad_account_id not in allowed:
             row.status, row.error = "FAILED", "실행 시점에 수정 권한이 없습니다"
             continue
+        # 같은 작업을 두 곳에서 동시에 실행해도(Claude가 겹쳐 부름 등) 한 행은 한 번만: 먼저 RUNNING으로 바꾼 요청만 실행
+        if db.execute(update(BulkJobRow).where(BulkJobRow.id == row.id, BulkJobRow.status == "VALID")
+                      .values(status="RUNNING")).rowcount != 1:
+            continue
+        db.commit()
         try:
             if row.ad_account_id not in clients:
                 clients[row.ad_account_id] = _client(db, m.workspace_id, row.ad_account_id)
@@ -232,6 +237,10 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
     results = set(db.scalars(select(BulkJobRow.status).where(BulkJobRow.job_id == job.id, BulkJobRow.status != "INVALID")))
     if "VALID" in results:
         return job
+    if "RUNNING" in results:  # 실행 중 요청이 끊긴 행: 네이버 반영 여부를 알 수 없어 다시 실행하지 않는다
+        db.execute(update(BulkJobRow).where(BulkJobRow.job_id == job.id, BulkJobRow.status == "RUNNING")
+                   .values(status="FAILED", error="실행 중 연결이 끊겼습니다. 네이버에서 반영됐는지 확인하세요"))
+        results = (results - {"RUNNING"}) | {"FAILED"}
     job.status = "DONE" if results == {"SUCCESS"} else "FAILED" if "SUCCESS" not in results else "PARTIAL"
     job.executed_at = now()
     db.commit()

@@ -168,7 +168,8 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
     - [직접] 운영 DB에 예전 방식 Mock 계정이 있는지: backend에서
       npx wrangler d1 execute naverads --remote --command "SELECT id, customer_id, is_mock FROM ad_accounts"
       (is_mock=1인데 customer_id가 숫자만이면 예전 방식. 있어도 동작은 그대로)
-    - 같은 작업을 두 곳에서 동시에 '실행'하면 같은 행을 두 번 처리할 수 있음(화면은 버튼을 막아 둠, Claude가 겹쳐 부를 때만)
+    - ✔ 10/29 해결: 같은 작업 동시 실행 시 행마다 VALID→RUNNING으로 먼저 바꾼 요청만 실행(D1 meta.changes로 확인)
+      실행 중 요청이 끊겨 RUNNING으로 남은 행은 작업 끝에 FAILED '연결이 끊겼습니다, 네이버 확인'(다시 실행 안 함 — 등록이 두 번 될 수 있어서)
     - docs/ 설계 문서 자체는 10/18 그대로(필요할 때 갱신)
     - lib/changes.ts(엑셀 행에 계정·이전 값 채우기) 테스트 없음
 17. 자동입찰 추가 장치: 연속 오류 시 자동 중지, 조직 전체 긴급 중지, 캠페인 OFF 확인
