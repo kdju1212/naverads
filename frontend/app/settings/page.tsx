@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Badge, Button, Card, ErrorText, inputCls, PageTitle } from "@/components/ui";
-import { api, fmt, logout } from "@/lib/api";
+import { api, API_URL, fmt, logout } from "@/lib/api";
 import { refreshAccounts } from "@/lib/naverData";
 import { useApp } from "@/lib/store";
 import { useFetch } from "@/lib/useFetch";
@@ -207,7 +207,39 @@ function MyAccount() {
     });
   const logoutAll = () => confirm("이 기기와 다른 모든 기기, Claude 연결에서 로그아웃합니다. Claude는 다시 연결해야 합니다. 진행할까요?")
     && run(async () => { await api("/auth/logout-all", { method: "POST" }); await logout(); });
+  const [copied, setCopied] = useState(false);
+  // claude.ai는 커넥터 주소를 미리 채우는 링크가 없어, 주소 복사 + 커넥터 화면 열기로 대신한다
+  const connectClaude = () => {
+    navigator.clipboard?.writeText(`${API_URL}/mcp`).then(() => setCopied(true), () => setCopied(false));
+    window.open("https://claude.ai/settings/connectors", "_blank", "noopener");
+  };
   return (
+    <>
+    <Card title="Claude 연결">
+      <p className="mb-2 text-sm">Claude에서 이 앱으로 광고를 조회·변경할 수 있습니다. 버튼을 누르면 주소가 복사되고 Claude 커넥터 화면이 열립니다.</p>
+      <ol className="mb-3 list-decimal pl-5 text-sm">
+        <li>열린 화면에서 &quot;커스텀 커넥터 추가&quot;를 누릅니다.</li>
+        <li>이름에 &quot;네이버광고&quot;, URL에 복사된 주소를 붙여 넣고 추가합니다.</li>
+        <li>&quot;연결&quot;을 누르고 이 앱 계정으로 로그인합니다.</li>
+      </ol>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="button" onClick={connectClaude}>Claude에 연결하기</Button>
+        <code className="rounded bg-line/40 px-2 py-1 text-xs">{API_URL}/mcp</code>
+      </div>
+      {copied && <p className="mt-2 text-sm text-info" role="status">주소를 복사했습니다. Claude 화면에서 붙여 넣으세요.</p>}
+      <details className="mt-3 border-t border-line pt-3">
+        <summary className="cursor-pointer text-sm text-faint">알아두기</summary>
+        <ul className="mt-2 list-disc pl-5 text-sm">
+          <li>Claude는 내가 속한 조직·담당 계정만 봅니다. 볼 수 있는 범위는 이 앱의 권한과 같습니다.</li>
+          <li>입찰가·소재 등 변경은 Claude가 먼저 미리보기를 보여 주고, 승인해야만 실행(또는 예약)됩니다.</li>
+          <li>Claude에게 &quot;내 광고 계정 보여줘&quot;, &quot;캠페인 목록 보여줘&quot;처럼 말하면 됩니다.</li>
+          <li>연결은 7일 동안 쓰지 않으면 끊깁니다. 끊기면 Claude 커넥터 화면에서 &quot;연결&quot;을 다시 누르세요.</li>
+          <li>Google로 가입했다면 로그인 화면에서도 Google로 로그인하세요.</li>
+          <li>회사(Team·Enterprise) Claude는 관리자가 커넥터를 추가해야 할 수 있습니다.</li>
+          <li>끊으려면 아래 &quot;Claude 연결만 끊기&quot;를 누르거나 Claude 커넥터 화면에서 제거하세요.</li>
+        </ul>
+      </details>
+    </Card>
     <Card title="내 계정">
       {me && !me.has_password && <p className="mb-2 text-sm">Google로 로그인한 계정입니다 ({me.email}). 비밀번호는 Google에서 관리합니다.</p>}
       <form className="flex flex-wrap items-end gap-2" onSubmit={(e) => { e.preventDefault(); change(); }}>
@@ -243,6 +275,7 @@ function MyAccount() {
         </details>
       )}
     </Card>
+    </>
   );
 }
 
