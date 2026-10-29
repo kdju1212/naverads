@@ -211,7 +211,7 @@ function MyAccount() {
   // claude.ai는 커넥터 주소를 미리 채우는 링크가 없어, 주소 복사 + 커넥터 화면 열기로 대신한다
   const connectClaude = () => {
     navigator.clipboard?.writeText(`${API_URL}/mcp`).then(() => setCopied(true), () => setCopied(false));
-    window.open("https://claude.ai/settings/connectors", "_blank", "noopener");
+    window.open("https://claude.ai/new#customize/connectors", "_blank", "noopener");
   };
   return (
     <>
