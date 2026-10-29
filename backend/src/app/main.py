@@ -385,6 +385,8 @@ class CredentialIn(BaseModel):
 
 @app.post("/workspaces/{ws_id}/credentials")
 async def add_credential(body: CredentialIn, m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
+    if body.is_mock and os.getenv("APP_ENV", "dev") != "dev":  # Mock은 로컬 화면 확인·테스트용
+        raise HTTPException(403, "운영에서는 Mock 자격증명을 등록할 수 없습니다")
     cred = NaverApiCredential(workspace_id=m.workspace_id, label=body.label, api_key=body.api_key,
                               secret_key_enc=encrypt(body.secret_key), is_mock=body.is_mock)
     db.add(cred)

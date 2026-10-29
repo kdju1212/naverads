@@ -928,6 +928,16 @@ def test_google_login(monkeypatch):
     assert c.post("/auth/signup", json={"email": "x@a.com", "password": "password1", "name": "x"}).status_code == 403
 
 
+def test_prod_rejects_mock_credential(monkeypatch):
+    owner = user("mockprod@a.com")
+    ws = c.post("/workspaces", json={"name": "대행사A"}, headers=owner).json()["id"]
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("APP_SECRET", "dev-only-secret")  # 운영은 APP_SECRET 필수, 위 토큰과 같은 값
+    body = {"label": "m", "api_key": "k", "secret_key": "s"}
+    assert c.post(f"/workspaces/{ws}/credentials", json=body, headers=owner).status_code == 403
+    assert c.post(f"/workspaces/{ws}/credentials", json={**body, "is_mock": False}, headers=owner).status_code == 200
+
+
 def test_mcp_token_security(monkeypatch):
     import base64
     import hashlib

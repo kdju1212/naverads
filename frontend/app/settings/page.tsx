@@ -103,7 +103,7 @@ function Accounts({ isAdmin }: { isAdmin: boolean }) {
             <input className={inputCls} placeholder="이름 (예: 대행사 마스터 API)" value={cred.label} onChange={(e) => setCred({ ...cred, label: e.target.value })} required aria-label="자격증명 이름" />
             <input className={inputCls} placeholder="API Key (액세스 라이선스)" value={cred.api_key} onChange={(e) => setCred({ ...cred, api_key: e.target.value })} required aria-label="API Key" />
             <input className={inputCls} type="password" placeholder="Secret Key (저장 후 다시 표시되지 않음)" value={cred.secret_key} onChange={(e) => setCred({ ...cred, secret_key: e.target.value })} required aria-label="Secret Key" autoComplete="off" />
-            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={cred.is_mock} onChange={(e) => setCred({ ...cred, is_mock: e.target.checked })} /> Mock 모드 (실제 계정 없이 가짜 데이터로 화면 체험)</label>
+            {process.env.NODE_ENV === "development" && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={cred.is_mock} onChange={(e) => setCred({ ...cred, is_mock: e.target.checked })} /> Mock 모드 (로컬 화면 확인용)</label>}
             <Button type="submit" disabled={busy}>자격증명 등록</Button>
           </form>
 
