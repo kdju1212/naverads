@@ -16,7 +16,8 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from . import bulk, naver, seo
-from .access import ADMIN_ROLES, admin_membership, current_user, membership, membership_of, resolve_account_ids, user_from_header
+from .access import (ADMIN_ROLES, accessible_account_ids, admin_membership, current_user, membership, membership_of, resolve_account_ids,
+                     user_from_header)
 from .db import Base, engine, get_db
 from .models import (AccountAccess, AccountGoal, AdAccount, AuditLog, AutoBidRule, BulkJob, BulkJobRow, LoginFailure, Membership, NaverApiCredential,
                      PerformanceDaily, Plan, Subscription, SyncRun, User, Workspace, WorkspaceAdAccount, now, today_kst)
@@ -58,6 +59,13 @@ class SignupIn(BaseModel):
     email: EmailStr
     password: str
     name: str
+
+
+@app.get("/health")
+async def health():
+    """공개 점검용: 정책 스위치가 운영에서 어떤 상태인지(값만, 비밀 없음)."""
+    # cred_key_loaded: 네이버 비밀키 열쇠(CRED_KEY)를 서버가 읽었는지만(값은 내보내지 않음)
+    return {"ok": True, "roas_automation": bulk.roas_automation_on(), "cred_key_loaded": bool(os.getenv("CRED_KEY"))}
 
 
 @app.post("/auth/signup")
@@ -695,10 +703,35 @@ class BulkIn(BaseModel):
     source: Literal["UI", "EXCEL"] = "UI"
 
 
-def _job(db: Session, m: Membership, job_id: int) -> BulkJob:
+def _job_accounts(db: Session, job_ids: list[int]) -> dict[int, tuple[set[int], bool]]:
+    """작업별 (대상 광고 계정들, 계정 없는 행이 있는지). 계정 없는 행 = 권한 없거나 대상 없음으로 걸러진 행."""
+    out: dict[int, tuple[set[int], bool]] = {j: (set(), False) for j in job_ids}
+    for jid, acc in db.execute(select(BulkJobRow.job_id, BulkJobRow.ad_account_id).where(BulkJobRow.job_id.in_(job_ids)).distinct()):
+        accs, unassigned = out[jid]
+        out[jid] = (accs, True) if acc is None else (accs | {acc}, unassigned)
+    return out
+
+
+def _visible_jobs(db: Session, m: Membership, jobs: list[BulkJob]) -> list[BulkJob]:
+    """직원은 대상 계정이 모두 자기에게 배정된 작업만 본다(권한이 회수되면 그 작업도 안 보임).
+    계정 없는 행에는 만든 사람이 넣은 다른 계정 ID·값이 있을 수 있어 그런 작업은 만든 사람만 본다. 관리자는 조직 전체."""
+    if m.role in ADMIN_ROLES or not jobs:
+        return jobs
+    allowed = accessible_account_ids(db, m)
+    acc = _job_accounts(db, [j.id for j in jobs])
+    return [j for j in jobs if acc[j.id][0] <= allowed and (not acc[j.id][1] or j.created_by == m.user_id)]
+
+
+def _job(db: Session, m: Membership, job_id: int, edit: bool = False) -> BulkJob:
+    """edit면 실행·예약·재실행: 실행할 행의 계정을 모두 수정할 수 있어야 한다(남의 작업을 실행해 실패로 만들지 못하게)."""
     job = db.get(BulkJob, job_id)
-    if not job or job.workspace_id != m.workspace_id:
-        raise HTTPException(404, "작업을 찾을 수 없습니다")
+    if not job or job.workspace_id != m.workspace_id or not _visible_jobs(db, m, [job]):
+        raise HTTPException(404, "작업을 찾을 수 없습니다")  # 다른 계정 작업이 있는지도 알려 주지 않는다
+    if edit:
+        need = set(db.scalars(select(BulkJobRow.ad_account_id).where(
+            BulkJobRow.job_id == job.id, BulkJobRow.status.in_(("VALID", "FAILED")), BulkJobRow.ad_account_id.is_not(None))))
+        if not need <= accessible_account_ids(db, m, edit=True):
+            raise HTTPException(403, "이 작업의 광고 계정을 수정할 권한이 없습니다")
     return job
 
 
@@ -735,8 +768,8 @@ async def excel_template():
 
 @app.get("/workspaces/{ws_id}/bulk-jobs")
 async def list_bulk_jobs(m: Membership = Depends(membership), db: Session = Depends(get_db)):
-    jobs = db.scalars(select(BulkJob).where(BulkJob.workspace_id == m.workspace_id).order_by(BulkJob.id.desc()).limit(50))
-    return _rows(jobs, "id", "status", "source", "parent_job_id", "created_by", "created_at", "executed_at", "scheduled_at")
+    jobs = db.scalars(select(BulkJob).where(BulkJob.workspace_id == m.workspace_id).order_by(BulkJob.id.desc()).limit(200)).all()
+    return _rows(_visible_jobs(db, m, jobs)[:50], "id", "status", "source", "parent_job_id", "created_by", "created_at", "executed_at", "scheduled_at")
 
 
 @app.get("/workspaces/{ws_id}/bulk-jobs/{job_id}")
@@ -747,7 +780,7 @@ async def get_bulk_job(job_id: int, m: Membership = Depends(membership), db: Ses
 @app.post("/workspaces/{ws_id}/bulk-jobs/{job_id}/execute")
 async def execute_bulk_job(job_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
     """최대 EXECUTE_CHUNK행씩 실행. 응답 status가 RUNNING이면 화면이 다시 호출한다."""
-    job = _job(db, m, job_id)
+    job = _job(db, m, job_id, edit=True)
     if job.scheduled_at is not None:  # 크론과 같이 실행돼 두 번 반영되지 않게
         raise HTTPException(409, "예약된 작업입니다. 예약을 취소한 뒤 실행하세요")
     return _job_out(db, bulk.execute_job(db, m, job, bulk.EXECUTE_CHUNK))
@@ -760,7 +793,7 @@ class ScheduleIn(BaseModel):
 @app.post("/workspaces/{ws_id}/bulk-jobs/{job_id}/schedule")
 async def schedule_bulk_job(body: ScheduleIn, job_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
     """미리보기 작업을 정한 시각에 실행하도록 예약(10분마다 도는 크론이 실행하므로 최대 10분 늦을 수 있다). 실행은 작업을 만든 사람 권한으로."""
-    job = _job(db, m, job_id)
+    job = _job(db, m, job_id, edit=True)
     if job.created_by != m.user_id and m.role not in ADMIN_ROLES:  # 예약 실행은 만든 사람 권한이라 남이 대신 예약하면 권한이 넘어간다
         raise HTTPException(403, "작업을 만든 사람이나 관리자만 예약할 수 있습니다")
     if job.status != "PREVIEW":
@@ -790,7 +823,7 @@ async def negative_keywords(account_id: int, adgroup_id: str, m: Membership = De
 
 @app.post("/workspaces/{ws_id}/bulk-jobs/{job_id}/retry-failed")
 async def retry_bulk_job(job_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
-    return _job_out(db, bulk.retry_failed(db, m, _job(db, m, job_id)))
+    return _job_out(db, bulk.retry_failed(db, m, _job(db, m, job_id, edit=True)))
 
 
 # ---------- 자동입찰 (목표 순위) ----------
@@ -974,7 +1007,9 @@ async def audit_logs(user_id: int | None = None, account_id: int | None = None, 
                db: Session = Depends(get_db)):
     ids = resolve_account_ids(db, m, [account_id] if account_id else None)
     # 예약·예약 실패처럼 계정이 없는 기록은 계정을 고르지 않았을 때 같이 보인다
-    in_scope = AuditLog.ad_account_id.in_(ids) if account_id else or_(AuditLog.ad_account_id.in_(ids), AuditLog.ad_account_id.is_(None))
+    # 계정 없는 기록(예약·자격증명 등)은 관리자에게는 전부, 직원에게는 자기 기록만
+    unassigned = AuditLog.ad_account_id.is_(None) & (AuditLog.user_id == m.user_id) if m.role not in ADMIN_ROLES else AuditLog.ad_account_id.is_(None)
+    in_scope = AuditLog.ad_account_id.in_(ids) if account_id else or_(AuditLog.ad_account_id.in_(ids), unassigned)
     s = select(AuditLog).where(AuditLog.workspace_id == m.workspace_id, in_scope)
     if user_id:
         s = s.where(AuditLog.user_id == user_id)
@@ -1065,8 +1100,8 @@ async def performance_daily(since: date, until: date, account_ids: str | None = 
 async def dashboard(account_ids: str | None = None, m: Membership = Depends(membership), db: Session = Depends(get_db)):
     ids = resolve_account_ids(db, m, None)
     selected = resolve_account_ids(db, m, _ids(account_ids))
-    jobs = db.scalars(select(BulkJob).where(BulkJob.workspace_id == m.workspace_id, BulkJob.status != "PREVIEW")
-                      .order_by(BulkJob.id.desc()).limit(10)).all()
+    jobs = _visible_jobs(db, m, db.scalars(select(BulkJob).where(BulkJob.workspace_id == m.workspace_id, BulkJob.status != "PREVIEW")
+                                           .order_by(BulkJob.id.desc()).limit(50)).all())[:10]
     # 엑셀 작업은 행이 수천 개일 수 있어 행을 다 읽지 않고 상태별 개수만 센다(무료 플랜 CPU 한도)
     counts: dict[int, dict] = {j.id: dict.fromkeys(("VALID", "INVALID", "SUCCESS", "FAILED"), 0) for j in jobs}
     for job_id, status, n in db.execute(select(BulkJobRow.job_id, BulkJobRow.status, func.count())

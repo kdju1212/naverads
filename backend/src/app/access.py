@@ -10,8 +10,11 @@ from .security import read_token
 ADMIN_ROLES = {"OWNER", "ADMIN"}
 
 
-def user_from_header(db: Session, authorization: str) -> User:
+def user_from_header(db: Session, authorization: str, allow_mcp: bool = False) -> User:
+    """allow_mcp: Claude 연결 출입증은 /mcp에서만 받는다. 일반 API(직접 실행·예약 등)를 Claude 토큰으로 부르지 못하게."""
     t = read_token(authorization.removeprefix("Bearer ").strip())
+    if t and t[2] is not None and not allow_mcp:
+        t = None
     user = db.get(User, t[0]) if t else None
     # 비밀번호 변경·모든 기기 로그아웃 이전 토큰, 또는 Claude 연결 끊기 이전의 Claude 토큰
     if not user or user.token_version != t[1] or (t[2] is not None and t[2] != user.mcp_version):

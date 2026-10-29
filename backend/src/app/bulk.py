@@ -137,7 +137,8 @@ def create_job(db: Session, m: Membership, changes: list[dict], source: str, par
         before = ch.get("before")
         row = BulkJobRow(job_id=job.id, entity_type=etype, naver_id=nid, field=field, after=value, status="INVALID",
                          before=None if before is None else str(before)[:50])
-        key = (nid, field, _split_new_keyword(value)[0] if field == "create" else "")
+        # 계정까지 같아야 중복: 캠페인 등록은 naver_id가 유형(WEB_SITE)이라 계정이 다르면 다른 대상이다
+        key = (ch.get("ad_account_id"), nid, field, _split_new_keyword(value)[0] if field == "create" else "")
         if etype not in ALLOWED_FIELDS:
             row.error = f"알 수 없는 유형: {etype}"
         elif not nid or ch.get("ad_account_id") not in allowed:
@@ -162,6 +163,7 @@ def _client(db: Session, workspace_id: int, account_id: int):
     return client_for(db.get(NaverApiCredential, link.credential_id), db.get(AdAccount, account_id).customer_id, decrypt)
 
 
+CUT_OFF = "실행 중 연결이 끊겼습니다. 네이버에서 반영됐는지 확인하세요"
 # 무료 플랜은 요청 1번에 D1 쿼리+외부 호출 50번까지라, 화면 실행은 몇 행씩 나눠 여러 번 요청한다(행마다 약 4번 + 고정 약 10번)
 EXECUTE_CHUNK = 5
 
@@ -240,7 +242,7 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
         return job
     if "RUNNING" in results:  # 실행 중 요청이 끊긴 행: 네이버 반영 여부를 알 수 없어 다시 실행하지 않는다
         db.execute(update(BulkJobRow).where(BulkJobRow.job_id == job.id, BulkJobRow.status == "RUNNING")
-                   .values(status="FAILED", error="실행 중 연결이 끊겼습니다. 네이버에서 반영됐는지 확인하세요"))
+                   .values(status="FAILED", error=CUT_OFF))
         results = (results - {"RUNNING"}) | {"FAILED"}
     job.status = "DONE" if results == {"SUCCESS"} else "FAILED" if "SUCCESS" not in results else "PARTIAL"
     job.executed_at = now()
@@ -252,8 +254,11 @@ def retry_failed(db: Session, m: Membership, job: BulkJob) -> BulkJob:
     failed = db.scalars(select(BulkJobRow).where(BulkJobRow.job_id == job.id, BulkJobRow.status == "FAILED")).all()
     if not failed:
         raise HTTPException(400, "재실행할 실패 행이 없습니다")
+    # 연결이 끊긴 행은 네이버에 이미 반영됐을 수 있어(등록이면 두 번 생김) 재실행하지 않는 행으로 넘긴다
     changes = [{"entity_type": r.entity_type, "naver_id": r.naver_id, "field": r.field, "value": r.after,
-                "ad_account_id": r.ad_account_id, "before": r.before} for r in failed]
+                "ad_account_id": r.ad_account_id, "before": r.before,
+                **({"invalid": "반영 여부를 알 수 없어 다시 실행하지 않습니다. 네이버에서 확인 후 새로 만드세요"} if r.error == CUT_OFF else {})}
+               for r in failed]
     return create_job(db, m, changes, "RETRY", parent_job_id=job.id)
 
 

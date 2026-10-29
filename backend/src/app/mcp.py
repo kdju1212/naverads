@@ -403,7 +403,7 @@ async def mcp(request: Request):
     db = SessionLocal()
     try:
         try:
-            user = user_from_header(db, request.headers.get("authorization") or "")
+            user = user_from_header(db, request.headers.get("authorization") or "", allow_mcp=True)
         except HTTPException:
             meta = _base(request) + "/.well-known/oauth-protected-resource"
             return JSONResponse({"error": "invalid_token"}, 401, headers={"WWW-Authenticate": f'Bearer resource_metadata="{meta}"'})

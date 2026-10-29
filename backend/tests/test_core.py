@@ -132,11 +132,12 @@ def test_full_flow():
     assert ex["source"] == "EXCEL" and ex["counts"]["VALID"] == 2
     assert c.get("/bulk-jobs/excel-template").status_code == 200
 
-    # 미리보기 후 권한이 회수되면 실행 시 실패
+    # 미리보기 후 권한이 회수되면 그 작업은 보이지도 실행되지도 않는다
     mid = next(x["membership_id"] for x in c.get(f"/workspaces/{ws}/members", headers=owner).json() if x["email"] == "staff@a.com")
     j2 = c.post(f"/workspaces/{ws}/bulk-jobs", headers=staff, json={"changes": [ch(a1, "campaign", "cmp-1001-sh", "status", "OFF")]}).json()
     c.put(f"/workspaces/{ws}/members/{mid}/access", json={"ad_account_id": a1, "level": None}, headers=owner)
-    assert c.post(f"/workspaces/{ws}/bulk-jobs/{j2['id']}/execute", headers=staff).json()["status"] == "FAILED"
+    assert c.post(f"/workspaces/{ws}/bulk-jobs/{j2['id']}/execute", headers=staff).status_code == 404
+    assert c.get(f"/workspaces/{ws}/bulk-jobs/{j2['id']}", headers=staff).status_code == 404
 
     # 성과·대시보드·구독
     perf = c.get(f"/workspaces/{ws}/performance/accounts", headers=owner).json()
@@ -962,7 +963,8 @@ def test_token_revocation():
     r = c.post("/auth/signup", json={"email": "revoke@a.com", "password": "password1", "name": "r"}).json()
     uid, t1 = r["id"], r["token"]
     t2 = c.post("/auth/login", json={"email": "revoke@a.com", "password": "password1"}).json()["token"]
-    ok = lambda t: c.get("/workspaces", headers={"Authorization": f"Bearer {t}"}).status_code == 200  # noqa: E731
+    # Claude 출입증은 /mcp에서만 쓴다(일반 API는 거부 — test_mcp_token_scope)
+    ok = lambda t: c.post("/mcp", headers={"Authorization": f"Bearer {t}"}, json={"jsonrpc": "2.0", "id": 1, "method": "ping"}).status_code == 200  # noqa: E731
     refresh = lambda payload: c.post("/oauth/token", data={"grant_type": "refresh_token", "refresh_token": sign_payload(payload, 60)})  # noqa: E731
     msg = f"{uid}.{int(time.time()) + 60}"
     old = f"{msg}.{_sign(msg)}"  # 버전 없는 예전 형식(배포 전 발급)
@@ -1078,7 +1080,7 @@ def test_mcp_token_security(monkeypatch):
         assert c.post("/oauth/token", data=tok).status_code == 400  # 인가 코드는 한 번만
         return t
     refresh = lambda rt: c.post("/oauth/token", data={"grant_type": "refresh_token", "refresh_token": rt})  # noqa: E731
-    ok = lambda t: c.get("/workspaces", headers={"Authorization": f"Bearer {t}"}).status_code == 200  # noqa: E731
+    ok = lambda t: c.post("/mcp", headers={"Authorization": f"Bearer {t}"}, json={"jsonrpc": "2.0", "id": 1, "method": "ping"}).status_code == 200  # noqa: E731
 
     # 갱신 토큰 교체: 쓰면 새 갱신 토큰, 옛 것은 거절(60초 안 재사용은 재시도로 보고 거절만)
     t0 = connect()
@@ -1320,10 +1322,10 @@ def test_role_permissions():
     _, err = _mcp_call(_mcp_headers(staff), "create_ad", workspace_id=ws, ad_account_id=acc2, adgroup_id="grp-9142-pl1",
                        headlines=["x"], descriptions=["y"], pc_url="https://a.com")
     assert err
-    # 미리보기 뒤 수정 권한이 빠지면 실행 시점에 다시 막힌다(acc1 EDIT → VIEW)
+    # 미리보기 뒤 수정 권한이 빠지면(acc1 EDIT → VIEW) 실행이 거부되고 광고는 그대로
     c.put(f"/workspaces/{ws}/members/{mid}/access", headers=owner, json={"ad_account_id": acc1, "level": "VIEW"})
-    out = c.post(f"/workspaces/{ws}/bulk-jobs/{job['id']}/execute", headers=staff).json()
-    assert out["status"] == "FAILED" and store("9141")["campaigns"]["cmp-9141-pl"]["userLock"] is False
+    assert c.post(f"/workspaces/{ws}/bulk-jobs/{job['id']}/execute", headers=staff).status_code == 403
+    assert store("9141")["campaigns"]["cmp-9141-pl"]["userLock"] is False
 
 
 def test_roas_automation_blocked_by_policy(monkeypatch):
@@ -1373,10 +1375,10 @@ def test_seo_ssrf_bypasses(monkeypatch):
     # 공개 주소가 내부 주소로 리다이렉트하면 그 주소는 요청하지 않는다
     calls = []
 
-    def fake_get(url, **kw):
-        calls.append(url)
-        return httpx.Response(302, headers={"location": "http://169.254.169.254/"}, request=httpx.Request("GET", url))
-    monkeypatch.setattr(seo.httpx, "get", fake_get)
+    def handler(req):
+        calls.append(str(req.url))
+        return httpx.Response(302, headers={"location": "http://169.254.169.254/"})
+    seo = _mock_web(monkeypatch, handler)
     try:
         seo.fetch("https://example.com/")
         raise AssertionError("리다이렉트 차단 안 됨")
@@ -1415,3 +1417,230 @@ def test_oauth_code_concurrent_use():
     finally:
         db1.close()
         db2.close()
+
+
+# ---------- 2차 보안 점검(10/29): 직원별 격리·토큰 범위·동시 요청·SSRF ----------
+def _staff_org(prefix, c1, c2):
+    """OWNER, ADMIN, 직원 A(광고주1 VIEW), 직원 B(광고주2 EDIT)인 조직."""
+    owner, ws, acc1 = _account(f"{prefix}-o@a.com", c1)
+    cred = c.get(f"/workspaces/{ws}/credentials", headers=owner).json()[0]["id"]
+    acc2 = c.post(f"/workspaces/{ws}/ad-accounts", headers=owner, json={"credential_id": cred, "customer_id": c2, "name": "광고주2"}).json()["id"]
+    c.post(f"/workspaces/{ws}/ad-accounts/{acc2}/sync", headers=owner)
+    hs, mids = {}, {}
+    for who, role in (("adm", "ADMIN"), ("sa", "MEMBER"), ("sb", "MEMBER")):
+        hs[who] = user(f"{prefix}-{who}@a.com")
+        mids[who] = c.post(f"/workspaces/{ws}/members", headers=owner, json={"email": f"{prefix}-{who}@a.com", "role": role}).json()["membership_id"]
+    c.put(f"/workspaces/{ws}/members/{mids['sa']}/access", headers=owner, json={"ad_account_id": acc1, "level": "VIEW"})
+    c.put(f"/workspaces/{ws}/members/{mids['sb']}/access", headers=owner, json={"ad_account_id": acc2, "level": "EDIT"})
+    return owner, ws, acc1, acc2, hs, mids
+
+
+def test_staff_job_isolation():
+    owner, ws, acc1, acc2, hs, mids = _staff_org("stf", "9201", "9202")
+    a, b, adm = hs["sa"], hs["sb"], hs["adm"]
+    url = f"/workspaces/{ws}/bulk-jobs"
+    job2 = c.post(url, headers=owner, json={"changes": [ch(acc2, "keyword", "kwd-9202-11", "bid_amt", "350", before="300", product="WEB_SITE")]}).json()["id"]
+    c.post(f"{url}/{job2}/execute", headers=owner)  # 실행된 작업 = 대시보드·이력에 나온다
+    mixed = c.post(url, headers=owner, json={"changes": [
+        ch(acc1, "keyword", "kwd-9201-11", "bid_amt", "310", before="300", product="WEB_SITE"),
+        ch(acc2, "keyword", "kwd-9202-12", "bid_amt", "610", before="600", product="WEB_SITE")]}).json()["id"]
+    job1 = c.post(url, headers=owner, json={"changes": [ch(acc1, "keyword", "kwd-9201-12", "bid_amt", "620", before="600", product="WEB_SITE")]}).json()["id"]
+    jobb = c.post(url, headers=b, json={"changes": [ch(acc2, "keyword", "kwd-9202-13", "bid_amt", "930", before="900", product="WEB_SITE")]}).json()["id"]
+
+    # 직원 A(광고주1 보기): 광고주2가 들어간 작업은 목록·상세·대시보드·이력 어디에도 없다
+    ids = lambda h: {j["id"] for j in c.get(url, headers=h).json()}  # noqa: E731
+    assert ids(a) == {job1}
+    for j in (job2, mixed, jobb):
+        assert c.get(f"{url}/{j}", headers=a).status_code == 404
+        assert c.post(f"{url}/{j}/execute", headers=a).status_code == 404
+        assert c.post(f"{url}/{j}/retry-failed", headers=a).status_code == 404
+        assert c.post(f"{url}/{j}/schedule", headers=a, json={"scheduled_at": None}).status_code == 404
+    dash = c.get(f"/workspaces/{ws}/dashboard", headers=a).json()
+    assert job2 not in {j["id"] for j in dash["recent_jobs"]} and job2 not in dash["failed_jobs"]
+    logs = c.get(f"/workspaces/{ws}/audit-logs", headers=a).json()
+    a_id = c.get("/auth/me", headers=a).json()["id"]
+    assert all(x["ad_account_id"] in (acc1, None) for x in logs) and all(x["user_id"] == a_id for x in logs if x["ad_account_id"] is None)
+    assert c.get(f"/workspaces/{ws}/audit-logs?account_id={acc2}", headers=a).status_code == 403
+    # 보기 권한 작업은 볼 수 있지만 실행·예약·재실행은 403
+    assert c.get(f"{url}/{job1}", headers=a).status_code == 200
+    assert c.post(f"{url}/{job1}/execute", headers=a).status_code == 403
+    assert store("9201")["keywords"]["kwd-9201-12"]["bidAmt"] == 600
+
+    # 직원 B(광고주2 수정): 자기 계정 작업은 정상 실행, 광고주1이 섞인 작업은 안 보임
+    assert ids(b) == {job2, jobb}
+    assert c.get(f"{url}/{mixed}", headers=b).status_code == 404
+    assert c.post(f"{url}/{jobb}/execute", headers=b).json()["status"] == "DONE"
+    assert store("9202")["keywords"]["kwd-9202-13"]["bidAmt"] == 930
+
+    # OWNER·ADMIN은 전부 보고 관리
+    assert ids(owner) >= {job1, job2, mixed, jobb} and ids(adm) >= {job1, job2, mixed, jobb}
+    assert c.post(f"{url}/{mixed}/execute", headers=adm).json()["status"] == "DONE"
+
+    # 권한 회수 → 기존 작업도 즉시 안 보임
+    c.put(f"/workspaces/{ws}/members/{mids['sb']}/access", headers=owner, json={"ad_account_id": acc2, "level": None})
+    assert ids(b) == set() and c.get(f"{url}/{jobb}", headers=b).status_code == 404
+
+    # MCP도 같은 정책
+    ma = _mcp_headers(a)
+    for name, args in (("execute_job", {"job_id": job2}), ("schedule_job", {"job_id": job2, "scheduled_at": None}),
+                       ("execute_job", {"job_id": job1})):
+        _, err = _mcp_call(ma, name, workspace_id=ws, **args)
+        assert err, name
+    mlogs, _ = _mcp_call(ma, "list_audit_logs", workspace_id=ws)
+    assert all(x["ad_account_id"] in (acc1, None) for x in mlogs)
+
+
+def test_bulk_duplicate_key_per_account():
+    owner, ws, acc1 = _account("dupk@a.com", "9211")
+    cred = c.get(f"/workspaces/{ws}/credentials", headers=owner).json()[0]["id"]
+    acc2 = c.post(f"/workspaces/{ws}/ad-accounts", headers=owner, json={"credential_id": cred, "customer_id": "9212", "name": "y"}).json()["id"]
+    job = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [
+        ch(acc1, "campaign", "WEB_SITE", "create", "브랜드|10000", product="WEB_SITE"),
+        ch(acc2, "campaign", "WEB_SITE", "create", "브랜드|10000", product="WEB_SITE"),   # 다른 계정이면 중복 아님
+        ch(acc2, "campaign", "WEB_SITE", "create", "브랜드|20000", product="WEB_SITE")]}).json()  # 같은 계정·이름은 중복
+    assert [r["status"] for x in job["accounts"] for r in x["rows"]] == ["VALID", "VALID", "INVALID"]
+
+
+def test_retry_skips_cut_off_rows():
+    from sqlalchemy import select
+
+    from app import bulk
+    from app.db import SessionLocal
+    from app.models import BulkJob, BulkJobRow
+
+    owner, ws, acc = _account("cut@a.com", "9221")
+    job = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [
+        ch(acc, "keyword", "grp-9221-pl1", "create", "끊김키워드", product="WEB_SITE")]}).json()
+    db = SessionLocal()
+    try:  # 실행 중 연결이 끊겨 실패로 남은 상황
+        row = db.scalars(select(BulkJobRow).where(BulkJobRow.job_id == job["id"])).one()
+        row.status, row.error = "FAILED", bulk.CUT_OFF
+        db.get(BulkJob, job["id"]).status = "FAILED"
+        db.commit()
+    finally:
+        db.close()
+    retry = c.post(f"/workspaces/{ws}/bulk-jobs/{job['id']}/retry-failed", headers=owner).json()
+    assert retry["counts"]["VALID"] == 0 and retry["counts"]["INVALID"] == 1  # 두 번 등록되지 않게
+
+
+def test_mcp_token_scope():
+    owner, ws, acc = _account("scope@a.com", "9231")
+    m = _mcp_headers(owner)
+    job = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [
+        ch(acc, "keyword", "kwd-9231-11", "bid_amt", "350", before="300", product="WEB_SITE")]}).json()["id"]
+    # Claude 출입증으로 일반 API(조회·실행·예약)를 직접 부를 수 없다
+    assert c.get("/workspaces", headers=m).status_code == 401
+    assert c.post(f"/workspaces/{ws}/bulk-jobs/{job}/execute", headers=m).status_code == 401
+    assert c.post(f"/workspaces/{ws}/bulk-jobs/{job}/schedule", headers=m, json={"scheduled_at": None}).status_code == 401
+    assert store("9231")["keywords"]["kwd-9231-11"]["bidAmt"] == 300
+    accounts, err = _mcp_call(m, "list_ad_accounts")
+    assert not err and accounts[0]["id"] == ws
+
+
+def test_oauth_refresh_concurrent(monkeypatch):
+    """같은 갱신 토큰을 실제로 동시에(스레드 2개) 내면 새 토큰은 한 번만 나간다."""
+    import threading
+
+    from fastapi.testclient import TestClient
+
+    from app import mcp
+    from app.security import sign_payload
+
+    h = user("conc@a.com")
+    uid = c.get("/auth/me", headers=h).json()["id"]
+    rt = sign_payload({"t": "refresh", "u": uid, "v": 0, "m": 0, "j": "conc"}, 3600)
+    barrier = threading.Barrier(2, timeout=10)
+    orig = mcp._use_once
+
+    def both_checked(db, token, exp):
+        # 사용 기록 조회 직후 두 요청을 맞춘다: 둘 다 "처음 쓰는 토큰"으로 본 뒤 기록하러 간다(진짜 경합)
+        real_get = db.get
+
+        def get_then_wait(*a, **k):
+            r = real_get(*a, **k)
+            barrier.wait()
+            return r
+        db.get = get_then_wait
+        try:
+            return orig(db, token, exp)
+        finally:
+            db.get = real_get
+    monkeypatch.setattr(mcp, "_use_once", both_checked)
+    codes = []
+
+    def go():
+        codes.append(TestClient(app).post("/oauth/token", data={"grant_type": "refresh_token", "refresh_token": rt}).status_code)
+    ts = [threading.Thread(target=go) for _ in range(2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert sorted(codes) == [200, 400]
+
+
+def test_health_reports_policy(monkeypatch):
+    monkeypatch.delenv("ROAS_AUTOMATION", raising=False)
+    monkeypatch.setenv("CRED_KEY", "test-only")
+    out = c.get("/health").json()
+    assert out == {"ok": True, "roas_automation": False, "cred_key_loaded": True} and "test-only" not in json.dumps(out)
+
+
+def _mock_web(monkeypatch, handler):
+    """seo의 실제 요청 코드(_fetch_once 스트리밍)를 그대로 쓰되 네트워크 대신 handler가 응답한다."""
+    import httpx
+
+    from app import seo
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(seo.httpx, "stream", lambda method, url, **kw: client.stream(method, url, headers=kw.get("headers")))
+    monkeypatch.setattr(seo, "_check_dns", lambda host: None)  # 공개 도메인 DNS는 테스트에서 조회하지 않음
+    return seo
+
+
+def test_seo_ssrf_more(monkeypatch):
+    import socket
+
+    import httpx
+
+    from app import seo
+
+    for bad in ("http://user:pw@example.com/", "http://example.com@10.0.0.1/", "http://example.com:8080/", "http://example.com:22/",
+                "http://[fe80::1]/", "http://[::ffff:10.0.0.1]/", "http://224.0.0.1/", "http://0.0.0.0/", "http://100.64.0.1/"):
+        try:
+            seo.check_url(bad)
+            raise AssertionError(bad)
+        except seo.SeoError:
+            pass
+    # 도메인이 내부 IP를 가리키면(로컬·VM 실행) 거부
+    monkeypatch.setattr(seo, "ON_WORKERS", False)
+    monkeypatch.setattr(socket, "getaddrinfo", lambda host, port: [(0, 0, 0, "", ("93.184.216.34", 0)), (0, 0, 0, "", ("10.1.2.3", 0))])
+    try:
+        seo.check_url("https://rebind.example.com/")
+        raise AssertionError("내부 IP로 해석되는 도메인 통과")
+    except seo.SeoError:
+        pass
+
+    seen = []
+
+    def handler(req):
+        seen.append(str(req.url))
+        if req.url.path == "/loop":
+            return httpx.Response(302, headers={"location": "/loop"})
+        if req.url.path == "/internal":
+            return httpx.Response(301, headers={"location": "http://169.254.169.254/latest/"})
+        if req.url.path == "/big":
+            return httpx.Response(200, content=iter([b"x" * 1_000_000] * 10))  # 길이 헤더 없이 10MB
+        if req.url.path == "/biglen":
+            return httpx.Response(200, headers={"content-length": "999999999"}, content=b"")
+        return httpx.Response(200, text="<html><title>ok</title></html>")
+    seo = _mock_web(monkeypatch, handler)
+    for path, msg in (("/loop", "리다이렉트"), ("/internal", "내부 주소"), ("/big", "너무 큽니다"), ("/biglen", "너무 큽니다")):
+        seen.clear()
+        try:
+            seo.fetch(f"https://example.com{path}")
+            raise AssertionError(path)
+        except seo.SeoError as e:
+            assert msg in str(e), (path, e)
+        assert not any("169.254" in u for u in seen)
+    out = seo.fetch("https://example.com/")
+    assert out["status"] == 200 and "<title>ok" in out["html"]
