@@ -509,13 +509,20 @@ def excel_template() -> bytes:
 
 
 # ---- 예약 실행 ----
-def rotate_credentials(db: Session):
-    """크론용: 예전 열쇠(APP_SECRET)로 암호화된 네이버 비밀키를 CRED_KEY로 다시 암호화한다."""
-    for cred in db.scalars(select(NaverApiCredential)):
+def rotate_credentials(db: Session, workspace_id: int | None = None) -> int:
+    """예전 열쇠(APP_SECRET)로 암호화된 네이버 비밀키를 CRED_KEY로 다시 암호화한다. 크론(전체)·자격증명 목록(그 조직)에서 부른다."""
+    q = select(NaverApiCredential)
+    if workspace_id is not None:
+        q = q.where(NaverApiCredential.workspace_id == workspace_id)
+    n = 0
+    for cred in db.scalars(q).all():
         new = rotated(cred.secret_key_enc)
         if new:
-            cred.secret_key_enc = new
+            cred.secret_key_enc, n = new, n + 1
     db.commit()
+    if n:
+        print(f"비밀키 열쇠 옮김 {n}개")  # 크론에서 옮겨졌는지 로그로 확인(값은 남기지 않음)
+    return n
 
 
 def run_scheduled_jobs(db: Session):

@@ -22,7 +22,7 @@ from .db import Base, engine, get_db
 from .models import (AccountAccess, AccountGoal, AdAccount, AuditLog, AutoBidRule, BulkJob, BulkJobRow, LoginFailure, Membership, NaverApiCredential,
                      PerformanceDaily, Plan, Subscription, SyncRun, User, Workspace, WorkspaceAdAccount, now, today_kst)
 from .naver import NaverApiError, client_for
-from .security import decrypt, encrypt, hash_password, make_token, read_payload, sign_payload, verify_password
+from .security import decrypt, encrypt, hash_password, make_token, read_payload, rotated, sign_payload, verify_password
 from .sync import sync_account
 
 app = FastAPI(title="네이버 광고 통합 관리 API")
@@ -415,8 +415,11 @@ async def add_credential(body: CredentialIn, m: Membership = Depends(admin_membe
 
 @app.get("/workspaces/{ws_id}/credentials")
 async def list_credentials(m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
-    creds = db.scalars(select(NaverApiCredential).where(NaverApiCredential.workspace_id == m.workspace_id))
-    return _rows(creds, "id", "label", "is_mock")  # 키는 반환하지 않는다
+    bulk.rotate_credentials(db, m.workspace_id)  # 크론이 못 옮긴 것도 관리자가 목록을 열면 옮겨진다
+    creds = db.scalars(select(NaverApiCredential).where(NaverApiCredential.workspace_id == m.workspace_id)).all()
+    # 키는 반환하지 않는다. key: 어느 열쇠로 암호화돼 있는지(CRED_KEY | APP_SECRET)
+    return [{**r, "key": "APP_SECRET" if rotated(c.secret_key_enc) or not os.getenv("CRED_KEY") else "CRED_KEY"}
+            for r, c in zip(_rows(creds, "id", "label", "is_mock"), creds)]
 
 
 class CredentialKeysIn(BaseModel):

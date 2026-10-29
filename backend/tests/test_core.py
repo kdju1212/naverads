@@ -410,6 +410,15 @@ def test_credential_key_rotation(monkeypatch):
     finally:
         db.close()
     assert _fernet(os.environ["CRED_KEY"]).decrypt(rows[0].secret_key_enc.encode()).decode() == "비밀"
+    # 크론이 못 옮겨도 관리자가 자격증명 목록을 열면 그 조직 것은 옮겨지고, 어느 열쇠인지 보인다(키 값은 안 보임)
+    db = SessionLocal()
+    try:
+        db.add(NaverApiCredential(workspace_id=ws, label="예전2", api_key="k", secret_key_enc=old, is_mock=False))
+        db.commit()
+    finally:
+        db.close()
+    listed = c.get(f"/workspaces/{ws}/credentials", headers=owner).json()
+    assert [x["key"] for x in listed] == ["CRED_KEY", "CRED_KEY"] and "비밀" not in json.dumps(listed)
     monkeypatch.setenv("APP_SECRET", "다른 값")             # APP_SECRET이 바뀌어(새어) 있어도 CRED_KEY로 풀린다
     monkeypatch.setenv("APP_ENV", "prod")
     assert decrypt(rows[0].secret_key_enc) == "비밀"
