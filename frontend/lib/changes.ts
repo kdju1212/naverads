@@ -1,5 +1,5 @@
-import { Change } from "./api";
-import { NaverData } from "./naverData";
+import type { Change } from "./api";
+import type { NaverData } from "./naverData";
 
 /** 대량 작업 대상(브라우저 보관본의 행). 서버에는 사본이 없어 계정·이전 값·유형을 같이 보낸다. */
 export interface Target {
