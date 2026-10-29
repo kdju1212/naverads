@@ -134,6 +134,19 @@ class RealNaverClient:
     def list_ad_extensions(self, owner_id):
         return self._req("GET", "/ncc/ad-extensions", params={"ownerId": owner_id})
 
+    def list_channels(self):
+        return self._req("GET", "/ncc/channels")
+
+    # 캠페인·광고그룹 생성: 만들자마자 비용이 나가지 않게 OFF(userLock)로 만든다. shortcut: 명세 기준, 실계정 미확인(파워링크 확인 후 이 줄 갱신)
+    def create_campaign(self, campaign_tp, name, daily_budget):
+        return self._req("POST", "/ncc/campaigns", json={
+            "customerId": int(self.customer_id), "name": name, "campaignTp": campaign_tp, "dailyBudget": daily_budget,
+            "useDailyBudget": True, "deliveryMethod": "STANDARD", "userLock": True})
+
+    def create_adgroup(self, campaign_id, name, channel_id, bid, daily_budget):
+        tp = self._req("GET", f"/ncc/campaigns/{campaign_id}")["campaignTp"]  # 광고그룹 유형은 캠페인 유형을 따른다
+        return self._req("POST", "/ncc/adgroups", json=_adgroup_body(campaign_id, tp, name, channel_id, bid, daily_budget))
+
     def create_ad_extension(self, adgroup_id, ext_type, content):
         # 명세상 생성에 비즈채널·스케줄이 필수라 소유 광고그룹의 채널을 쓰고 매일 24시간 노출로 만든다
         grp = self._req("GET", f"/ncc/adgroups/{adgroup_id}")
@@ -316,6 +329,19 @@ def _rsa_texts(assets) -> dict:
     return out
 
 
+MIN_BID = {"WEB_SITE": 70, "SHOPPING": 50}  # bulk.BID_RANGE 최저값과 같게(입찰가를 비우면 이 값)
+
+
+def _adgroup_body(campaign_id, tp, name, channel_id, bid, daily_budget):
+    return {"nccCampaignId": campaign_id, "name": name, "adgroupType": tp, "pcChannelId": channel_id, "mobileChannelId": channel_id,
+            "bidAmt": bid or MIN_BID[tp], "useDailyBudget": daily_budget is not None, "dailyBudget": daily_budget or 0, "userLock": True}
+
+
+def channel_row(aid, c):
+    return {"ad_account_id": aid, "naver_id": c["nccBusinessChannelId"], "name": c.get("name", ""), "channel_tp": c.get("channelTp", ""),
+            "key": c.get("channelKey", ""), "inspect_status": c.get("inspectStatus", "")}
+
+
 # 브라우저 보관용 행. DB 사본 없이 네이버 ID로만 식별한다
 def campaign_row(aid, c):
     return {"ad_account_id": aid, "naver_id": c["nccCampaignId"], "name": c["name"], "campaign_tp": c["campaignTp"],
@@ -371,6 +397,10 @@ def _seed(cid: str) -> dict:
         s["ad-extensions"][eid] = {"nccAdExtensionId": eid, "ownerId": g, "type": "SUB_LINKS", "userLock": False,
                                    "inspectStatus": "APPROVED",
                                    "adExtension": '[{"name": "신상품", "final": "https://example.com/new"}]'}
+    s["channels"] = {f"bsn-{cid}-site": {"nccBusinessChannelId": f"bsn-{cid}-site", "name": "자사몰", "channelTp": "SITE",
+                                         "channelKey": "https://example.com", "inspectStatus": "APPROVED"},
+                     f"bsn-{cid}-shop": {"nccBusinessChannelId": f"bsn-{cid}-shop", "name": "쇼핑몰", "channelTp": "SHOPPING",
+                                         "channelKey": "shop-example", "inspectStatus": "APPROVED"}}
     g = f"grp-{cid}-sh1"
     s["adgroups"][g] = {"nccAdgroupId": g, "nccCampaignId": sh, "name": "쇼핑그룹1", "adgroupType": "SHOPPING", "userLock": False, "bidAmt": 300}
     for p in (1, 2, 3):
@@ -402,6 +432,25 @@ class MockNaverClient:
     def list_ad_extensions(self, owner_id):
         # .get: 이 키가 생기기 전에 만들어진 Mock 저장소도 있다
         return [dict(e) for e in self.s.get("ad-extensions", {}).values() if e["ownerId"] == owner_id]
+
+    def list_channels(self):
+        return [dict(c) for c in self.s.get("channels", {}).values()]
+
+    def create_campaign(self, campaign_tp, name, daily_budget):
+        nid = f"cmp-{self.customer_id}-new{len(self.s['campaigns']) + 1}"
+        self.s["campaigns"][nid] = {"nccCampaignId": nid, "name": name, "campaignTp": campaign_tp, "userLock": True, "dailyBudget": daily_budget}
+        return dict(self.s["campaigns"][nid])
+
+    def create_adgroup(self, campaign_id, name, channel_id, bid, daily_budget):
+        camp = self.s["campaigns"].get(campaign_id)
+        if camp is None:
+            raise NaverApiError("대상 캠페인이 존재하지 않습니다")
+        ch = self.s.get("channels", {}).get(channel_id)
+        if ch is None or ch["channelTp"] != {"WEB_SITE": "SITE", "SHOPPING": "SHOPPING"}[camp["campaignTp"]]:
+            raise NaverApiError("캠페인 유형에 맞는 비즈채널이 아닙니다")
+        nid = f"grp-{self.customer_id}-new{len(self.s['adgroups']) + 1}"
+        self.s["adgroups"][nid] = {"nccAdgroupId": nid, **_adgroup_body(campaign_id, camp["campaignTp"], name, channel_id, bid, daily_budget)}
+        return dict(self.s["adgroups"][nid])
 
     def create_ad_extension(self, adgroup_id, ext_type, content):
         if adgroup_id not in self.s["adgroups"]:

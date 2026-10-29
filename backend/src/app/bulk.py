@@ -19,8 +19,10 @@ from .naver import NaverApiError, ad_row, client_for, extension_row
 from .security import decrypt
 
 ALLOWED_FIELDS = {
-    "campaign": {"status", "daily_budget"},
-    "adgroup": {"status", "bid_amt"},
+    # 캠페인 create: naver_id는 유형(WEB_SITE|SHOPPING), value는 "이름|일예산"
+    "campaign": {"status", "daily_budget", "create"},
+    # 광고그룹 create: naver_id는 캠페인, value는 "이름|비즈채널ID|입찰가|하루예산"(입찰가·하루예산은 비워도 됨)
+    "adgroup": {"status", "bid_amt", "create"},
     "keyword": {"status", "bid_amt", "create", "delete"},  # create: naver_id는 광고그룹, value는 "키워드" 또는 "키워드|입찰가"
     "ad": {"status", "bid_amt", "delete"},
     "ad_extension": {"status"},  # 파워링크 확장소재: ON/OFF만 (내용 수정은 유형별 구조 확인 후)
@@ -33,6 +35,37 @@ MIN_BUDGET = 50
 EXCEL_HEADER = ["entity_type", "naver_id", "field", "value"]
 # shortcut: 무료 플랜 CPU 한도 안에서 미리보기를 만들려고 정한 값(실측 아님), 큰 엑셀이 필요해지면 실측 후 올리거나 나눠 저장
 MAX_JOB_ROWS = 1000
+
+
+NAME_MAX = 30  # shortcut: 네이버 화면 기준 이름 길이(명세 미확인), 네이버가 거부하면 오류로 보인다
+MAX_BUDGET = 1_000_000_000
+
+
+def _parts(value: str, n: int) -> list[str]:
+    return [x.strip() for x in (value.split("|") + [""] * n)[:n]]
+
+
+def _money(v: str, label: str, lo: int, hi: int) -> str | None:
+    if not v.isdigit() or int(v) % 10 or not lo <= int(v) <= hi:
+        return f"{label}은 {lo:,}~{hi:,}원, 10원 단위"
+    return None
+
+
+def _validate_create(etype: str, nid: str, value: str, product: str | None) -> str | None:
+    if etype == "campaign":
+        name, budget = _parts(value, 2)
+        if nid not in BID_RANGE:
+            return "캠페인 유형은 WEB_SITE(파워링크) 또는 SHOPPING(쇼핑검색)"
+        if not name or len(name) > NAME_MAX or value.count("|") > 1:
+            return f"캠페인 이름은 1~{NAME_MAX}자, | 없이"
+        return _money(budget, "일예산", MIN_BUDGET, MAX_BUDGET)
+    name, channel, bid, budget = _parts(value, 4)
+    if not name or len(name) > NAME_MAX or value.count("|") > 3:
+        return f"광고그룹 이름은 1~{NAME_MAX}자, | 없이"
+    if not channel.startswith("bsn-"):
+        return "비즈채널 ID(bsn-...)가 필요합니다"
+    lo, hi = BID_RANGE[product or "WEB_SITE"]
+    return (bid and _money(bid, "입찰가", lo, hi)) or (budget and _money(budget, "하루예산", MIN_BUDGET, MAX_BUDGET)) or None
 
 
 def _split_new_keyword(value: str) -> tuple[str, str]:
@@ -50,6 +83,8 @@ def _validate(ch: dict) -> str | None:
         return None if value else "제외검색어를 입력하세요" if field == "create" else "광고그룹 ID가 필요합니다"
     if field == "delete":
         return None
+    if field == "create" and etype in ("campaign", "adgroup"):
+        return _validate_create(etype, ch["naver_id"], value, product)
     if field == "create":
         kw, bid = _split_new_keyword(value)
         if product and product != "WEB_SITE":
@@ -155,6 +190,12 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
                     created = client.create_restricted_keyword(row.naver_id, row.after)
                 else:
                     client.delete_restricted_keyword(row.after, row.naver_id)
+            elif row.field == "create" and row.entity_type == "campaign":
+                name, budget = _parts(row.after, 2)
+                created = client.create_campaign(row.naver_id, name, int(budget))
+            elif row.field == "create" and row.entity_type == "adgroup":
+                name, channel, bid, budget = _parts(row.after, 4)
+                created = client.create_adgroup(row.naver_id, name, channel, int(bid) if bid else None, int(budget) if budget else None)
             elif row.field == "create":
                 kw, bid = _split_new_keyword(row.after)
                 bid_amt = int(bid) if bid else BID_RANGE["WEB_SITE"][0]  # 비우면 최저 입찰가(사용자 요청 10/20)
@@ -171,6 +212,9 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
             audit.update(action="CREATE", naver_id=created["nccAdgroupRestrictKwdId"], field="negative_keyword", after=row.after)
         elif row.entity_type == "negative_keyword":
             audit.update(action="DELETE", field="negative_keyword", after=None)
+        elif row.field == "create" and row.entity_type in ("campaign", "adgroup"):
+            nid_key = "nccCampaignId" if row.entity_type == "campaign" else "nccAdgroupId"
+            audit.update(action="CREATE", naver_id=created[nid_key], field=row.entity_type, after=_parts(row.after, 1)[0])
         elif row.field == "create":
             audit.update(action="CREATE", naver_id=created["nccKeywordId"], field="keyword", after=kw)
         elif row.field == "delete":

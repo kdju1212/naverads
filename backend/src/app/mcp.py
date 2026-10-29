@@ -202,10 +202,13 @@ PERIOD = {"since": {"type": "string", "description": "시작일 YYYY-MM-DD"}, "u
           "account_ids": {"type": "array", "items": {"type": "integer"}, "description": "광고 계정 ID들. 비우면 볼 수 있는 전체"}}
 CHANGE = {"type": "object", "required": ["entity_type", "naver_id", "field", "value", "ad_account_id"], "properties": {
     "entity_type": {"enum": ["campaign", "adgroup", "keyword", "ad", "ad_extension", "negative_keyword"]},
-    "naver_id": {"type": "string", "description": "대상 네이버 ID. 키워드·제외검색어 등록(create)이면 광고그룹 ID, 제외검색어 삭제면 제외검색어 ID"},
+    "naver_id": {"type": "string", "description": "대상 네이버 ID. 키워드·제외검색어 등록(create)이면 광고그룹 ID, 광고그룹 create면 캠페인 ID, "
+                  "캠페인 create면 유형(WEB_SITE 파워링크 | SHOPPING 쇼핑검색), 제외검색어 삭제면 제외검색어 ID"},
     "field": {"enum": ["status", "bid_amt", "daily_budget", "create", "delete"],
-              "description": "status: ON/OFF, bid_amt: 입찰가(10원 단위), daily_budget: 캠페인 일예산, create: 키워드·제외검색어 등록, delete: 키워드·소재·제외검색어 삭제"},
-    "value": {"type": "string", "description": "새 값. 키워드 create는 '키워드' 또는 '키워드|입찰가'(입찰가 비우면 70원), "
+              "description": "status: ON/OFF, bid_amt: 입찰가(10원 단위), daily_budget: 캠페인 일예산, create: 캠페인·광고그룹·키워드·제외검색어 등록, delete: 키워드·소재·제외검색어 삭제"},
+    "value": {"type": "string", "description": "새 값. 캠페인 create는 '이름|일예산'(일예산 필수), "
+              "광고그룹 create는 '이름|비즈채널ID|입찰가|하루예산'(비즈채널은 list_channels에서 캠페인 유형에 맞는 것: 파워링크는 SITE, 쇼핑은 SHOPPING. "
+              "입찰가 비우면 최저, 하루예산 비우면 제한 없음). 새 캠페인·광고그룹은 OFF로 만들어진다. 키워드 create는 '키워드' 또는 '키워드|입찰가'(입찰가 비우면 70원), "
               "제외검색어 create는 검색어, 제외검색어 delete는 광고그룹 ID, 그 밖의 delete는 빈 문자열"},
     "ad_account_id": {"type": "integer"},
     "before": {"type": "string", "description": "목록 도구로 확인한 현재 값(같으면 미리보기에서 걸러짐)"},
@@ -288,7 +291,9 @@ TOOLS = [
          "heading": {"type": "string"}, "description": {"type": "string"},
          "links": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "final": {"type": "string"}}}}}},
      "annotations": {"destructiveHint": True}},
-    {"name": "preview_changes", "description": "ON/OFF·입찰가·일예산 변경, 키워드 등록·삭제의 미리보기를 만든다. 아직 네이버에 반영되지 않는다. "
+    {"name": "list_channels", "description": "광고 계정의 비즈채널(사이트·쇼핑몰 등) 목록. 광고그룹을 만들 때 비즈채널 ID를 여기서 고른다.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id"], "properties": ACC}, "annotations": {"readOnlyHint": True}},
+    {"name": "preview_changes", "description": "ON/OFF·입찰가·일예산 변경, 캠페인·광고그룹·키워드 등록, 키워드 삭제의 미리보기를 만든다. 아직 네이버에 반영되지 않는다. "
      "행마다 검증 결과(VALID/INVALID)가 나오니 사용자에게 보여 주고 승인을 받은 뒤 execute_job을 부른다.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "changes"], "properties": {
          **WS, "changes": {"type": "array", "items": CHANGE, "minItems": 1}}}},
@@ -350,6 +355,8 @@ async def _call(db, user: User, name: str, a: dict):
     acc = int(a["ad_account_id"])
     if name == "list_campaigns":
         return await api.naver_objects(acc, "campaigns", m=m, db=db)
+    if name == "list_channels":
+        return await api.naver_objects(acc, "channels", m=m, db=db)
     if name == "list_adgroups":
         return [adgroup_row(acc, g) for g in api._naver(db, m, acc, lambda c: c.list_adgroups(a["campaign_id"]))]
     if name == "list_keywords":

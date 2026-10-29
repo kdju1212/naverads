@@ -565,9 +565,11 @@ async def master_report_file(ws_id: int, account_id: int, job_id: str, authoriza
 
 
 @app.get("/workspaces/{ws_id}/ad-accounts/{account_id}/naver/{kind}")
-async def naver_objects(account_id: int, kind: Literal["campaigns", "adgroups", "ads", "ad-extensions"], ids: str = "",
+async def naver_objects(account_id: int, kind: Literal["campaigns", "adgroups", "ads", "ad-extensions", "channels"], ids: str = "",
                         m: Membership = Depends(membership), db: Session = Depends(get_db)):
-    """캠페인은 전체, 나머지는 ids(쉼표)로. 마스터 보고서에 없는 값(운영 상태·소재 문구·확장소재 내용)을 채운다."""
+    """캠페인·비즈채널은 전체, 나머지는 ids(쉼표)로. 마스터 보고서에 없는 값(운영 상태·소재 문구·확장소재 내용)을 채운다."""
+    if kind == "channels":  # 광고그룹 만들 때 고르는 비즈채널(사이트·쇼핑몰)
+        return [naver.channel_row(account_id, c) for c in _naver(db, m, account_id, lambda c: c.list_channels())]
     if kind == "campaigns":
         return [naver.campaign_row(account_id, c) for c in _naver(db, m, account_id, lambda c: c.list_campaigns())
                 if c["campaignTp"] in ("WEB_SITE", "SHOPPING")]  # MVP 범위 밖 캠페인 유형은 보여 주지 않는다

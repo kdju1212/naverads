@@ -139,6 +139,11 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
     claude.ai는 주소를 미리 채우는 링크가 없어 붙여 넣기는 직접. 진짜 한 번 클릭은 Anthropic 공식 커넥터 목록 등록(심사) 필요
 14-3. 10/29 운영에서 Mock 끔: 서버가 APP_ENV≠dev면 Mock 자격증명 등록 403, 설정의 Mock 체크박스는 next dev에서만. 코드·테스트·로컬 Mock은 그대로
     이미 운영 DB에 있는 Mock 계정은 그대로 동작(할 것 18번 쿼리로 확인)
+14-4. 10/29 캠페인·광고그룹 생성(파워링크·쇼핑검색): 대량 작업 create로 미리보기→실행, OFF로 만들어짐
+    - 캠페인: naver_id=유형(WEB_SITE|SHOPPING), value '이름|일예산'. 광고그룹: naver_id=캠페인, value '이름|비즈채널ID|입찰가|하루예산'
+    - 화면: 캠페인·광고그룹 화면 아래 '새로 만들기'. 비즈채널은 GET .../naver/channels, Claude는 list_channels → preview_changes
+    - [확인 필요] 실계정 미확인(명세 기준 본문). 파워링크 캠페인 1개·광고그룹 1개 만들어 보고, 오류면 네이버 메시지로 naver.py 본문 수정
+      쇼핑검색은 쇼핑몰 비즈채널이 있어야 광고그룹을 만들 수 있음
 15. 다음 달 예산 증액 — 개발 중, 광고주 승인 후 실행하는 흐름으로
 16. 보안 → 10/28 배포(56a8f60, 마이그레이션 0012): 요청 횟수 제한(IP당 1분 600번, Workers ratelimits — 무료 플랜 배포 성공),
     Claude 인가 코드 1회 사용·갱신 토큰 교체(60초 뒤 재사용은 탈취로 보고 Claude 연결 전부 끊기), 설정 'Claude 연결만 끊기', 회원 탈퇴

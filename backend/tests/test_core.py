@@ -298,6 +298,44 @@ def test_keyword_create_delete():
     assert {("CREATE", "keyword"), ("DELETE", "keyword")} <= acts
 
 
+def test_campaign_adgroup_create():
+    owner, ws, acc = _account("cmpc@a.com", "6206")
+    rows = lambda job: [r for a in job["accounts"] for r in a["rows"]]  # noqa: E731
+    job = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [
+        ch(acc, "campaign", "WEB_SITE", "create", "새 파워링크|30000"),
+        ch(acc, "campaign", "SHOPPING", "create", "새 쇼핑|50000"),
+        ch(acc, "campaign", "WEB_SITE", "create", "예산 없음|"),       # 일예산 필수
+        ch(acc, "campaign", "BRAND", "create", "브랜드|10000"),          # 지원 안 하는 유형
+    ]}).json()
+    assert [r["status"] for r in rows(job)] == ["VALID", "VALID", "INVALID", "INVALID"]
+    assert c.post(f"/workspaces/{ws}/bulk-jobs/{job['id']}/execute", headers=owner).json()["status"] == "DONE"
+    camps = {x["name"]: x for x in store("6206")["campaigns"].values()}
+    pl, sh = camps["새 파워링크"], camps["새 쇼핑"]
+    assert pl["userLock"] and pl["dailyBudget"] == 30000 and sh["campaignTp"] == "SHOPPING"  # 새 캠페인은 OFF
+
+    chans = c.get(f"/workspaces/{ws}/ad-accounts/{acc}/naver/channels", headers=owner).json()
+    site = next(x["naver_id"] for x in chans if x["channel_tp"] == "SITE")
+    shop = next(x["naver_id"] for x in chans if x["channel_tp"] == "SHOPPING")
+    grp = lambda cmp, value, product="WEB_SITE": ch(acc, "adgroup", cmp, "create", value, product=product)  # noqa: E731
+    job = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [
+        grp(pl["nccCampaignId"], f"그룹A|{site}|500|20000"),
+        grp(pl["nccCampaignId"], f"그룹B|{site}"),                          # 입찰가·하루예산 비움
+        grp(sh["nccCampaignId"], f"쇼핑그룹|{shop}||", "SHOPPING"),
+        grp(pl["nccCampaignId"], f"채널 틀림|{shop}"),                       # 검증은 통과, 네이버(Mock)가 거부
+        grp(pl["nccCampaignId"], "채널 없음||500"),
+        grp(pl["nccCampaignId"], f"단위|{site}|505"),
+    ]}).json()
+    assert [r["status"] for r in rows(job)] == ["VALID", "VALID", "VALID", "VALID", "INVALID", "INVALID"]
+    assert c.post(f"/workspaces/{ws}/bulk-jobs/{job['id']}/execute", headers=owner).json()["status"] == "PARTIAL"
+    groups = {g["name"]: g for g in store("6206")["adgroups"].values()}
+    a, b, s_ = groups["그룹A"], groups["그룹B"], groups["쇼핑그룹"]
+    assert a["userLock"] and a["bidAmt"] == 500 and a["useDailyBudget"] and a["dailyBudget"] == 20000 and a["pcChannelId"] == site
+    assert b["bidAmt"] == 70 and not b["useDailyBudget"] and s_["adgroupType"] == "SHOPPING" and s_["bidAmt"] == 50
+    assert "채널 틀림" not in groups
+    acts = {(h["action"], h["field"]) for h in c.get(f"/workspaces/{ws}/audit-logs", headers=owner).json()}
+    assert {("CREATE", "campaign"), ("CREATE", "adgroup")} <= acts
+
+
 def test_master_report_limit_clears_and_retries():
     from app.naver import NaverApiError, RealNaverClient
 

@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { BulkBar } from "@/components/BulkBar";
 import { Col, DataTable } from "@/components/DataTable";
+import { CampaignCreate } from "@/components/CreateForms";
 import { DataStatus } from "@/components/DataStatus";
 import { Badge, PageTitle } from "@/components/ui";
 import { fmt } from "@/lib/api";
@@ -25,10 +26,11 @@ export default function CampaignsPage() {
   ];
   return (
     <>
-      <PageTitle desc="선택한 계정의 캠페인을 한 번에 조회하고 ON/OFF·일예산을 대량 변경합니다. 변경은 미리보기 후 실행됩니다.">캠페인</PageTitle>
+      <PageTitle desc="선택한 계정의 캠페인을 한 번에 조회하고 ON/OFF·일예산을 대량 변경하거나 새 캠페인을 만듭니다. 변경은 미리보기 후 실행됩니다.">캠페인</PageTitle>
       <DataStatus data={data} />
       <DataTable rows={rows} cols={cols} selected={sel} onSelect={setSel} loading={data.loading && !rows.length}
         toolbar={<BulkBar entityType="campaign" rows={rows.filter((r) => sel.has(r.id))} numberField={{ field: "daily_budget", label: "일예산" }} />} />
+      <CampaignCreate />
     </>
   );
 }

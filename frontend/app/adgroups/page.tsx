@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { BulkBar } from "@/components/BulkBar";
 import { Col, DataTable } from "@/components/DataTable";
+import { AdGroupCreate } from "@/components/CreateForms";
 import { DataStatus } from "@/components/DataStatus";
 import { usePerf } from "@/components/PerfCheck";
 import { Badge, Button, Card, ErrorText, inputCls, PageTitle } from "@/components/ui";
@@ -48,7 +49,7 @@ export default function AdGroupsPage() {
   ];
   return (
     <>
-      <PageTitle desc="ON/OFF와 기본 입찰가를 여러 계정에 걸쳐 대량 변경합니다.">광고그룹</PageTitle>
+      <PageTitle desc="ON/OFF와 기본 입찰가를 여러 계정에 걸쳐 대량 변경하거나 새 광고그룹을 만듭니다.">광고그룹</PageTitle>
       <DataStatus data={data} />
       <DataTable rows={rows} cols={cols} selected={sel} onSelect={setSel} loading={data.loading && !rows.length}
         toolbar={
@@ -59,6 +60,7 @@ export default function AdGroupsPage() {
           </>
         } />
       <NegativeKeywords groups={rows.filter((r) => sel.has(r.id))} />
+      <AdGroupCreate campaigns={data.campaigns.filter((c) => !product || c.campaign_tp === product)} />
     </>
   );
 }
