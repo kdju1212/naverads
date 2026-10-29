@@ -155,7 +155,8 @@ export async function applyJob(wsId: number, job: Job) {
   for (const acc of job.accounts ?? []) {
     const ok = acc.rows.filter((r) => r.status === "SUCCESS" && r.entity_type in LIST_OF); // 제외검색어는 보관본에 없다
     if (acc.ad_account_id == null || !ok.length) continue;
-    if (ok.some((r) => r.field === "create")) {
+    // 캠페인·광고그룹 삭제는 안의 광고그룹·키워드·소재도 사라지므로 계정을 다시 받는다
+    if (ok.some((r) => r.field === "create" || (r.field === "delete" && (r.entity_type === "campaign" || r.entity_type === "adgroup")))) {
       await ensureAccount(wsId, acc.ad_account_id, true);
       continue;
     }

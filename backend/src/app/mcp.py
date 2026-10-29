@@ -205,7 +205,7 @@ CHANGE = {"type": "object", "required": ["entity_type", "naver_id", "field", "va
     "naver_id": {"type": "string", "description": "대상 네이버 ID. 키워드·제외검색어 등록(create)이면 광고그룹 ID, 광고그룹 create면 캠페인 ID, "
                   "캠페인 create면 유형(WEB_SITE 파워링크 | SHOPPING 쇼핑검색), 제외검색어 삭제면 제외검색어 ID"},
     "field": {"enum": ["status", "bid_amt", "daily_budget", "create", "delete"],
-              "description": "status: ON/OFF, bid_amt: 입찰가(10원 단위), daily_budget: 캠페인 일예산, create: 캠페인·광고그룹·키워드·제외검색어 등록, delete: 키워드·소재·제외검색어 삭제"},
+              "description": "status: ON/OFF, bid_amt: 입찰가(10원 단위), daily_budget: 캠페인 일예산, create: 캠페인·광고그룹·키워드·제외검색어 등록, delete: 캠페인·광고그룹(OFF인 것만, 안의 광고까지 삭제)·키워드·소재·제외검색어 삭제"},
     "value": {"type": "string", "description": "새 값. 캠페인 create는 '이름|일예산'(일예산 필수), "
               "광고그룹 create는 '이름|비즈채널ID|입찰가|하루예산'(비즈채널은 list_channels에서 캠페인 유형에 맞는 것: 파워링크는 SITE, 쇼핑은 MALL. "
               "입찰가 비우면 최저, 하루예산 비우면 제한 없음). 새 캠페인·광고그룹은 OFF로 만들어진다. 키워드 create는 '키워드' 또는 '키워드|입찰가'(입찰가 비우면 70원), "
@@ -293,7 +293,7 @@ TOOLS = [
      "annotations": {"destructiveHint": True}},
     {"name": "list_channels", "description": "광고 계정의 비즈채널(사이트·쇼핑몰 등) 목록. 광고그룹을 만들 때 비즈채널 ID를 여기서 고른다.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id"], "properties": ACC}, "annotations": {"readOnlyHint": True}},
-    {"name": "preview_changes", "description": "ON/OFF·입찰가·일예산 변경, 캠페인·광고그룹·키워드 등록, 키워드 삭제의 미리보기를 만든다. 아직 네이버에 반영되지 않는다. "
+    {"name": "preview_changes", "description": "ON/OFF·입찰가·일예산 변경, 캠페인·광고그룹·키워드 등록, 캠페인·광고그룹·키워드 삭제의 미리보기를 만든다. 아직 네이버에 반영되지 않는다. "
      "행마다 검증 결과(VALID/INVALID)가 나오니 사용자에게 보여 주고 승인을 받은 뒤 execute_job을 부른다.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "changes"], "properties": {
          **WS, "changes": {"type": "array", "items": CHANGE, "minItems": 1}}}},

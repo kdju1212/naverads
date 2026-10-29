@@ -49,13 +49,13 @@ export default function AdGroupsPage() {
   ];
   return (
     <>
-      <PageTitle desc="ON/OFF와 기본 입찰가를 여러 계정에 걸쳐 대량 변경하거나 새 광고그룹을 만듭니다.">광고그룹</PageTitle>
+      <PageTitle desc="ON/OFF와 기본 입찰가를 여러 계정에 걸쳐 대량 변경하거나 새 광고그룹을 만들고, OFF인 광고그룹을 삭제합니다(안의 키워드·소재까지 삭제).">광고그룹</PageTitle>
       <DataStatus data={data} />
       <DataTable rows={rows} cols={cols} selected={sel} onSelect={setSel} loading={data.loading && !rows.length}
         toolbar={
           <>
             {perf.button(rows.filter((r) => sel.has(r.id)))}
-            <BulkBar entityType="adgroup" rows={rows.filter((r) => sel.has(r.id))} numberField={{ field: "bid_amt", label: "입찰가" }} />
+            <BulkBar entityType="adgroup" rows={rows.filter((r) => sel.has(r.id))} numberField={{ field: "bid_amt", label: "입찰가" }} deletable />
             <Button variant="secondary" disabled={rows.length === 0} onClick={download}>다운로드 (엑셀)</Button>
           </>
         } />

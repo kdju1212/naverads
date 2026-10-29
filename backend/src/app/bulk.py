@@ -20,9 +20,10 @@ from .security import decrypt
 
 ALLOWED_FIELDS = {
     # 캠페인 create: naver_id는 유형(WEB_SITE|SHOPPING), value는 "이름|일예산"
-    "campaign": {"status", "daily_budget", "create"},
+    # delete(캠페인·광고그룹)는 안의 광고그룹·키워드·소재까지 지워지므로 실행 시 OFF인 것만 지운다
+    "campaign": {"status", "daily_budget", "create", "delete"},
     # 광고그룹 create: naver_id는 캠페인, value는 "이름|비즈채널ID|입찰가|하루예산"(입찰가·하루예산은 비워도 됨)
-    "adgroup": {"status", "bid_amt", "create"},
+    "adgroup": {"status", "bid_amt", "create", "delete"},
     "keyword": {"status", "bid_amt", "create", "delete"},  # create: naver_id는 광고그룹, value는 "키워드" 또는 "키워드|입찰가"
     "ad": {"status", "bid_amt", "delete"},
     "ad_extension": {"status"},  # 파워링크 확장소재: ON/OFF만 (내용 수정은 유형별 구조 확인 후)
@@ -200,6 +201,8 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
                 kw, bid = _split_new_keyword(row.after)
                 bid_amt = int(bid) if bid else BID_RANGE["WEB_SITE"][0]  # 비우면 최저 입찰가(사용자 요청 10/20)
                 created = client.create_keyword(row.naver_id, kw, bid_amt, False)
+            elif row.field == "delete" and row.entity_type in ("campaign", "adgroup"):
+                client.delete_container(row.entity_type, row.naver_id)
             elif row.field == "delete":
                 (client.delete_keyword if row.entity_type == "keyword" else client.delete_ad)(row.naver_id)
             else:  # 예약 작업은 미리보기와 실행 사이가 길어 그 사이 바뀐 값을 덮어쓰지 않는다

@@ -204,6 +204,13 @@ class RealNaverClient:
     def delete_keyword(self, keyword_id):
         self._delete("/ncc/keywords", keyword_id)
 
+    def delete_container(self, entity_type, naver_id):
+        """캠페인·광고그룹 삭제. 안의 광고까지 사라지므로 켜져 있으면(ON) 지우지 않는다."""
+        res = CONTAINER_RES[entity_type]
+        if not self._req("GET", f"/ncc/{res}/{naver_id}").get("userLock"):
+            raise NaverApiError(ON_NOT_DELETABLE)
+        self._delete(f"/ncc/{res}", naver_id)
+
     def delete_ad(self, ad_id):
         self._delete("/ncc/ads", ad_id)
 
@@ -329,6 +336,8 @@ def _rsa_texts(assets) -> dict:
     return out
 
 
+CONTAINER_RES = {"campaign": "campaigns", "adgroup": "adgroups"}
+ON_NOT_DELETABLE = "ON 상태라 지우지 않았습니다. 먼저 OFF로 바꾼 뒤 삭제하세요"
 MIN_BID = {"WEB_SITE": 70, "SHOPPING": 50}  # bulk.BID_RANGE 최저값과 같게(입찰가를 비우면 이 값)
 
 
@@ -534,6 +543,20 @@ class MockNaverClient:
     def delete_keyword(self, keyword_id):
         if keyword_id in MOCK_FAIL_IDS or self.s["keywords"].pop(keyword_id, None) is None:
             raise NaverApiError("대상 키워드가 존재하지 않습니다")
+
+    def delete_container(self, entity_type, naver_id):
+        obj = self.s[CONTAINER_RES[entity_type]].get(naver_id)
+        if obj is None:
+            raise NaverApiError("대상 객체가 존재하지 않습니다")
+        if not obj.get("userLock"):
+            raise NaverApiError(ON_NOT_DELETABLE)
+        groups = {naver_id} if entity_type == "adgroup" else {g for g, x in self.s["adgroups"].items() if x["nccCampaignId"] == naver_id}
+        for kind in ("keywords", "ads"):  # 네이버처럼 안의 키워드·소재도 같이 지운다
+            for k in [k for k, x in self.s[kind].items() if x["nccAdgroupId"] in groups]:
+                del self.s[kind][k]
+        for g in groups:
+            self.s["adgroups"].pop(g, None)
+        self.s["campaigns"].pop(naver_id, None)
 
     def delete_ad(self, ad_id):
         if self.s["ads"].pop(ad_id, None) is None:

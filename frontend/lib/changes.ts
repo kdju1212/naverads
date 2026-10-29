@@ -4,13 +4,13 @@ import { NaverData } from "./naverData";
 /** 대량 작업 대상(브라우저 보관본의 행). 서버에는 사본이 없어 계정·이전 값·유형을 같이 보낸다. */
 export interface Target {
   naver_id: string; ad_account_id: number; status?: string; bid_amt?: number | null; daily_budget?: number | null;
-  keyword?: string; campaign_tp?: string; adgroup_type?: string; ad_type?: string;
+  keyword?: string; name?: string; campaign_tp?: string; adgroup_type?: string; ad_type?: string;
 }
 
 const PRODUCT_OF: Record<string, string> = { keyword: "WEB_SITE", ad_extension: "WEB_SITE" };
 
 export function changeFor(entityType: string, t: Target, field: string, value: string): Change {
-  const before = field === "status" ? t.status : field === "delete" ? t.keyword
+  const before = field === "status" ? t.status : field === "delete" ? t.keyword ?? t.name
     : field === "bid_amt" ? t.bid_amt : field === "daily_budget" ? t.daily_budget : undefined;
   const product = t.campaign_tp ?? t.adgroup_type
     ?? (t.ad_type ? (t.ad_type === "SHOPPING_PRODUCT_AD" ? "SHOPPING" : "WEB_SITE") : PRODUCT_OF[entityType]);

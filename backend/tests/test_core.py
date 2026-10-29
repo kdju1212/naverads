@@ -336,6 +336,26 @@ def test_campaign_adgroup_create():
     assert {("CREATE", "campaign"), ("CREATE", "adgroup")} <= acts
 
 
+def test_campaign_adgroup_delete_only_when_off():
+    owner, ws, acc = _account("cmpd@a.com", "6207")
+    s = store("6207")
+    s["adgroups"]["grp-6207-pl2"]["userLock"] = True   # OFF 광고그룹
+    s["campaigns"]["cmp-6207-sh"]["userLock"] = True   # OFF 캠페인(쇼핑)
+    job = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [
+        ch(acc, "adgroup", "grp-6207-pl1", "delete"),   # ON → 실패
+        ch(acc, "adgroup", "grp-6207-pl2", "delete"),
+        ch(acc, "campaign", "cmp-6207-sh", "delete"),
+    ]}).json()
+    assert c.post(f"/workspaces/{ws}/bulk-jobs/{job['id']}/execute", headers=owner).json()["status"] == "PARTIAL"
+    rows = {r["naver_id"]: r for a in c.get(f"/workspaces/{ws}/bulk-jobs/{job['id']}", headers=owner).json()["accounts"] for r in a["rows"]}
+    assert rows["grp-6207-pl1"]["status"] == "FAILED" and "ON 상태" in rows["grp-6207-pl1"]["error"]
+    assert "grp-6207-pl1" in s["adgroups"] and "grp-6207-pl2" not in s["adgroups"]
+    assert not any(k["nccAdgroupId"] == "grp-6207-pl2" for k in s["keywords"].values())  # 안의 키워드도 삭제
+    assert "cmp-6207-sh" not in s["campaigns"] and "grp-6207-sh1" not in s["adgroups"] and "ad-6207-sh1" not in s["ads"]
+    acts = {(h["action"], h["field"]) for h in c.get(f"/workspaces/{ws}/audit-logs", headers=owner).json()}
+    assert {("DELETE", "campaign"), ("DELETE", "adgroup")} <= acts
+
+
 def test_master_report_limit_clears_and_retries():
     from app.naver import NaverApiError, RealNaverClient
 
@@ -357,7 +377,7 @@ def test_ad_delete():
     owner, ws, acc = _account("addel@a.com", "6106")
     job = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [
         ch(acc, "ad", "ad-6106-pl1", "delete", product="WEB_SITE"),
-        ch(acc, "adgroup", "grp-6106-pl1", "delete", product="WEB_SITE"),  # 광고그룹 삭제는 허용 안 함
+        ch(acc, "ad_extension", "ext-6106-pl1", "delete"),  # 확장소재 삭제는 대량 작업으로 안 함
     ]}).json()
     assert [r["status"] for a in job["accounts"] for r in a["rows"]] == ["VALID", "INVALID"]
     assert c.post(f"/workspaces/{ws}/bulk-jobs/{job['id']}/execute", headers=owner).json()["status"] == "DONE"

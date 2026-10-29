@@ -26,10 +26,10 @@ export default function CampaignsPage() {
   ];
   return (
     <>
-      <PageTitle desc="선택한 계정의 캠페인을 한 번에 조회하고 ON/OFF·일예산을 대량 변경하거나 새 캠페인을 만듭니다. 변경은 미리보기 후 실행됩니다.">캠페인</PageTitle>
+      <PageTitle desc="선택한 계정의 캠페인을 한 번에 조회하고 ON/OFF·일예산을 대량 변경하거나 새 캠페인을 만들고, OFF인 캠페인을 삭제합니다(안의 광고그룹·키워드·소재까지 삭제). 변경은 미리보기 후 실행됩니다.">캠페인</PageTitle>
       <DataStatus data={data} />
       <DataTable rows={rows} cols={cols} selected={sel} onSelect={setSel} loading={data.loading && !rows.length}
-        toolbar={<BulkBar entityType="campaign" rows={rows.filter((r) => sel.has(r.id))} numberField={{ field: "daily_budget", label: "일예산" }} />} />
+        toolbar={<BulkBar entityType="campaign" rows={rows.filter((r) => sel.has(r.id))} numberField={{ field: "daily_budget", label: "일예산" }} deletable />} />
       <CampaignCreate />
     </>
   );
