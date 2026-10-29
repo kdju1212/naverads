@@ -152,6 +152,13 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
     크론이 10분마다 예전 값을 CRED_KEY로 다시 암호화(rotate_credentials). CRED_KEY 없으면 예전과 같게 동작
     [직접] CRED_KEY 넣기 → 10분 뒤 옮겨졌는지 확인. CRED_KEY는 비밀번호 관리자 등에 따로 보관(잃으면 비밀키 재등록)
     로컬 d1_backup_20261022.sql엔 예전 열쇠로 암호화된 값이 있음 → 필요 없으면 삭제
+14-7. 10/29 출시 전 보안 점검(로컬 수정, 아직 push 안 함)
+    - ROAS 자동운영은 정책상 끔: ROAS_AUTOMATION=1일 때만 크론·지금 실행(기본 꺼짐). 목표 값 저장은 보고서용으로 가능
+    - SEO 점검: 리다이렉트를 한 단계씩 따라가며 주소 검사, 숫자 IP 변형(2130706433·127.1)·.local/.internal 차단
+    - API 응답 보안 헤더(nosniff, 틀 안 넣기 금지), 프론트 frontend/public/_headers(CSP·틀 금지 등)
+    - 네이버 자격증명 키 교체(PUT)·삭제(DELETE, 연결 계정 없을 때) API + 감사 로그. 화면 버튼은 아직 없음
+    - OAuth 코드·갱신 토큰 동시 사용 시 500 대신 invalid_grant
+    - 테스트: 조직 간 격리(API·MCP), 역할별 권한, ROAS 차단, SSRF 우회, 보안 헤더, 토큰 동시 사용
 15. 다음 달 예산 증액 — 개발 중, 광고주 승인 후 실행하는 흐름으로
 16. 보안 → 10/28 배포(56a8f60, 마이그레이션 0012): 요청 횟수 제한(IP당 1분 600번, Workers ratelimits — 무료 플랜 배포 성공),
     Claude 인가 코드 1회 사용·갱신 토큰 교체(60초 뒤 재사용은 탈취로 보고 Claude 연결 전부 끊기), 설정 'Claude 연결만 끊기', 회원 탈퇴

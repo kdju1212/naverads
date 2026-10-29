@@ -617,6 +617,7 @@ def test_account_goal(monkeypatch):
     from app.db import SessionLocal
     from app.naver import MockNaverClient
 
+    monkeypatch.setenv("ROAS_AUTOMATION", "1")  # 정책상 꺼져 있는 기능의 동작 자체를 검증
     owner, ws, acc = _account("goal@a.com", "4006")
     url = f"/workspaces/{ws}/account-goals"
     goal = {"ad_account_id": acc, "roas_target": 300, "max_bid": 1000, "off_cost": 20000}
@@ -895,6 +896,7 @@ def test_goal_guards(monkeypatch):
     from app.db import SessionLocal
     from app.naver import MockNaverClient
 
+    monkeypatch.setenv("ROAS_AUTOMATION", "1")  # 정책상 꺼져 있는 기능의 동작 자체를 검증
     owner, ws, acc = _account("goal3@a.com", "6400")
     c.put(f"/workspaces/{ws}/auto-bids", headers=owner, json={"keywords": [{"ad_account_id": acc, "naver_id": "kwd-6400-11"}],
                                                              "device": "PC", "target_rank": 1, "max_bid": 5000})
@@ -1189,3 +1191,227 @@ def test_sync_in_chunks(monkeypatch):
     assert c.post(f"{url}?offset=1", headers=owner).json()["status"] == "SUCCESS"
     perf = c.get(f"/workspaces/{ws}/performance/accounts", headers=owner).json()[0]
     assert perf["WEB_SITE"]["cost"] > 0 and perf["SHOPPING"]["cost"] > 0  # 두 캠페인 모두 받음
+
+
+# ---------- 보안 점검(10/29): 조직 간 격리·권한·정책 회귀 테스트 ----------
+def _mcp_headers(h):
+    """웹 로그인 헤더의 사용자로 Claude 연결 출입증을 만든다(OAuth 과정은 test_mcp_oauth_and_tools에서 따로 검증)."""
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models import User
+    from app.security import make_token
+
+    me = c.get("/auth/me", headers=h).json()
+    db = SessionLocal()
+    try:
+        u = db.scalar(select(User).where(User.email == me["email"]))
+        return {"Authorization": f"Bearer {make_token(u.id, u.token_version, u.mcp_version, 3600)}"}
+    finally:
+        db.close()
+
+
+def _mcp_call(h, name, **args):
+    r = c.post("/mcp", headers=h, json={"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": name, "arguments": args}})
+    res = r.json()["result"]
+    return json.loads(res["content"][0]["text"]), res["isError"]
+
+
+def test_tenant_isolation_api():
+    a, ws_a, acc_a = _account("iso-a@a.com", "9101")
+    b, ws_b, acc_b = _account("iso-b@b.com", "9102")
+    job_a = c.post(f"/workspaces/{ws_a}/bulk-jobs", headers=a, json={"changes": [
+        ch(acc_a, "keyword", "kwd-9101-11", "bid_amt", "500", before="300", product="WEB_SITE")]}).json()["id"]
+    cred_a = c.get(f"/workspaces/{ws_a}/credentials", headers=a).json()[0]["id"]
+
+    # ① B가 A의 조직 ID를 직접 넣으면 전부 403
+    for path in ("members", "ad-accounts", "credentials", "bulk-jobs", f"bulk-jobs/{job_a}", "audit-logs", "dashboard",
+                 "auto-bids", "account-goals", "performance/accounts", f"ad-accounts/{acc_a}/naver/campaigns",
+                 f"ad-accounts/{acc_a}/naver/channels"):
+        assert c.get(f"/workspaces/{ws_a}/{path}", headers=b).status_code == 403, path
+    assert c.post(f"/workspaces/{ws_a}/bulk-jobs/{job_a}/execute", headers=b).status_code == 403
+    assert c.put(f"/workspaces/{ws_a}/credentials/{cred_a}", headers=b, json={"api_key": "x", "secret_key": "y"}).status_code == 403
+
+    # ② B가 자기 조직 ID에 A의 계정·작업·자격증명 ID를 섞으면 막힌다
+    base = f"/workspaces/{ws_b}"
+    for path in (f"ad-accounts/{acc_a}/naver/campaigns", f"ad-accounts/{acc_a}/naver/channels",
+                 f"ad-accounts/{acc_a}/adgroups/grp-9101-pl1/negative-keywords", f"keyword-tool?account_id={acc_a}&hint=x",
+                 f"performance/accounts?account_ids={acc_a}", f"performance/daily?since=2026-10-01&until=2026-10-07&account_ids={acc_a}",
+                 f"audit-logs?account_id={acc_a}"):
+        assert c.get(f"{base}/{path}", headers=b).status_code == 403, path
+    assert c.post(f"{base}/ad-accounts/{acc_a}/sync", headers=b).status_code == 403
+    assert c.post(f"{base}/ad-accounts/{acc_a}/master-reports?item=Keyword", headers=b).status_code == 403
+    assert c.post(f"{base}/performance/entities", headers=b, json={"ad_account_id": acc_a, "ids": ["kwd-9101-11"]}).status_code == 403
+    assert c.get(f"{base}/bulk-jobs/{job_a}", headers=b).status_code == 404
+    for path in (f"bulk-jobs/{job_a}/execute", f"bulk-jobs/{job_a}/retry-failed"):
+        assert c.post(f"{base}/{path}", headers=b).status_code == 404, path
+    assert c.post(f"{base}/bulk-jobs/{job_a}/schedule", headers=b, json={"scheduled_at": None}).status_code == 404
+    assert c.put(f"{base}/credentials/{cred_a}", headers=b, json={"api_key": "x", "secret_key": "y"}).status_code == 404
+    assert c.delete(f"{base}/credentials/{cred_a}", headers=b).status_code == 404
+    assert c.post(f"{base}/ad-accounts", headers=b, json={"credential_id": cred_a, "customer_id": "9101", "name": "x"}).status_code == 404
+    # 대량 작업에 A의 계정을 넣으면 그 행은 실행 안 되는 행(계정 이름도 안 알려 줌), A의 광고는 그대로
+    job = c.post(f"{base}/bulk-jobs", headers=b, json={"changes": [
+        ch(acc_a, "keyword", "kwd-9101-11", "bid_amt", "900", product="WEB_SITE"),
+        ch(acc_a, "campaign", "cmp-9101-pl", "delete")]}).json()
+    assert {r["status"] for x in job["accounts"] for r in x["rows"]} == {"INVALID"} and all(x["name"] is None for x in job["accounts"])
+    kw = {"keywords": [{"ad_account_id": acc_a, "naver_id": "kwd-9101-11"}], "device": "PC", "target_rank": 1, "max_bid": 5000}
+    assert c.put(f"{base}/auto-bids", headers=b, json=kw).status_code == 403
+    assert c.post(f"{base}/auto-bids/delete", headers=b, json={"keywords": kw["keywords"]}).status_code == 403
+    assert c.post(f"{base}/ad-extensions", headers=b, json={"ad_account_id": acc_a, "adgroup_naver_id": "grp-9101-pl1",
+                                                            "ext_type": "HEADLINE", "heading": "침범"}).status_code == 403
+    assert c.put(f"{base}/account-goals", headers=b, json={"ad_account_id": acc_a, "roas_target": 300, "max_bid": 1000}).status_code == 403
+    assert store("9101")["keywords"]["kwd-9101-11"]["bidAmt"] == 300
+
+
+def test_tenant_isolation_mcp():
+    a, ws_a, acc_a = _account("iso-ma@a.com", "9111")
+    b, ws_b, acc_b = _account("iso-mb@b.com", "9112")
+    mb = _mcp_headers(b)
+    accounts, _ = _mcp_call(mb, "list_ad_accounts")
+    assert [w["id"] for w in accounts] == [ws_b]
+    job_a = c.post(f"/workspaces/{ws_a}/bulk-jobs", headers=a, json={"changes": [
+        ch(acc_a, "keyword", "kwd-9111-11", "bid_amt", "500", before="300", product="WEB_SITE")]}).json()["id"]
+    # A의 조직 ID로
+    for name, args in (("list_campaigns", {"ad_account_id": acc_a}), ("get_performance", {}), ("list_audit_logs", {}),
+                       ("execute_job", {"job_id": job_a}), ("list_auto_bids", {})):
+        data, err = _mcp_call(mb, name, workspace_id=ws_a, **args)
+        assert err and "접근 권한" in data["error"], name
+    # 자기 조직 ID + A의 계정·작업
+    ads_before = len(store("9111")["ads"])
+    for name, args in (("list_campaigns", {"ad_account_id": acc_a}), ("list_channels", {"ad_account_id": acc_a}),
+                       ("list_keywords", {"ad_account_id": acc_a, "adgroup_id": "grp-9111-pl1"}),
+                       ("create_ad_extension", {"ad_account_id": acc_a, "adgroup_id": "grp-9111-pl1", "ext_type": "HEADLINE", "heading": "x"}),
+                       ("create_ad", {"ad_account_id": acc_a, "adgroup_id": "grp-9111-pl1", "headlines": ["x"], "descriptions": ["y"],
+                                      "pc_url": "https://a.com"}),
+                       ("execute_job", {"job_id": job_a}), ("schedule_job", {"job_id": job_a, "scheduled_at": None}),
+                       ("set_auto_bid", {"keywords": [{"ad_account_id": acc_a, "naver_id": "kwd-9111-11"}], "device": "PC",
+                                         "target_rank": 1, "max_bid": 500})):
+        _, err = _mcp_call(mb, name, workspace_id=ws_b, **args)
+        assert err, name
+    prev, _ = _mcp_call(mb, "preview_changes", workspace_id=ws_b, changes=[ch(acc_a, "keyword", "kwd-9111-11", "bid_amt", "900")])
+    assert prev["counts"]["VALID"] == 0
+    assert store("9111")["keywords"]["kwd-9111-11"]["bidAmt"] == 300 and len(store("9111")["ads"]) == ads_before
+
+
+def test_role_permissions():
+    owner, ws, acc1 = _account("role-o@a.com", "9141")
+    cred = c.get(f"/workspaces/{ws}/credentials", headers=owner).json()[0]["id"]
+    acc2 = c.post(f"/workspaces/{ws}/ad-accounts", headers=owner, json={"credential_id": cred, "customer_id": "9142", "name": "y"}).json()["id"]
+    staff = user("role-s@a.com")
+    mid = c.post(f"/workspaces/{ws}/members", headers=owner, json={"email": "role-s@a.com"}).json()["membership_id"]
+    c.put(f"/workspaces/{ws}/members/{mid}/access", headers=owner, json={"ad_account_id": acc1, "level": "EDIT"})
+    c.put(f"/workspaces/{ws}/members/{mid}/access", headers=owner, json={"ad_account_id": acc2, "level": "VIEW"})
+    # 직원(MEMBER)은 관리 기능 불가, OWNER 역할은 줄 수 없다
+    assert c.get(f"/workspaces/{ws}/credentials", headers=staff).status_code == 403
+    assert c.post(f"/workspaces/{ws}/members", headers=staff, json={"email": "role-o@a.com"}).status_code == 403
+    assert c.put(f"/workspaces/{ws}/credentials/{cred}", headers=staff, json={"api_key": "k", "secret_key": "s"}).status_code == 403
+    assert c.delete(f"/workspaces/{ws}/ad-accounts/{acc1}", headers=staff).status_code == 403
+    assert c.post(f"/workspaces/{ws}/members", headers=owner, json={"email": "role-s@a.com", "role": "OWNER"}).status_code == 422
+    # 보기 권한(acc2)으로는 조회만: 변경 행은 미리보기에서 걸러지고 자동입찰·확장소재·소재 등록도 403
+    assert c.get(f"/workspaces/{ws}/ad-accounts/{acc2}/naver/campaigns", headers=staff).status_code == 200
+    job = c.post(f"/workspaces/{ws}/bulk-jobs", headers=staff, json={"changes": [
+        ch(acc2, "campaign", "cmp-9142-pl", "status", "OFF", before="ON", product="WEB_SITE"),
+        ch(acc1, "campaign", "cmp-9141-pl", "status", "OFF", before="ON", product="WEB_SITE")]}).json()
+    assert sorted(r["status"] for x in job["accounts"] for r in x["rows"]) == ["INVALID", "VALID"]
+    kw = {"keywords": [{"ad_account_id": acc2, "naver_id": "kwd-9142-11"}], "device": "PC", "target_rank": 1, "max_bid": 500}
+    assert c.put(f"/workspaces/{ws}/auto-bids", headers=staff, json=kw).status_code == 403
+    assert c.post(f"/workspaces/{ws}/ad-extensions", headers=staff, json={"ad_account_id": acc2, "adgroup_naver_id": "grp-9142-pl1",
+                                                                         "ext_type": "HEADLINE", "heading": "x"}).status_code == 403
+    _, err = _mcp_call(_mcp_headers(staff), "create_ad", workspace_id=ws, ad_account_id=acc2, adgroup_id="grp-9142-pl1",
+                       headlines=["x"], descriptions=["y"], pc_url="https://a.com")
+    assert err
+    # 미리보기 뒤 수정 권한이 빠지면 실행 시점에 다시 막힌다(acc1 EDIT → VIEW)
+    c.put(f"/workspaces/{ws}/members/{mid}/access", headers=owner, json={"ad_account_id": acc1, "level": "VIEW"})
+    out = c.post(f"/workspaces/{ws}/bulk-jobs/{job['id']}/execute", headers=staff).json()
+    assert out["status"] == "FAILED" and store("9141")["campaigns"]["cmp-9141-pl"]["userLock"] is False
+
+
+def test_roas_automation_blocked_by_policy(monkeypatch):
+    from app import bulk
+    from app.db import SessionLocal
+
+    monkeypatch.delenv("ROAS_AUTOMATION", raising=False)
+    owner, ws, acc = _account("roas-off@a.com", "9121")
+    url = f"/workspaces/{ws}/account-goals"
+    assert c.put(url, headers=owner, json={"ad_account_id": acc, "roas_target": 300, "max_bid": 1000}).json() == {"ok": True}
+    assert c.post(f"{url}/{acc}/run", headers=owner).status_code == 403
+    before = {k: (v["bidAmt"], v["userLock"]) for k, v in store("9121")["keywords"].items()}
+    db = SessionLocal()
+    try:
+        bulk.run_all_goals(db)  # 크론도 아무것도 안 한다
+    finally:
+        db.close()
+    assert {k: (v["bidAmt"], v["userLock"]) for k, v in store("9121")["keywords"].items()} == before
+    assert c.get(url, headers=owner).json()[0]["last_run_at"] is None
+
+
+def test_credential_replace_delete():
+    owner, ws, acc = _account("cred-rd@a.com", "9131")
+    cred = c.get(f"/workspaces/{ws}/credentials", headers=owner).json()[0]["id"]
+    r = c.put(f"/workspaces/{ws}/credentials/{cred}", headers=owner, json={"api_key": "new-k", "secret_key": "new-s"})
+    assert r.status_code == 200 and "new-" not in r.text  # 키는 응답에 없다
+    assert c.delete(f"/workspaces/{ws}/credentials/{cred}", headers=owner).status_code == 409  # 연결된 계정이 있으면
+    c.delete(f"/workspaces/{ws}/ad-accounts/{acc}", headers=owner)
+    assert c.delete(f"/workspaces/{ws}/credentials/{cred}", headers=owner).json() == {"ok": True}
+    assert c.get(f"/workspaces/{ws}/credentials", headers=owner).json() == []
+    logs = c.get(f"/workspaces/{ws}/audit-logs", headers=owner).json()
+    assert {"CREDENTIAL_REPLACE", "CREDENTIAL_DELETE"} <= {h["action"] for h in logs} and "new-" not in json.dumps(logs)
+
+
+def test_seo_ssrf_bypasses(monkeypatch):
+    import httpx
+    from app import seo
+
+    for bad in ("http://2130706433/", "http://127.1/", "http://0x7f.0.0.1/", "http://localhost./", "http://a.localhost/",
+                "http://printer.local/", "http://metadata.google.internal/", "http://169.254.169.254/latest/meta-data/",
+                "http://[::ffff:127.0.0.1]/", "http://10.0.0.1/"):
+        try:
+            seo.check_url(bad)
+            raise AssertionError(bad)
+        except seo.SeoError:
+            pass
+    # 공개 주소가 내부 주소로 리다이렉트하면 그 주소는 요청하지 않는다
+    calls = []
+
+    def fake_get(url, **kw):
+        calls.append(url)
+        return httpx.Response(302, headers={"location": "http://169.254.169.254/"}, request=httpx.Request("GET", url))
+    monkeypatch.setattr(seo.httpx, "get", fake_get)
+    try:
+        seo.fetch("https://example.com/")
+        raise AssertionError("리다이렉트 차단 안 됨")
+    except seo.SeoError:
+        pass
+    assert calls == ["https://example.com/"]
+
+
+def test_security_headers():
+    r = c.get("/oauth/authorize")
+    assert r.headers["x-frame-options"] == "DENY" and "frame-ancestors 'none'" in r.headers["content-security-policy"]
+    assert c.get("/auth/me").headers["x-content-type-options"] == "nosniff"
+
+
+def test_oauth_code_concurrent_use():
+    """같은 인가 코드를 동시에 내도(사용 기록 확인과 기록 사이에 끼어듦) 사용 기록은 하나만 남아 출입증은 한 번만 나간다."""
+    from datetime import timedelta
+
+    from sqlalchemy.exc import IntegrityError
+
+    from app.db import SessionLocal
+    from app.models import OAuthUsed, now
+
+    key = "k" * 64
+    db1, db2 = SessionLocal(), SessionLocal()
+    try:
+        assert db1.get(OAuthUsed, key) is None and db2.get(OAuthUsed, key) is None  # 둘 다 "처음 쓰는 코드"로 봄
+        db1.add(OAuthUsed(key=key, used_at=now(), expires_at=now() + timedelta(minutes=5)))
+        db1.commit()
+        db2.add(OAuthUsed(key=key, used_at=now(), expires_at=now() + timedelta(minutes=5)))
+        try:
+            db2.commit()
+            raise AssertionError("두 번째 기록이 성공함")
+        except IntegrityError:
+            db2.rollback()
+    finally:
+        db1.close()
+        db2.close()

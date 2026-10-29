@@ -8,6 +8,8 @@ import httpx
 BLOCKED_HOSTS = ("smartstore.naver.com", "brand.naver.com")
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
 MAX_HTML = 2_000_000
+MAX_REDIRECTS = 5
+INTERNAL_SUFFIXES = (".localhost", ".local", ".internal", ".lan", ".home.arpa")
 
 
 class SeoError(Exception):
@@ -15,9 +17,11 @@ class SeoError(Exception):
 
 
 def check_url(url: str) -> str:
-    """점검할 수 없는 주소면 SeoError. shortcut: 도메인 이름이 내부 IP를 가리키는 경우는 막지 못한다(Workers는 내부망이 없어 운영에선 문제없음)"""
+    """점검할 수 없는 주소면 SeoError.
+    shortcut: 도메인 이름이 내부 IP를 가리키는 경우(DNS 리바인딩 포함)는 막지 못한다 — 운영(Workers)은 사설망·메타데이터 주소에
+    닿지 못해 문제없고, 로컬 실행에서만 해당. 서버를 VM·컨테이너로 옮기면 실제 접속 IP를 검사해야 한다"""
     parts = urlsplit(url.strip())
-    host = (parts.hostname or "").lower()
+    host = (parts.hostname or "").lower().rstrip(".")
     if parts.scheme not in ("http", "https") or not host:
         raise SeoError("http:// 또는 https://로 시작하는 주소를 넣어 주세요")
     if any(host == h or host.endswith("." + h) for h in BLOCKED_HOSTS):
@@ -26,14 +30,22 @@ def check_url(url: str) -> str:
         ip = ipaddress.ip_address(host.strip("[]"))
     except ValueError:
         ip = None
-    if host == "localhost" or (ip and not ip.is_global):
+    # 2130706433·127.1·0x7f.1처럼 숫자로만 된 주소는 내부 IP로 해석될 수 있어 도메인 이름만 받는다
+    numeric = ip is None and not any(ch.isalpha() for ch in host.rsplit(".", 1)[-1])
+    if host == "localhost" or host.endswith(INTERNAL_SUFFIXES) or numeric or (ip and not ip.is_global):
         raise SeoError("내부 주소는 점검할 수 없습니다")
     return url.strip()
 
 
 def _get(url: str):
+    """리다이렉트를 한 단계씩 따라가며 매번 주소를 검사한다(검사 안 한 내부 주소로 넘어가지 않게)."""
     try:
-        return httpx.get(url, headers={"User-Agent": UA}, timeout=15, follow_redirects=True)
+        for _ in range(MAX_REDIRECTS + 1):
+            r = httpx.get(url, headers={"User-Agent": UA}, timeout=15)
+            if not (r.is_redirect and "location" in r.headers):
+                return r
+            url = check_url(str(r.url.join(r.headers["location"])))
+        return None
     except httpx.HTTPError:
         return None
 
@@ -43,7 +55,8 @@ def fetch(url: str) -> dict:
     if r is None:
         raise SeoError("페이지에 접속하지 못했습니다")
     final = str(r.url)
-    check_url(final)  # 단축 주소 등이 스마트스토어로 넘어가는 경우도 막는다
+    # Workers의 httpx(JS fetch)는 리다이렉트를 스스로 따라갈 수 있어 최종 주소도 다시 검사한다
+    check_url(final)
     origin = "{0.scheme}://{0.netloc}".format(urlsplit(final))
     robots = _get(origin + "/robots.txt")
     robots_txt = robots.text[:100_000] if robots is not None and robots.status_code == 200 else None

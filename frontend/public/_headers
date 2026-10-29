@@ -1,0 +1,9 @@
+# Cloudflare Workers 정적 자산 응답 헤더(빌드 때 out/로 복사됨).
+# 로그인 토큰이 localStorage에 있어 스크립트 주입을 막는 게 핵심: 외부 스크립트 금지, API 외 주소로 데이터 전송 금지.
+# script-src의 'unsafe-inline'은 Next 정적 내보내기의 인라인 부트스트랩 스크립트 때문(nonce를 쓰려면 서버 렌더링 필요)
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; font-src 'self' data: https://cdn.jsdelivr.net; img-src 'self' data: blob:; connect-src 'self' https://naverads-api.djkim0509.workers.dev; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()

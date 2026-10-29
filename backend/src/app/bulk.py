@@ -6,6 +6,7 @@
 다른 광고주의 ID를 섞어 보내도 네이버가 거부한다."""
 import io
 import json
+import os
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import HTTPException
@@ -533,6 +534,12 @@ def run_scheduled_jobs(db: Session):
 
 
 # ---- 계정 목표 ROAS ----
+# MVP 정책: ROAS는 보고서·분석·추천용이고 ROAS로 입찰가·상태를 자동으로 바꾸지 않는다.
+# 코드는 남겨 두되 ROAS_AUTOMATION=1일 때만 실행(크론·지금 실행 모두). 정책이 바뀌기 전엔 켜지 말 것
+def roas_automation_on() -> bool:
+    return os.getenv("ROAS_AUTOMATION") == "1"
+
+
 GOAL_RUN_HOUR = 9  # 어제 통계가 다 쌓인 뒤 하루 한 번(한국 시간)
 GOAL_MIN_CLICKS = 10  # 이보다 클릭이 적은 키워드는 평균이 흔들려 그대로 둔다
 
@@ -638,6 +645,8 @@ def run_goal_step(db: Session, g: AccountGoal, start: bool = False) -> bool:
 
 def run_all_goals(db: Session):
     """크론용: 할 일이 있는 첫 목표 하나만 한 단계 진행(무료 플랜 호출 한도). 실패해도 다음 크론에서 다른 목표로 넘어간다."""
+    if not roas_automation_on():
+        return
     for g in db.scalars(select(AccountGoal).where(AccountGoal.enabled.is_(True)).order_by(AccountGoal.id)):
         try:
             if run_goal_step(db, g):

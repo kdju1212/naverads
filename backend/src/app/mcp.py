@@ -12,6 +12,7 @@ from urllib.parse import urlencode, urlparse
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 
 from . import bulk, main as api
 from .access import membership_of, user_from_header
@@ -189,7 +190,11 @@ async def token(request: Request):
             return JSONResponse({"error": "unsupported_grant_type"}, 400)
         if not user:
             return bad
-        db.commit()
+        try:
+            db.commit()  # 같은 토큰을 동시에 내면 사용 기록(기본키)이 겹쳐 한쪽만 성공한다
+        except IntegrityError:
+            db.rollback()
+            return bad
         return _tokens(user)
     finally:
         db.close()

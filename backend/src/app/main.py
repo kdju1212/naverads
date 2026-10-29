@@ -27,6 +27,17 @@ from .sync import sync_account
 app = FastAPI(title="네이버 광고 통합 관리 API")
 # 인증은 쿠키가 아닌 Bearer 토큰이라 모든 출처 허용해도 다른 사이트가 토큰을 쓸 수 없다
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+SECURITY_HEADERS = {"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+                    # Claude 연결 로그인 화면(HTML)을 다른 사이트가 틀 안에 넣어 클릭을 유도하지 못하게
+                    "X-Frame-Options": "DENY", "Content-Security-Policy": "frame-ancestors 'none'"}
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    res = await call_next(request)
+    for k, v in SECURITY_HEADERS.items():
+        res.headers.setdefault(k, v)
+    return res
 # 로컬(SQLite)은 create_all, Cloudflare D1은 migrations/*.sql 로 스키마 관리
 if engine is not None:
     Base.metadata.create_all(engine)
@@ -398,6 +409,42 @@ async def add_credential(body: CredentialIn, m: Membership = Depends(admin_membe
 async def list_credentials(m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
     creds = db.scalars(select(NaverApiCredential).where(NaverApiCredential.workspace_id == m.workspace_id))
     return _rows(creds, "id", "label", "is_mock")  # 키는 반환하지 않는다
+
+
+class CredentialKeysIn(BaseModel):
+    api_key: str
+    secret_key: str
+
+
+@app.put("/workspaces/{ws_id}/credentials/{cred_id}")
+async def replace_credential(cred_id: int, body: CredentialKeysIn, m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
+    """키가 샜거나 네이버에서 재발급했을 때 같은 자격증명의 키만 바꾼다(연결된 계정은 그대로)."""
+    cred = _credential(db, m, cred_id)
+    if not body.api_key.strip() or not body.secret_key.strip():
+        raise HTTPException(400, "API Key와 Secret Key를 입력하세요")
+    cred.api_key, cred.secret_key_enc = body.api_key.strip(), encrypt(body.secret_key.strip())
+    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, action="CREDENTIAL_REPLACE", field="credential", naver_id=str(cred.id)))
+    db.commit()
+    return {"id": cred.id, "label": cred.label, "is_mock": cred.is_mock}  # 키는 반환하지 않는다
+
+
+@app.delete("/workspaces/{ws_id}/credentials/{cred_id}")
+async def delete_credential(cred_id: int, m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
+    cred = _credential(db, m, cred_id)
+    if db.scalar(select(WorkspaceAdAccount.id).where(WorkspaceAdAccount.credential_id == cred.id, WorkspaceAdAccount.status == "CONNECTED")):
+        raise HTTPException(409, "이 자격증명으로 연결된 광고 계정이 있습니다. 계정 연결을 먼저 해제하세요")
+    db.execute(delete(WorkspaceAdAccount).where(WorkspaceAdAccount.credential_id == cred.id))  # 해제된 연결 기록(키 참조)도 같이
+    db.delete(cred)
+    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, action="CREDENTIAL_DELETE", field="credential", naver_id=str(cred_id)))
+    db.commit()
+    return {"ok": True}
+
+
+def _credential(db: Session, m: Membership, cred_id: int) -> NaverApiCredential:
+    cred = db.get(NaverApiCredential, cred_id)
+    if not cred or cred.workspace_id != m.workspace_id:
+        raise HTTPException(404, "자격증명을 찾을 수 없습니다")
+    return cred
 
 
 class ConnectIn(BaseModel):
@@ -912,6 +959,8 @@ async def delete_account_goal(account_id: int, m: Membership = Depends(membershi
 @app.post("/workspaces/{ws_id}/account-goals/{account_id}/run")
 async def run_account_goal(account_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
     """지금 실행: 오늘 실행을 새로 시작(진행 중이면 이어서)하고 한 단계만 돈다. 나머지는 10분마다 크론이 이어 간다."""
+    if not bulk.roas_automation_on():
+        raise HTTPException(403, "ROAS 기준 자동 입찰 변경은 지금 정책상 쓰지 않습니다(ROAS는 보고서·추천용)")
     g = _goal(db, m, account_id)
     if g is None:
         raise HTTPException(404, "목표가 없습니다")
