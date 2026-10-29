@@ -9,7 +9,7 @@ import { useApp } from "@/lib/store";
 import { useFetch } from "@/lib/useFetch";
 
 const digits = (v: string) => v.replace(/[^0-9]/g, "");
-const CHANNEL_TP: Record<string, string> = { WEB_SITE: "SITE", SHOPPING: "SHOPPING" };
+const CHANNEL_TP: Record<string, string> = { WEB_SITE: "SITE", SHOPPING: "MALL" }; // 쇼핑몰 채널은 MALL(실계정 10/29)
 
 /** 등록 작업 미리보기를 만들고 작업 화면으로 넘긴다(실행·예약은 거기서). */
 function usePreview() {

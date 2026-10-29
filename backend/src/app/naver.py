@@ -399,7 +399,7 @@ def _seed(cid: str) -> dict:
                                    "adExtension": '[{"name": "신상품", "final": "https://example.com/new"}]'}
     s["channels"] = {f"bsn-{cid}-site": {"nccBusinessChannelId": f"bsn-{cid}-site", "name": "자사몰", "channelTp": "SITE",
                                          "channelKey": "https://example.com", "inspectStatus": "APPROVED"},
-                     f"bsn-{cid}-shop": {"nccBusinessChannelId": f"bsn-{cid}-shop", "name": "쇼핑몰", "channelTp": "SHOPPING",
+                     f"bsn-{cid}-shop": {"nccBusinessChannelId": f"bsn-{cid}-shop", "name": "쇼핑몰", "channelTp": "MALL",
                                          "channelKey": "shop-example", "inspectStatus": "APPROVED"}}
     g = f"grp-{cid}-sh1"
     s["adgroups"][g] = {"nccAdgroupId": g, "nccCampaignId": sh, "name": "쇼핑그룹1", "adgroupType": "SHOPPING", "userLock": False, "bidAmt": 300}
@@ -446,7 +446,7 @@ class MockNaverClient:
         if camp is None:
             raise NaverApiError("대상 캠페인이 존재하지 않습니다")
         ch = self.s.get("channels", {}).get(channel_id)
-        if ch is None or ch["channelTp"] != {"WEB_SITE": "SITE", "SHOPPING": "SHOPPING"}[camp["campaignTp"]]:
+        if ch is None or ch["channelTp"] != {"WEB_SITE": "SITE", "SHOPPING": "MALL"}[camp["campaignTp"]]:
             raise NaverApiError("캠페인 유형에 맞는 비즈채널이 아닙니다")
         nid = f"grp-{self.customer_id}-new{len(self.s['adgroups']) + 1}"
         self.s["adgroups"][nid] = {"nccAdgroupId": nid, **_adgroup_body(campaign_id, camp["campaignTp"], name, channel_id, bid, daily_budget)}

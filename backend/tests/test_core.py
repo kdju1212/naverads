@@ -315,7 +315,7 @@ def test_campaign_adgroup_create():
 
     chans = c.get(f"/workspaces/{ws}/ad-accounts/{acc}/naver/channels", headers=owner).json()
     site = next(x["naver_id"] for x in chans if x["channel_tp"] == "SITE")
-    shop = next(x["naver_id"] for x in chans if x["channel_tp"] == "SHOPPING")
+    shop = next(x["naver_id"] for x in chans if x["channel_tp"] == "MALL")
     grp = lambda cmp, value, product="WEB_SITE": ch(acc, "adgroup", cmp, "create", value, product=product)  # noqa: E731
     job = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [
         grp(pl["nccCampaignId"], f"그룹A|{site}|500|20000"),

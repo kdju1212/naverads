@@ -207,7 +207,7 @@ CHANGE = {"type": "object", "required": ["entity_type", "naver_id", "field", "va
     "field": {"enum": ["status", "bid_amt", "daily_budget", "create", "delete"],
               "description": "status: ON/OFF, bid_amt: 입찰가(10원 단위), daily_budget: 캠페인 일예산, create: 캠페인·광고그룹·키워드·제외검색어 등록, delete: 키워드·소재·제외검색어 삭제"},
     "value": {"type": "string", "description": "새 값. 캠페인 create는 '이름|일예산'(일예산 필수), "
-              "광고그룹 create는 '이름|비즈채널ID|입찰가|하루예산'(비즈채널은 list_channels에서 캠페인 유형에 맞는 것: 파워링크는 SITE, 쇼핑은 SHOPPING. "
+              "광고그룹 create는 '이름|비즈채널ID|입찰가|하루예산'(비즈채널은 list_channels에서 캠페인 유형에 맞는 것: 파워링크는 SITE, 쇼핑은 MALL. "
               "입찰가 비우면 최저, 하루예산 비우면 제한 없음). 새 캠페인·광고그룹은 OFF로 만들어진다. 키워드 create는 '키워드' 또는 '키워드|입찰가'(입찰가 비우면 70원), "
               "제외검색어 create는 검색어, 제외검색어 delete는 광고그룹 ID, 그 밖의 delete는 빈 문자열"},
     "ad_account_id": {"type": "integer"},
