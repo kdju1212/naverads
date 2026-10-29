@@ -422,6 +422,26 @@ def test_credential_key_rotation(monkeypatch):
     monkeypatch.setenv("APP_SECRET", "다른 값")             # APP_SECRET이 바뀌어(새어) 있어도 CRED_KEY로 풀린다
     monkeypatch.setenv("APP_ENV", "prod")
     assert decrypt(rows[0].secret_key_enc) == "비밀"
+    monkeypatch.setenv("APP_ENV", "dev")
+    monkeypatch.delenv("APP_SECRET", raising=False)  # 로그인 토큰을 다시 쓰려고 원래 값으로
+    # 어느 열쇠로도 안 풀리면(열쇠를 잃음) 목록이 멈추지 않고 UNREADABLE로 보인다
+    monkeypatch.setenv("CRED_KEY", Fernet.generate_key().decode())
+    r = c.get(f"/workspaces/{ws}/credentials", headers=owner)
+    assert r.status_code == 200 and [x["key"] for x in r.json()] == ["UNREADABLE", "UNREADABLE"]
+    # 예전 열쇠를 CRED_KEY_OLD로 같이 넣으면 계속 풀리고, 목록을 열면 새 열쇠로 옮겨진다
+    old_key, new_key = os.environ["CRED_KEY"], Fernet.generate_key().decode()
+    monkeypatch.setenv("CRED_KEY_OLD", old_key)
+    monkeypatch.setenv("CRED_KEY", new_key)
+    db = SessionLocal()
+    try:
+        db.add(NaverApiCredential(workspace_id=ws, label="열쇠교체", api_key="k", secret_key_enc=_fernet(old_key).encrypt(b"s3").decode(), is_mock=False))
+        db.commit()
+    finally:
+        db.close()
+    keys = [x["key"] for x in c.get(f"/workspaces/{ws}/credentials", headers=owner).json()]
+    assert keys == ["UNREADABLE", "UNREADABLE", "CRED_KEY"]  # 옮긴 뒤라 CRED_KEY
+    monkeypatch.delenv("CRED_KEY_OLD")
+    assert [x["key"] for x in c.get(f"/workspaces/{ws}/credentials", headers=owner).json()][-1] == "CRED_KEY"
 
 
 def test_master_report_limit_clears_and_retries():

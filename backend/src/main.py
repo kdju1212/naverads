@@ -48,7 +48,7 @@ class Default(WorkerEntrypoint):
     def _bind(self):
         os.environ.setdefault("APP_SECRET", self.env.APP_SECRET)  # Workers는 os.environ을 채우지 않는다
         # 설정 전엔 없다 → Google 로그인만 "설정 전" 안내, CRED_KEY가 없으면 비밀키는 APP_SECRET 열쇠로(security.py)
-        for k in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "CRED_KEY"):
+        for k in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "CRED_KEY", "CRED_KEY_OLD"):
             if v := getattr(self.env, k, None):
                 os.environ.setdefault(k, str(v))
         app_db.bind_d1(self.env.DB)

@@ -94,10 +94,17 @@ def read_payload(token: str, kind: str) -> dict | None:
 
 
 # 네이버 비밀키 암호화 열쇠는 CRED_KEY(로그인 서명용 APP_SECRET과 따로). 둘 중 하나만 새서는 비밀키를 풀 수 없다.
-# CRED_KEY가 없거나 아직 옮기지 않은 예전 값은 APP_SECRET 열쇠로 푼다(크론이 rotate로 옮긴다)
+# 열쇠 교체: 지금 CRED_KEY를 CRED_KEY_OLD로 옮겨 넣고 새 값을 CRED_KEY로 → 목록 조회·크론이 새 열쇠로 옮김 → 모두 CRED_KEY인지
+# 확인한 뒤에만 CRED_KEY_OLD를 지운다(예전 열쇠 없이 바꾸면 저장된 비밀키를 못 푼다 — 10/29 장애)
+KEY_NAMES = ("CRED_KEY", "CRED_KEY_OLD", "APP_SECRET")
+
+
+def _secrets() -> list[tuple[str, str]]:
+    return [(n, os.getenv(n, "") if n != "APP_SECRET" else _secret()) for n in KEY_NAMES if n == "APP_SECRET" or os.getenv(n)]
+
+
 def _keys() -> MultiFernet:
-    cred = os.getenv("CRED_KEY", "")
-    return MultiFernet(([_fernet(cred)] if cred else []) + [_fernet(_secret())])
+    return MultiFernet([_fernet(v) for _, v in _secrets()])
 
 
 def encrypt(s: str) -> str:
@@ -108,13 +115,19 @@ def decrypt(s: str) -> str:
     return _keys().decrypt(s.encode()).decode()
 
 
+def key_of(s: str) -> str:
+    """암호문을 푸는 열쇠 이름: CRED_KEY | CRED_KEY_OLD | APP_SECRET | UNREADABLE(어느 열쇠로도 안 풀림 — 열쇠를 잃음)."""
+    for name, secret in _secrets():
+        try:
+            _fernet(secret).decrypt(s.encode())
+            return name
+        except InvalidToken:
+            pass
+    return "UNREADABLE"
+
+
 def rotated(s: str) -> str | None:
-    """CRED_KEY로 다시 암호화한 값. 이미 CRED_KEY로 돼 있거나 CRED_KEY가 없으면 None."""
-    cred = os.getenv("CRED_KEY", "")
-    if not cred:
+    """CRED_KEY로 다시 암호화한 값. 이미 CRED_KEY로 돼 있거나, CRED_KEY가 없거나, 풀 수 없으면 None(그대로 둠)."""
+    if not os.getenv("CRED_KEY") or key_of(s) not in ("CRED_KEY_OLD", "APP_SECRET"):
         return None
-    try:
-        _fernet(cred).decrypt(s.encode())
-        return None
-    except InvalidToken:
-        return _keys().rotate(s.encode()).decode()
+    return _keys().rotate(s.encode()).decode()

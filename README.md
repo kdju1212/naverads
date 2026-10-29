@@ -30,3 +30,5 @@ uv run pywrangler deploy                                          # 배포
 ```
 Secret: `npx wrangler secret put APP_SECRET` (설정 완료).
 `CRED_KEY`: 네이버 비밀키 암호화 열쇠(APP_SECRET과 따로). 잃어버리면 저장된 비밀키를 못 풀어 다시 등록해야 하니 따로 보관.
+CRED_KEY 교체 순서(예전 열쇠 없이 바꾸면 비밀키를 못 풂): ① 지금 값을 `CRED_KEY_OLD`로 넣기 ② 새 값을 `CRED_KEY`로 넣기
+③ 관리자가 설정을 열거나 크론이 돌면 새 열쇠로 옮겨짐 — 설정의 자격증명 목록 응답 `key`가 모두 `CRED_KEY`인지 확인 ④ 그 뒤에만 `CRED_KEY_OLD` 삭제.
