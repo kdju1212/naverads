@@ -231,7 +231,8 @@ function MyAccount() {
         <summary className="cursor-pointer text-sm text-faint">알아두기</summary>
         <ul className="mt-2 list-disc pl-5 text-sm">
           <li>Claude는 내가 속한 조직·담당 계정만 봅니다. 볼 수 있는 범위는 이 앱의 권한과 같습니다.</li>
-          <li><strong>Claude는 광고를 직접 바꾸지 못합니다.</strong> 입찰가·상태·예산 변경은 Claude가 만든 미리보기를 &quot;작업 결과&quot;에서, 소재·확장소재·자동입찰은 &quot;승인 대기&quot;에서 직접 확인하고 실행합니다.</li>
+          <li>입찰가·소재 등 변경은 Claude가 먼저 미리보기를 보여 주고, 승인해야만 실행(또는 예약)됩니다.</li>
+          <li><strong>Claude 화면에서 실행·예약 도구(execute_job·schedule_job)는 &quot;항상 허용&quot;으로 두지 마세요.</strong> 그러면 묻지 않고 바로 광고에 반영될 수 있습니다.</li>
           <li>Claude에게 &quot;내 광고 계정 보여줘&quot;, &quot;캠페인 목록 보여줘&quot;처럼 말하면 됩니다.</li>
           <li>연결은 7일 동안 쓰지 않으면 끊깁니다. 끊기면 Claude 커넥터 화면에서 &quot;연결&quot;을 다시 누르세요.</li>
           <li>Google로 가입했다면 로그인 화면에서도 Google로 로그인하세요.</li>
