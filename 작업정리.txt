@@ -7,24 +7,16 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
 ※ 10/27 이전의 자세한 기록(날짜별 확인 내용·작업 번호)은 git 이력의 이전 작업정리.txt에 있음 (git log -p -- 작업정리.txt)
 
 
-■ ★ 다음에 이어서 할 것 (10/30 새벽 기준) ★
+■ ★ 다음에 이어서 할 것 (10/30 기준) ★
 ----------------------------------------------------------------
-[지금 상태] MCP 서버 승인 절차(14-10)가 로컬에만 있음 — 커밋·push 안 함(git status로 확인)
-  바뀐 파일: backend/src/app/{main,mcp,models}.py, backend/tests/test_core.py, backend/migrations/0013_approval_requests.sql(새 파일),
-            frontend/app/approvals/(새 화면), frontend/components/{Shell,ui}.tsx, frontend/app/{history,settings}/page.tsx
-  검증: 백엔드 테스트 58개·프론트 9개 통과, 타입 검사·빌드 통과. 승인 화면은 브라우저로 아직 안 봄
-
-[순서대로 — 순서 바꾸면 안 됨]
-  1) Cloudflare 다시 로그인: backend 폴더에서 npx wrangler login
-     (10/30 운영 DB 접근이 "7403 권한 없음"으로 실패 — 로그인 만료로 보임)
-  2) 운영 DB에 새 표 추가(반드시 push보다 먼저): backend 폴더에서 npx wrangler d1 migrations apply naverads --remote
-     → 0013_approval_requests(새 표만, 기존 데이터 영향 없음). 안 하고 push하면 Claude의 소재·자동입찰 요청이 오류
-  3) 커밋·push → 배포(4분쯤)
-  4) 배포 확인
-     - https://naverads-api.djkim0509.workers.dev/health → roas_automation:false, cred_key_loaded:true
-     - 웹 메뉴 "작업 > 승인 대기" 화면이 뜨는지
-     - Claude로 확장소재 하나 요청 → 승인 대기에 나오는지 → (실계정이라 거절로 확인하거나, OFF 테스트 캠페인에서 승인)
-     - Claude로 execute_job → 실행 안 되고 작업 화면 링크만 오는지
+[지금 상태] MCP 서버 승인 절차(14-10) 10/30 배포 완료(030b4d4, 마이그레이션 0013 운영 DB 적용 후 push)
+  확인됨: /health → roas_automation:false, cred_key_loaded:true / 승인 API 미로그인 401(배포 전 404) / 웹 /approvals 200
+  10/30 김동주 계정 시험(OFF 캠페인 자하라밤_브랜드 광고그룹) 완료:
+     - Claude로 확장소재(추가제목) 요청 → 실행 안 되고 승인 요청 #1(PENDING)만 생성
+     - Claude로 execute_job → 실행 안 되고 작업 화면 링크만 옴
+     - 웹 승인 대기에서 #1 거절 → 감사 로그 APPROVAL_REQUEST·APPROVAL_REJECT, 실제 등록(CREATE) 없음
+  남은 것: Claude 커넥터 도구 설명이 예전 것("바로 실행")이고 get_approval이 목록에 없음 → 커넥터 다시 연결하면 반영될 것
+  참고: wrangler 4.156은 migrations apply에 -y 옵션 없음(! 로 실행하면 확인 질문 없이 진행)
 
 [그 뒤 남은 출시 차단 항목]
   - 광고주별 지출·입찰 상한(수동·Claude로 입찰가를 70원→10만 원 한 번에 올릴 수 있음, 급상승 방지는 자동입찰에만 있음)
@@ -42,7 +34,7 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
 - 배포: main에 push하면 Cloudflare Workers Builds가 프론트(naverads)·백엔드(naverads-api) 자동 배포
   GitHub 커밋의 Workers Builds 두 개가 성공한 뒤 확인 (프론트가 먼저 뜨면 잠깐 "Not Found" → 새로고침)
 - DB 변경은 자동 배포 안 됨 → push 전에 backend 폴더에서: npx wrangler d1 migrations apply naverads --remote
-  (0012까지 적용 완료, 10/28)
+  (0013까지 적용 완료, 10/30)
 - 디버깅: npx wrangler tail naverads-api --format json / DB 읽기: npx wrangler d1 execute naverads --remote --command "SELECT ..."
 - 무료 플랜만 사용: 요청 1번에 외부 호출+D1 쿼리 50번, CPU 10ms → 대량 작업은 5행씩 나눠 실행, 크론도 조금씩 나눠 진행
 - 광고 데이터(캠페인~확장소재)는 서버 DB에 없음: 브라우저(IndexedDB)가 네이버 마스터 보고서로 받아 보관(7일, 화면 "새로고침")
@@ -201,7 +193,7 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
 14-9. 10/29 CRED_KEY 장애: CRED_KEY를 예전 값 없이 새 값으로 바꾸자 저장된 비밀키를 못 풀어 네이버 호출 502(약 5분)
     → 처음 값으로 되돌려 복구. 저장된 비밀키는 처음 CRED_KEY로만 풀림(APP_SECRET으론 안 풀림, 경위 미확정)
     재발 방지: CRED_KEY_OLD 지원(README 교체 순서), 못 푸는 키는 목록에서 UNREADABLE로 표시하고 옮기지 않음
-14-10. 10/30 MCP 서버 승인 절차(로컬, 배포 전 마이그레이션 0013 필요)
+14-10. 10/30 MCP 서버 승인 절차 → 10/30 배포(030b4d4, 마이그레이션 0013)
     - Claude는 광고를 직접 못 바꿈: execute_job·schedule_job은 웹 작업 화면 링크만(예약 취소는 허용)
     - create_ad·create_ad_extension·set/delete/run 자동입찰은 승인 요청(approval_requests, 30분 만료, 내용 해시)만 만들고
       웹 '승인 대기'(/approvals)에서 요청자 본인·관리자가 승인하면 저장된 내용 그대로 승인한 사람 권한으로 실행(한 번만, 거절·만료 불가)
