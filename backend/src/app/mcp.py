@@ -9,15 +9,15 @@ import secrets
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlencode, urlparse
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 
 from . import bulk, main as api
-from .access import membership_of, user_from_header
-from .db import SessionLocal
-from .models import OAuthUsed, User, now
+from .access import ADMIN_ROLES, accessible_account_ids, membership, membership_of, user_from_header
+from .db import SessionLocal, get_db
+from .models import ApprovalRequest, AuditLog, Membership, OAuthUsed, User, now
 from .naver import _status, ad_row, adgroup_row, extension_row
 from .security import make_token, read_payload, sign_payload, verify_password
 
@@ -265,32 +265,33 @@ TOOLS = [
      "annotations": {"readOnlyHint": True}},
     {"name": "list_auto_bids", "description": "조직의 자동입찰 규칙 목록(기기·목표 순위·최대 입찰가·마지막 실행 결과).",
      "inputSchema": {"type": "object", "required": ["workspace_id"], "properties": WS}, "annotations": {"readOnlyHint": True}},
-    {"name": "set_auto_bid", "description": "키워드에 자동입찰 규칙을 만들거나 덮어쓴다(바로 저장). 10분마다 순위를 읽어 목표보다 아래면 입찰가를 20% 올리고 "
+    {"name": "set_auto_bid", "description": "키워드에 자동입찰 규칙을 만들거나 덮어쓴다. 10분마다 순위를 읽어 목표보다 아래면 입찰가를 20% 올리고 "
      "위면 10% 내린다(최대 입찰가 이하). 한 번에 목표 순위로 가지 않고 몇십 분에 걸쳐 맞춘다. 조직당 20개까지. "
-     "기기·목표 순위·최대 입찰가를 사용자에게 확인받은 뒤 호출. enabled=false면 규칙을 남긴 채 중지.",
+     "기기·목표 순위·최대 입찰가를 사용자에게 확인받은 뒤 호출. enabled=false면 규칙을 남긴 채 중지. 바로 실행되지 않고 승인 요청만 만든다: 사용자가 웹 '승인 대기' 화면(결과의 url)에서 승인해야 실행된다. 결과는 get_approval로 확인.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "keywords", "device", "target_rank", "max_bid"], "properties": {
          **WS, "keywords": KEYS, "device": {"enum": ["PC", "MOBILE"]},
          "target_rank": {"type": "integer", "description": "목표 순위. PC 1~10, 모바일 1~5"},
          "max_bid": {"type": "integer", "description": "최대 입찰가(70~100,000원, 10원 단위)"}, "enabled": {"type": "boolean"}}},
      "annotations": {"destructiveHint": True}},
-    {"name": "delete_auto_bid", "description": "키워드의 자동입찰 규칙을 지운다(입찰가는 지금 값 그대로).",
+    {"name": "delete_auto_bid", "description": "키워드의 자동입찰 규칙을 지운다(입찰가는 지금 값 그대로). 바로 실행되지 않고 승인 요청만 만든다: 사용자가 웹 '승인 대기' 화면(결과의 url)에서 승인해야 실행된다. 결과는 get_approval로 확인.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "keywords"], "properties": {**WS, "keywords": KEYS}},
      "annotations": {"destructiveHint": True}},
     {"name": "run_auto_bids", "description": "자동입찰을 10분 기다리지 않고 지금 한 번 실행해 입찰가를 실제로 바꾼다. keywords를 주면 그 키워드 규칙만. "
-     "결과는 list_auto_bids의 last_result로 확인.",
+     "결과는 list_auto_bids의 last_result로 확인. 바로 실행되지 않고 승인 요청만 만든다: 사용자가 웹 '승인 대기' 화면(결과의 url)에서 승인해야 실행된다. 결과는 get_approval로 확인.",
      "inputSchema": {"type": "object", "required": ["workspace_id"], "properties": {**WS, "keywords": KEYS}},
      "annotations": {"destructiveHint": True}},
-    {"name": "create_ad", "description": "파워링크 광고그룹에 소재를 등록한다(바로 실행, OFF 상태로 만들어져 검수 후 사용자가 켬). "
-     "먼저 제목·설명·URL 초안을 사용자에게 보여 주고 승인받은 뒤 호출. RSA_AD(반응형)는 제목 여러 개·설명 여러 개, TEXT_45는 첫 제목·설명만 쓴다. "
-     "글자 수·개수 제한은 네이버가 검사해 오류로 알려 준다(보통 제목 15자, 설명 45자).",
+    {"name": "create_ad", "description": "파워링크 광고그룹에 소재를 등록한다(OFF 상태로 만들어져 검수 후 사용자가 켬). "
+     "먼저 제목·설명·URL 초안을 사용자에게 보여 주고 승인받은 뒤 호출. 제목은 15자, 설명은 45자 이내(띄어쓰기 포함)로 쓰고, 초안마다 글자 수를 함께 보여 준다. "
+     "넘치면 서버가 그 문구와 글자 수를 오류로 돌려주니 줄여서 다시 보여 준다. RSA_AD(반응형)는 제목 여러 개·설명 여러 개, TEXT_45는 첫 제목·설명만 쓴다. "
+     "개수 제한은 네이버가 검사해 오류로 알려 준다.바로 실행되지 않고 승인 요청만 만든다: 사용자가 웹 '승인 대기' 화면(결과의 url)에서 승인해야 실행된다. 결과는 get_approval로 확인.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id", "headlines", "descriptions", "pc_url"], "properties": {
          **ACC, "adgroup_id": {"type": "string"}, "ad_type": {"enum": ["RSA_AD", "TEXT_45"], "description": "기본 RSA_AD"},
          "headlines": {"type": "array", "items": {"type": "string"}}, "descriptions": {"type": "array", "items": {"type": "string"}},
          "pc_url": {"type": "string", "description": "PC 연결 URL"}, "mobile_url": {"type": "string", "description": "비우면 PC URL"}}},
      "annotations": {"destructiveHint": True}},
-    {"name": "create_ad_extension", "description": "파워링크 광고그룹에 확장소재를 등록한다(바로 실행). 사용자 승인 후 호출. "
+    {"name": "create_ad_extension", "description": "파워링크 광고그룹에 확장소재를 등록한다. 사용자 승인 후 호출. "
      "DESCRIPTION(홍보문구: heading은 할인·사은품·추가선물증정·이벤트·신상품 중 하나, description 14자), HEADLINE(추가제목: heading에 15자), "
-     "DESCRIPTION_EXTRA(추가설명: description 45자), SUB_LINKS(서브링크: links [{name, final}]).",
+     "DESCRIPTION_EXTRA(추가설명: description 45자), SUB_LINKS(서브링크: links [{name, final}]). 바로 실행되지 않고 승인 요청만 만든다: 사용자가 웹 '승인 대기' 화면(결과의 url)에서 승인해야 실행된다. 결과는 get_approval로 확인.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id", "ext_type"], "properties": {
          **ACC, "adgroup_id": {"type": "string"}, "ext_type": {"enum": ["DESCRIPTION", "HEADLINE", "DESCRIPTION_EXTRA", "SUB_LINKS"]},
          "heading": {"type": "string"}, "description": {"type": "string"},
@@ -302,16 +303,19 @@ TOOLS = [
      "행마다 검증 결과(VALID/INVALID)가 나오니 사용자에게 보여 주고 승인을 받은 뒤 execute_job을 부른다.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "changes"], "properties": {
          **WS, "changes": {"type": "array", "items": CHANGE, "minItems": 1}}}},
-    {"name": "execute_job", "description": "미리보기 작업을 네이버에 실제 반영한다. 사용자가 preview_changes 결과를 확인하고 실행을 승인했을 때만 호출. "
-     "한 번에 몇 행씩 실행하므로 status가 RUNNING이면 같은 job_id로 다시 호출한다.",
+    {"name": "execute_job", "description": "Claude는 실행하지 못한다: 웹 작업 화면 링크(url)를 돌려주니 사용자에게 보여 준다. "
+     "사용자가 웹에서 미리보기를 확인하고 직접 실행한다.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "job_id"], "properties": {**WS, "job_id": {"type": "integer"}}},
      "annotations": {"destructiveHint": True}},
-    {"name": "schedule_job", "description": "미리보기 작업을 정한 시각에 실행하도록 예약한다(예: 11월 12일 0시에 ON). 10분마다 도는 크론이 실행해 최대 10분 늦을 수 있다. "
-     "사용자가 preview_changes 결과와 시각을 승인했을 때만 호출. scheduled_at을 null로 주면 예약 취소.",
+    {"name": "schedule_job", "description": "예약도 사람이 웹 작업 화면(결과의 url)에서 직접 한다(10분마다 도는 크론이 실행). "
+     "scheduled_at을 null로 주면 예약 취소는 바로 된다(광고를 바꾸지 않으므로).",
      "inputSchema": {"type": "object", "required": ["workspace_id", "job_id", "scheduled_at"], "properties": {
          **WS, "job_id": {"type": "integer"},
          "scheduled_at": {"type": ["string", "null"], "description": "시간대 포함 ISO 시각, 한국 시간이면 +09:00 (예: 2026-11-12T00:00:00+09:00)"}}},
      "annotations": {"destructiveHint": True}},
+    {"name": "get_approval", "description": "승인 요청(create_ad 등)의 상태(PENDING·DONE·FAILED·REJECTED·EXPIRED)와 실행 결과.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "approval_id"], "properties": {**WS, "approval_id": {"type": "integer"}}},
+     "annotations": {"readOnlyHint": True}},
     {"name": "list_negative_keywords", "description": "광고그룹의 제외검색어 목록(naver_id·keyword). 등록·삭제는 preview_changes의 entity_type=negative_keyword로.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id"], "properties": {**ACC, "adgroup_id": {"type": "string"}}},
      "annotations": {"readOnlyHint": True}},
@@ -339,10 +343,17 @@ async def _call(db, user: User, name: str, a: dict):
         return await api.performance_daily(_day(a["since"]), _day(a["until"]), _joined(a.get("account_ids")), a.get("product"), m=m, db=db)
     if name == "preview_changes":
         return await api.create_bulk_job(api.BulkIn(changes=a["changes"]), m=m, db=db)
-    if name == "execute_job":
-        return await api.execute_bulk_job(int(a["job_id"]), m=m, db=db)
-    if name == "schedule_job":
-        return await api.schedule_bulk_job(api.ScheduleIn(scheduled_at=a.get("scheduled_at")), int(a["job_id"]), m=m, db=db)
+    # 실행·예약은 Claude가 할 수 없다: 사람이 웹 작업 화면에서 미리보기를 보고 직접 실행·예약한다(예약 취소는 광고를 안 바꿔 허용)
+    if name in ("execute_job", "schedule_job"):
+        job = api._job(db, m, int(a["job_id"]))
+        if name == "schedule_job" and a.get("scheduled_at") is None:
+            return await api.schedule_bulk_job(api.ScheduleIn(scheduled_at=None), job.id, m=m, db=db)
+        return {"approval_required": True, "url": f"{WEB}/jobs?id={job.id}",
+                "message": "광고 변경은 사람이 웹에서 직접 실행·예약해야 합니다. 이 링크를 사용자에게 보여 주세요(미리보기 확인 후 실행 버튼)."}
+    if name in APPROVAL_TOOLS:
+        return _request_approval(db, m, name, a)
+    if name == "get_approval":
+        return _approval_out(_approval(db, m, int(a["approval_id"])))
     if name == "list_audit_logs":
         logs = (await api.audit_logs(None, a.get("ad_account_id"), m=m, db=db))[:min(int(a.get("limit") or 50), 500)]
         names = dict(db.execute(select(User.id, User.name).where(User.id.in_({x["user_id"] for x in logs}))).all())
@@ -351,12 +362,6 @@ async def _call(db, user: User, name: str, a: dict):
         return await api.keyword_ranks(api.AutoBidKeysIn(keywords=a["keywords"]), m=m, db=db)
     if name == "list_auto_bids":
         return await api.list_auto_bids(m=m, db=db)
-    if name == "set_auto_bid":
-        return await api.set_auto_bids(api.AutoBidIn(**{k: v for k, v in a.items() if k != "workspace_id"}), m=m, db=db)
-    if name == "delete_auto_bid":
-        return await api.delete_auto_bids(api.AutoBidKeysIn(keywords=a["keywords"]), m=m, db=db)
-    if name == "run_auto_bids":
-        return await api.run_auto_bids(api.AutoBidKeysIn(keywords=a["keywords"]) if a.get("keywords") else None, m=m, db=db)
     acc = int(a["ad_account_id"])
     if name == "list_campaigns":
         return await api.naver_objects(acc, "campaigns", m=m, db=db)
@@ -384,15 +389,129 @@ async def _call(db, user: User, name: str, a: dict):
         r = await api.performance_entities(body, m=m, db=db)
         r["rows"] = [{**kws.get(x["naver_id"], {}), **x} for x in r["rows"]]
         return r
-    if name == "create_ad":
-        return bulk.create_ad(db, m, acc, a["adgroup_id"], a.get("ad_type") or "RSA_AD", a["headlines"], a["descriptions"],
-                              a["pc_url"], a.get("mobile_url") or "")
-    if name == "create_ad_extension":
-        return await api.create_ad_extension(api.ExtensionIn(ad_account_id=acc, adgroup_naver_id=a["adgroup_id"], **{
-            k: a[k] for k in ("ext_type", "heading", "description", "links") if k in a}), m=m, db=db)
     if name == "related_keywords":
         return (await api.keyword_tool(acc, a["hint"], m=m, db=db))[:100]  # 웹 화면과 같이 검색량 상위 100개
     raise HTTPException(400, f"알 수 없는 도구: {name}")
+
+
+# ---------- 광고 변경 승인(Claude가 요청 → 사람이 웹에서 승인해야 실행) ----------
+APPROVAL_TOOLS = ("create_ad", "create_ad_extension", "set_auto_bid", "delete_auto_bid", "run_auto_bids")
+APPROVAL_TTL = timedelta(minutes=30)
+
+
+def _hash(payload: str) -> str:
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _accounts_in(name: str, a: dict) -> set[int]:
+    if name in ("create_ad", "create_ad_extension"):
+        return {int(a["ad_account_id"])}
+    return {int(k["ad_account_id"]) for k in a.get("keywords") or []}
+
+
+def _request_approval(db, m: Membership, name: str, a: dict) -> dict:
+    """요청 내용을 저장만 한다(실행 안 함). 요청한 사람이 지금 수정 권한이 없는 계정이면 요청도 만들지 않는다."""
+    if not _accounts_in(name, a) <= accessible_account_ids(db, m, edit=True):
+        raise HTTPException(403, "이 광고 계정을 수정할 권한이 없습니다")
+    if name == "create_ad":  # 승인까지 기다리지 않고 요청 때 바로 알려 줘야 Claude가 고쳐서 다시 보여 준다
+        bulk.check_ad_texts(a.get("headlines") or [], a.get("descriptions") or [])
+    payload = json.dumps({k: v for k, v in a.items() if k != "workspace_id"}, ensure_ascii=False, sort_keys=True)
+    if len(payload) > 8000:
+        raise HTTPException(400, "요청 내용이 너무 깁니다")
+    r = ApprovalRequest(workspace_id=m.workspace_id, requested_by=m.user_id, tool=name, payload=payload, payload_hash=_hash(payload),
+                        status="PENDING", created_at=now(), expires_at=now() + APPROVAL_TTL)
+    db.add(r)
+    db.flush()
+    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, action="APPROVAL_REQUEST", field=name, naver_id=str(r.id)))
+    db.commit()
+    return {**_approval_out(r), "approval_required": True, "url": f"{WEB}/approvals?id={r.id}",
+            "message": "아직 실행되지 않았습니다. 사용자가 웹 '승인 대기' 화면에서 내용을 확인하고 승인하면 실행됩니다. "
+                       "이 링크를 사용자에게 보여 주고, 결과는 get_approval로 확인하세요."}
+
+
+def _status_now(r: ApprovalRequest) -> str:
+    exp = r.expires_at.replace(tzinfo=r.expires_at.tzinfo or timezone.utc)  # SQLite·D1은 시간대 없이 돌려준다
+    return "EXPIRED" if r.status == "PENDING" and exp < now() else r.status
+
+
+def _approval_out(r: ApprovalRequest) -> dict:
+    return {"approval_id": r.id, "tool": r.tool, "payload": json.loads(r.payload), "status": _status_now(r),
+            "result": json.loads(r.result) if r.result else None, "requested_by": r.requested_by,
+            "created_at": r.created_at, "expires_at": r.expires_at, "decided_at": r.decided_at}
+
+
+def _result(out) -> str:
+    text = json.dumps(out, ensure_ascii=False, default=str)
+    return text if len(text) <= 2000 else json.dumps({"ok": True, "note": "결과가 길어 생략"}, ensure_ascii=False)
+
+
+def _approval(db, m: Membership, approval_id: int) -> ApprovalRequest:
+    """요청한 사람 본인 또는 관리자만 보고 승인한다(다른 직원·다른 조직에는 있는지도 알려 주지 않음)."""
+    r = db.get(ApprovalRequest, approval_id)
+    if not r or r.workspace_id != m.workspace_id or (r.requested_by != m.user_id and m.role not in ADMIN_ROLES):
+        raise HTTPException(404, "승인 요청을 찾을 수 없습니다")
+    return r
+
+
+async def _run_tool(db, m: Membership, name: str, a: dict):
+    """승인된 요청 실행. 권한 검사는 각 기능이 승인한 사람(m) 기준으로 다시 한다."""
+    if name == "create_ad":
+        return bulk.create_ad(db, m, int(a["ad_account_id"]), a["adgroup_id"], a.get("ad_type") or "RSA_AD", a["headlines"],
+                              a["descriptions"], a["pc_url"], a.get("mobile_url") or "")
+    if name == "create_ad_extension":
+        return await api.create_ad_extension(api.ExtensionIn(ad_account_id=int(a["ad_account_id"]), adgroup_naver_id=a["adgroup_id"], **{
+            k: a[k] for k in ("ext_type", "heading", "description", "links") if k in a}), m=m, db=db)
+    if name == "set_auto_bid":
+        return await api.set_auto_bids(api.AutoBidIn(**a), m=m, db=db)
+    if name == "delete_auto_bid":
+        return await api.delete_auto_bids(api.AutoBidKeysIn(keywords=a["keywords"]), m=m, db=db)
+    return await api.run_auto_bids(api.AutoBidKeysIn(keywords=a["keywords"]) if a.get("keywords") else None, m=m, db=db)
+
+
+# 웹 전용(일반 로그인): Claude 출입증은 access.current_user에서 거부된다
+@router.get("/workspaces/{ws_id}/approvals")
+async def list_approvals(m: Membership = Depends(membership), db=Depends(get_db)):
+    q = select(ApprovalRequest).where(ApprovalRequest.workspace_id == m.workspace_id)
+    if m.role not in ADMIN_ROLES:
+        q = q.where(ApprovalRequest.requested_by == m.user_id)
+    return [_approval_out(r) for r in db.scalars(q.order_by(ApprovalRequest.id.desc()).limit(50))]
+
+
+@router.post("/workspaces/{ws_id}/approvals/{approval_id}/{decision}")
+async def decide_approval(approval_id: int, decision: str, m: Membership = Depends(membership), db=Depends(get_db)):
+    if decision not in ("approve", "reject"):
+        raise HTTPException(404, "알 수 없는 동작")
+    r = _approval(db, m, approval_id)
+    if _status_now(r) != "PENDING":
+        raise HTTPException(409, "이미 처리됐거나 만료된 요청입니다")
+    # 한 번만: PENDING인 요청을 먼저 바꾼 쪽만 진행(두 창에서 동시에 눌러도 한 번 실행)
+    if db.execute(update(ApprovalRequest).where(ApprovalRequest.id == r.id, ApprovalRequest.status == "PENDING")
+                  .values(status="RUNNING" if decision == "approve" else "REJECTED", decided_by=m.user_id,
+                          decided_at=now())).rowcount != 1:
+        raise HTTPException(409, "이미 처리된 요청입니다")
+    db.commit()
+    db.refresh(r)
+    if decision == "reject":
+        db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, action="APPROVAL_REJECT", field=r.tool, naver_id=str(r.id)))
+        db.commit()
+        return _approval_out(r)
+    if _hash(r.payload) != r.payload_hash:  # 저장 뒤 내용이 바뀌었으면 실행하지 않는다
+        r.status, r.result = "FAILED", json.dumps({"error": "요청 내용이 바뀌어 실행하지 않았습니다. 다시 요청하세요"}, ensure_ascii=False)
+    else:
+        try:
+            out = await _run_tool(db, m, r.tool, json.loads(r.payload))
+            r.status, r.result = "DONE", _result(out)
+        except HTTPException as e:
+            r.status, r.result = "FAILED", _result({"error": e.detail})
+        except (KeyError, ValueError, TypeError) as e:
+            r.status, r.result = "FAILED", _result({"error": f"잘못된 요청 내용: {e}"})
+        except Exception:  # noqa: BLE001 — RUNNING으로 남지 않게. 네이버 반영 여부는 모름
+            db.rollback()
+            r.status, r.result = "FAILED", _result({"error": "실행 중 오류가 났습니다. 네이버에서 반영됐는지 확인하세요"})
+    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, action="APPROVAL_APPROVE", field=r.tool, naver_id=str(r.id),
+                    after=r.status))
+    db.commit()
+    return _approval_out(r)
 
 
 PROTOCOLS = ("2025-11-25", "2025-06-18", "2025-03-26")
@@ -416,7 +535,11 @@ async def mcp(request: Request):
             result = {"protocolVersion": v if v in PROTOCOLS else PROTOCOLS[0], "capabilities": {"tools": {}},
                       "serverInfo": {"name": "naverads", "version": "0.1.0"},
                       "instructions": "네이버 검색광고 관리. 먼저 list_ad_accounts로 조직·계정을 확인한다. "
-                                      "변경은 preview_changes → 사용자 승인 → execute_job(또는 schedule_job으로 예약) 순서로만 한다."}
+                                      "변경은 Claude가 실행하지 못한다: preview_changes로 미리보기를 만들면 사용자가 웹에서 실행하고, "
+                                      "소재·확장소재·자동입찰은 승인 요청을 만들면 사용자가 웹 '승인 대기'에서 승인한다. "
+                                      "변경 도구(preview_changes, create_ad, create_ad_extension, set_auto_bid, delete_auto_bid, run_auto_bids)를 "
+                                      "부르기 전에 넣을 내용(계정·광고그룹·문구와 글자 수·입찰가 등)을 채팅에 표로 먼저 보여 주고, "
+                                      "사용자가 채팅으로 진행하라고 답한 뒤에만 부른다. 같은 답에서 보여 주기와 호출을 함께 하지 않는다."}
         elif method == "ping":
             result = {}
         elif method == "tools/list":

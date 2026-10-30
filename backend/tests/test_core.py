@@ -813,8 +813,16 @@ def test_mcp_oauth_and_tools():
     job, _ = call("preview_changes", workspace_id=ws, changes=[
         {"entity_type": "keyword", "naver_id": kws[0]["naver_id"], "field": "bid_amt", "value": "400", "ad_account_id": acc, "before": "300"}])
     assert job["counts"]["VALID"] == 1 and store("8008")["keywords"][kws[0]["naver_id"]]["bidAmt"] == 300  # 미리보기는 반영 안 함
-    done, _ = call("execute_job", workspace_id=ws, job_id=job["id"])
-    assert done["status"] == "DONE" and store("8008")["keywords"][kws[0]["naver_id"]]["bidAmt"] == 400
+    # Claude는 실행 못 함: 웹 작업 화면 링크만 받고, 사람이 웹(일반 로그인)에서 실행한다
+    handoff, err = call("execute_job", workspace_id=ws, job_id=job["id"])
+    assert not err and handoff["approval_required"] and handoff["url"].endswith(f"/jobs?id={job['id']}")
+    assert store("8008")["keywords"][kws[0]["naver_id"]]["bidAmt"] == 300
+    assert c.post(f"/workspaces/{ws}/bulk-jobs/{job['id']}/execute", headers=owner).json()["status"] == "DONE"
+    assert store("8008")["keywords"][kws[0]["naver_id"]]["bidAmt"] == 400
+
+    def approve(res):  # 승인 요청 → 웹에서 승인(실행) → 결과
+        assert res["approval_required"] and res["status"] == "PENDING", res
+        return c.post(f"/workspaces/{ws}/approvals/{res['approval_id']}/approve", headers=owner).json()
 
     # 키워드별 성과(광고그룹 단위·ids), 소재·확장소재 등록(OFF로 생성), 작업 기록
     perf, err = call("get_entity_performance", workspace_id=ws, ad_account_id=acc, adgroup_id=groups[0]["naver_id"])
@@ -824,26 +832,35 @@ def test_mcp_oauth_and_tools():
     assert c.post(url, headers=owner, json={"ad_account_id": acc, "ids": ["x"] * 501}).status_code == 400
     assert c.post(url, headers=owner, json={"ad_account_id": acc, "ids": ["x"], "since": "2026-01-01", "until": "2026-06-01"}).status_code == 400
     assert c.post(url, headers=owner, json={"ad_account_id": acc, "ids": ["x"]}).json()["rows"][0]["impressions"] >= 0
-    ad, err = call("create_ad", workspace_id=ws, ad_account_id=acc, adgroup_id=groups[0]["naver_id"], headlines=["여름 원피스", "무료배송"],
-                   descriptions=["린넨 원피스 전 상품 무료배송"], pc_url="https://example.com")
-    assert not err and ad["status"] == "OFF" and ad["payload"]["headlines"] == ["여름 원피스", "무료배송"], ad
-    assert call("create_ad", workspace_id=ws, ad_account_id=acc, adgroup_id=groups[0]["naver_id"], headlines=[], descriptions=["a"],
-                pc_url="https://example.com")[1]
-    ext, err = call("create_ad_extension", workspace_id=ws, ad_account_id=acc, adgroup_id=groups[0]["naver_id"], ext_type="HEADLINE",
-                    heading="오늘만 할인")
-    assert not err and ext["ext_type"] == "HEADLINE"
-    logs, _ = call("list_audit_logs", workspace_id=ws, limit=3)
-    assert len(logs) == 3 and logs[0]["user"] == "mcp@a.com" and {x["entity_type"] for x in logs[:2]} == {"ad", "ad_extension"}
+    ads_before = len(store("8008")["ads"])
+    req, err = call("create_ad", workspace_id=ws, ad_account_id=acc, adgroup_id=groups[0]["naver_id"], headlines=["여름 원피스", "무료배송"],
+                    descriptions=["린넨 원피스 전 상품 무료배송"], pc_url="https://example.com")
+    assert not err and len(store("8008")["ads"]) == ads_before  # 요청만, 아직 등록 안 됨
+    done = approve(req)
+    ad = done["result"]
+    assert done["status"] == "DONE" and ad["status"] == "OFF" and ad["payload"]["headlines"] == ["여름 원피스", "무료배송"], done
+    assert call("get_approval", workspace_id=ws, approval_id=req["approval_id"])[0]["status"] == "DONE"
+    bad = approve(call("create_ad", workspace_id=ws, ad_account_id=acc, adgroup_id=groups[0]["naver_id"], headlines=[], descriptions=["a"],
+                       pc_url="https://example.com")[0])
+    assert bad["status"] == "FAILED" and bad["result"]["error"]
+    _, err = call("create_ad", workspace_id=ws, ad_account_id=acc, adgroup_id=groups[0]["naver_id"], headlines=["가" * 16],
+                  descriptions=["a"], pc_url="https://example.com")
+    assert err and "16자" in str(_)  # 글자 수 초과는 승인 요청 전에 바로 거절
+    ext = approve(call("create_ad_extension", workspace_id=ws, ad_account_id=acc, adgroup_id=groups[0]["naver_id"], ext_type="HEADLINE",
+                       heading="오늘만 할인")[0])
+    assert ext["status"] == "DONE" and ext["result"]["ext_type"] == "HEADLINE"
+    logs, _ = call("list_audit_logs", workspace_id=ws, limit=20)  # 승인 요청·승인 기록도 함께 쌓인다
+    assert logs[0]["user"] == "mcp@a.com" and {"ad", "ad_extension"} <= {x["entity_type"] for x in logs}
 
     # 자동입찰: 순위 확인 → 규칙 저장 → 지금 실행. 원피스1(300→400원)은 Mock 검색 화면 4위, 목표 1위라 20% 올림
     k = [{"ad_account_id": acc, "naver_id": kws[0]["naver_id"], "keyword": kws[0]["keyword"]}]
     assert call("check_ranks", workspace_id=ws, keywords=k)[0][0]["PC"] == 4
-    assert call("set_auto_bid", workspace_id=ws, keywords=k, device="PC", target_rank=11, max_bid=1000)[1]  # PC는 10위까지
-    assert call("set_auto_bid", workspace_id=ws, keywords=k, device="PC", target_rank=1, max_bid=1000) == ({"ok": True}, False)
-    call("run_auto_bids", workspace_id=ws, keywords=k)
+    assert approve(call("set_auto_bid", workspace_id=ws, keywords=k, device="PC", target_rank=11, max_bid=1000)[0])["status"] == "FAILED"  # PC는 10위까지
+    assert approve(call("set_auto_bid", workspace_id=ws, keywords=k, device="PC", target_rank=1, max_bid=1000)[0])["result"] == {"ok": True}
+    approve(call("run_auto_bids", workspace_id=ws, keywords=k)[0])
     assert store("8008")["keywords"][kws[0]["naver_id"]]["bidAmt"] == 480
     assert call("list_auto_bids", workspace_id=ws)[0][0]["last_result"] == "지금 4위 (목표 1위) · 400원 → 480원"
-    call("delete_auto_bid", workspace_id=ws, keywords=k)
+    approve(call("delete_auto_bid", workspace_id=ws, keywords=k)[0])
     assert call("list_auto_bids", workspace_id=ws)[0] == []
 
     # 다른 조직 사용자는 도구로도 못 본다
@@ -1511,10 +1528,11 @@ def test_staff_job_isolation():
 
     # MCP도 같은 정책
     ma = _mcp_headers(a)
-    for name, args in (("execute_job", {"job_id": job2}), ("schedule_job", {"job_id": job2, "scheduled_at": None}),
-                       ("execute_job", {"job_id": job1})):
+    for name, args in (("execute_job", {"job_id": job2}), ("schedule_job", {"job_id": job2, "scheduled_at": None})):
         _, err = _mcp_call(ma, name, workspace_id=ws, **args)
         assert err, name
+    handoff, err = _mcp_call(ma, "execute_job", workspace_id=ws, job_id=job1)
+    assert not err and handoff["approval_required"] and store("9201")["keywords"]["kwd-9201-12"]["bidAmt"] == 600
     mlogs, _ = _mcp_call(ma, "list_audit_logs", workspace_id=ws)
     assert all(x["ad_account_id"] in (acc1, None) for x in mlogs)
 
@@ -1673,3 +1691,124 @@ def test_seo_ssrf_more(monkeypatch):
         assert not any("169.254" in u for u in seen)
     out = seo.fetch("https://example.com/")
     assert out["status"] == 200 and "<title>ok" in out["html"]
+
+
+# ---------- MCP 광고 변경 승인(10/29) ----------
+def _ext_request(mh, ws, acc, cid, heading="승인테스트"):
+    res, err = _mcp_call(mh, "create_ad_extension", workspace_id=ws, ad_account_id=acc, adgroup_id=f"grp-{cid}-pl1",
+                         ext_type="HEADLINE", heading=heading)
+    assert not err and res["approval_required"] and res["status"] == "PENDING", res
+    return res["approval_id"]
+
+
+def _exts(cid):
+    return [e for e in store(cid)["ad-extensions"].values() if e["type"] == "HEADLINE"]
+
+
+def test_mcp_approval_required_and_single_use():
+    owner, ws, acc = _account("apv@a.com", "9301")
+    m = _mcp_headers(owner)
+    url = f"/workspaces/{ws}/approvals"
+    # 요청만으로는 실행 안 됨 → 웹에서 승인해야 저장된 내용 그대로 실행
+    aid = _ext_request(m, ws, acc, "9301")
+    assert _exts("9301") == []
+    assert [x["approval_id"] for x in c.get(url, headers=owner).json()] == [aid]
+    assert c.post(f"{url}/{aid}/approve", headers=m).status_code == 401  # Claude 출입증으로는 승인 못 함
+    out = c.post(f"{url}/{aid}/approve", headers=owner).json()
+    assert out["status"] == "DONE" and len(_exts("9301")) == 1
+    assert c.post(f"{url}/{aid}/approve", headers=owner).status_code == 409  # 한 번만
+    assert len(_exts("9301")) == 1
+    # 거절 → 실행 안 됨, 거절 뒤 승인 불가
+    aid = _ext_request(m, ws, acc, "9301", "거절될것")
+    assert c.post(f"{url}/{aid}/reject", headers=owner).json()["status"] == "REJECTED"
+    assert c.post(f"{url}/{aid}/approve", headers=owner).status_code == 409 and len(_exts("9301")) == 1
+    acts = [x["action"] for x in c.get(f"/workspaces/{ws}/audit-logs", headers=owner).json()]
+    assert {"APPROVAL_REQUEST", "APPROVAL_APPROVE", "APPROVAL_REJECT"} <= set(acts)
+
+
+def test_mcp_approval_expired_and_tampered():
+    from datetime import timedelta
+
+    from app.db import SessionLocal
+    from app.models import ApprovalRequest, now
+
+    owner, ws, acc = _account("apv2@a.com", "9302")
+    m = _mcp_headers(owner)
+    url = f"/workspaces/{ws}/approvals"
+    expired, tampered = _ext_request(m, ws, acc, "9302"), _ext_request(m, ws, acc, "9302", "원래내용")
+    db = SessionLocal()
+    try:
+        db.get(ApprovalRequest, expired).expires_at = now() - timedelta(seconds=1)
+        r = db.get(ApprovalRequest, tampered)
+        r.payload = r.payload.replace("원래내용", "바꾼내용")  # 저장 뒤 내용이 바뀜
+        db.commit()
+    finally:
+        db.close()
+    assert c.post(f"{url}/{expired}/approve", headers=owner).status_code == 409
+    assert _mcp_call(m, "get_approval", workspace_id=ws, approval_id=expired)[0]["status"] == "EXPIRED"
+    out = c.post(f"{url}/{tampered}/approve", headers=owner).json()
+    assert out["status"] == "FAILED" and _exts("9302") == []
+
+
+def test_mcp_approval_who_can_approve():
+    owner, ws, acc1, acc2, hs, mids = _staff_org("apw", "9311", "9312")
+    sb, adm, sa = hs["sb"], hs["adm"], hs["sa"]
+    url = f"/workspaces/{ws}/approvals"
+    # 보기 권한(sa, 광고주1)으로는 요청도 못 만든다
+    _, err = _mcp_call(_mcp_headers(sa), "create_ad_extension", workspace_id=ws, ad_account_id=acc1, adgroup_id="grp-9311-pl1",
+                       ext_type="HEADLINE", heading="x")
+    assert err
+    aid = _ext_request(_mcp_headers(sb), ws, acc2, "9312")
+    # 다른 직원은 목록에도 없고 승인도 못 함(존재 여부도 숨김), 다른 조직도 못 함
+    assert c.get(url, headers=sa).json() == [] and c.post(f"{url}/{aid}/approve", headers=sa).status_code == 404
+    outsider, ws_o, _ = _account("apw-out@b.com", "9313")
+    assert c.post(f"{url}/{aid}/approve", headers=outsider).status_code == 403
+    assert c.post(f"/workspaces/{ws_o}/approvals/{aid}/approve", headers=outsider).status_code == 404
+    # 관리자는 보고 승인할 수 있다(실행은 승인한 사람 권한으로)
+    assert aid in [x["approval_id"] for x in c.get(url, headers=adm).json()]
+    assert c.post(f"{url}/{aid}/approve", headers=adm).json()["status"] == "DONE" and len(_exts("9312")) == 1
+
+
+def test_mcp_approval_concurrent_approve(monkeypatch):
+    """두 창에서 동시에 승인해도 한 번만 실행된다(상태 확인을 둘 다 통과한 뒤 경합)."""
+    import threading
+
+    from fastapi.testclient import TestClient
+
+    from app import mcp
+
+    owner, ws, acc = _account("apc@a.com", "9321")
+    aid = _ext_request(_mcp_headers(owner), ws, acc, "9321")
+    barrier = threading.Barrier(2, timeout=10)
+    orig, seen = mcp._status_now, threading.local()
+
+    def both_see_pending(r):
+        st = orig(r)
+        if not getattr(seen, "done", False):  # 요청마다 처음 상태 확인에서만 맞춘다(응답 만들 때는 안 기다림)
+            seen.done = True
+            barrier.wait()
+        return st
+    monkeypatch.setattr(mcp, "_status_now", both_see_pending)
+    codes = []
+
+    def go():
+        codes.append(TestClient(app).post(f"/workspaces/{ws}/approvals/{aid}/approve", headers=owner).status_code)
+    ts = [threading.Thread(target=go) for _ in range(2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert sorted(codes) == [200, 409] and len(_exts("9321")) == 1
+
+
+def test_mcp_schedule_handoff():
+    owner, ws, acc = _account("aps@a.com", "9331")
+    m = _mcp_headers(owner)
+    job = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [
+        ch(acc, "keyword", "kwd-9331-11", "bid_amt", "350", before="300", product="WEB_SITE")]}).json()["id"]
+    res, err = _mcp_call(m, "schedule_job", workspace_id=ws, job_id=job, scheduled_at="2030-01-01T00:00:00+09:00")
+    assert not err and res["approval_required"] and res["url"].endswith(f"/jobs?id={job}")
+    assert c.get(f"/workspaces/{ws}/bulk-jobs/{job}", headers=owner).json()["scheduled_at"] is None  # Claude는 예약 못 함
+    c.post(f"/workspaces/{ws}/bulk-jobs/{job}/schedule", headers=owner, json={"scheduled_at": "2030-01-01T00:00:00+09:00"})
+    out, err = _mcp_call(m, "schedule_job", workspace_id=ws, job_id=job, scheduled_at=None)  # 예약 취소는 Claude도 가능
+    assert not err and out["scheduled_at"] is None

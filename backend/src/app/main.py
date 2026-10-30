@@ -19,7 +19,7 @@ from . import bulk, naver, seo
 from .access import (ADMIN_ROLES, accessible_account_ids, admin_membership, current_user, membership, membership_of, resolve_account_ids,
                      user_from_header)
 from .db import Base, engine, get_db
-from .models import (AccountAccess, AccountGoal, AdAccount, AuditLog, AutoBidRule, BulkJob, BulkJobRow, LoginFailure, Membership, NaverApiCredential,
+from .models import (AccountAccess, AccountGoal, AdAccount, ApprovalRequest, AuditLog, AutoBidRule, BulkJob, BulkJobRow, LoginFailure, Membership, NaverApiCredential,
                      PerformanceDaily, Plan, Subscription, SyncRun, User, Workspace, WorkspaceAdAccount, now, today_kst)
 from .naver import NaverApiError, client_for
 from .security import decrypt, encrypt, hash_password, key_of, make_token, read_payload, sign_payload, verify_password
@@ -166,7 +166,7 @@ def _delete_workspace(db: Session, ws_id: int):
     acc_ids = list(db.scalars(select(WorkspaceAdAccount.ad_account_id).where(WorkspaceAdAccount.workspace_id == ws_id)))
     db.execute(delete(AuditLog).where(AuditLog.workspace_id == ws_id))
     db.execute(delete(BulkJobRow).where(BulkJobRow.job_id.in_(select(BulkJob.id).where(BulkJob.workspace_id == ws_id))))
-    for model in (BulkJob, AutoBidRule, AccountGoal, Subscription):
+    for model in (BulkJob, AutoBidRule, AccountGoal, Subscription, ApprovalRequest):
         db.execute(delete(model).where(model.workspace_id == ws_id))
     db.execute(delete(AccountAccess).where(AccountAccess.membership_id.in_(select(Membership.id).where(Membership.workspace_id == ws_id))))
     for model in (Membership, WorkspaceAdAccount, NaverApiCredential):

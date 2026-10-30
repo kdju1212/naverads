@@ -11,7 +11,7 @@ const NAV: [string, [string, string][]][] = [
   ["성과", [["/", "대시보드"]]],
   ["광고 관리", [["/campaigns", "캠페인"], ["/adgroups", "광고그룹"], ["/keywords", "키워드"], ["/keyword-register", "키워드 등록"],
     ["/auto-bids", "자동입찰"], ["/ads", "소재·상품소재"], ["/extensions", "확장소재"]]],
-  ["작업", [["/bulk", "엑셀 대량 작업"], ["/jobs", "작업 결과"]]],
+  ["작업", [["/approvals", "승인 대기"], ["/bulk", "엑셀 대량 작업"], ["/jobs", "작업 결과"]]],
   ["도구", [["/utm", "UTM 빌더"], ["/seo", "SEO·GEO 점검"]]],
   ["관리", [["/history", "변경 이력"], ["/settings", "설정"]]],
 ];

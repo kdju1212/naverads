@@ -425,12 +425,24 @@ def create_extension(db: Session, m: Membership, account_id: int, adgroup_naver_
     return row
 
 
+AD_TEXT_LIMITS = {"제목": 15, "설명": 45}
+
+
+def check_ad_texts(headlines: list[str], descriptions: list[str]):
+    """소재 제목·설명 글자 수. 넘친 문구를 그대로 알려 줘 Claude·사용자가 바로 고치게 한다(개수 제한은 네이버에 맡긴다)."""
+    for label, texts in (("제목", headlines), ("설명", descriptions)):
+        for t in texts:
+            if len(t.strip()) > AD_TEXT_LIMITS[label]:
+                raise HTTPException(400, f"소재 {label}은 {AD_TEXT_LIMITS[label]}자 이내입니다: '{t.strip()}' ({len(t.strip())}자)")
+
+
 def create_ad(db: Session, m: Membership, account_id: int, adgroup_naver_id: str, ad_type: str, headlines: list[str],
               descriptions: list[str], pc_url: str, mobile_url: str) -> dict:
     """소재 등록(OFF로 생성). 확장소재처럼 행 단위 미리보기 없이 바로 실행하고, 권한 확인·감사 로그는 같다.
-    RSA_AD(반응형)는 제목·설명을 assets로, TEXT_45는 첫 제목·설명만 ad에 넣는다. 글자 수·개수 검사는 네이버에 맡긴다."""
+    RSA_AD(반응형)는 제목·설명을 assets로, TEXT_45는 첫 제목·설명만 ad에 넣는다."""
     _check_edit(db, m, account_id)
     headlines, descriptions = [h.strip() for h in headlines if h.strip()], [d.strip() for d in descriptions if d.strip()]
+    check_ad_texts(headlines, descriptions)
     if not headlines or not descriptions or not pc_url.startswith("http"):
         raise HTTPException(400, "제목·설명을 1개 이상, 연결 URL은 http로 시작하게 입력하세요")
     ad = {"pc": {"final": pc_url}, "mobile": {"final": mobile_url or pc_url}}

@@ -46,6 +46,23 @@ class OAuthUsed(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
+class ApprovalRequest(Base):
+    """Claude(MCP)가 요청한 광고 변경. 웹에서 사람이 승인해야 서버가 저장된 내용 그대로(승인한 사람 권한으로) 실행한다."""
+    __tablename__ = "approval_requests"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    requested_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    tool: Mapped[str] = mapped_column(String(40))
+    payload: Mapped[str] = mapped_column(String(8000))  # 도구 인자 JSON(SQLite·D1은 길이를 강제하지 않음)
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(10), default="PENDING")  # PENDING|RUNNING|DONE|FAILED|REJECTED
+    result: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    decided_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Workspace(Base):
     __tablename__ = "workspaces"
     id: Mapped[int] = mapped_column(primary_key=True)

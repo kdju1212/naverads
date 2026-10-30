@@ -31,14 +31,14 @@ const OK = "bg-accent-soft text-accent", NEUTRAL = "bg-subtle text-muted ring-1 
 const WARN = "bg-warning-soft text-warning", BAD = "bg-danger-soft text-danger", INFO = "bg-info-soft text-info";
 const BADGE: Record<string, string> = {
   ON: OK, OFF: NEUTRAL, SUCCESS: OK, DONE: OK, VALID: INFO, FAILED: BAD, INVALID: BAD, PARTIAL: WARN, PREVIEW: INFO, RUNNING: WARN,
-  PASS: OK, WARN: WARN, FAIL: BAD,
+  PASS: OK, WARN: WARN, FAIL: BAD, PENDING: INFO, REJECTED: NEUTRAL, EXPIRED: NEUTRAL,
 };
 // 광고 유형은 상태가 아니라 점 없이 구분만
 const KIND: Record<string, string> = { WEB_SITE: "bg-primary-soft text-primary", SHOPPING: NEUTRAL };
 const BADGE_LABEL: Record<string, string> = {
   SUCCESS: "성공", DONE: "완료", VALID: "실행 가능", FAILED: "실패", INVALID: "오류", PARTIAL: "부분 실패",
   PREVIEW: "미리보기", RUNNING: "실행 중", WEB_SITE: "파워링크", SHOPPING: "쇼핑검색",
-  PASS: "통과", WARN: "주의", FAIL: "실패",
+  PASS: "통과", WARN: "주의", FAIL: "실패", PENDING: "승인 대기", REJECTED: "거절", EXPIRED: "만료",
 };
 
 export function Badge({ value }: { value: string }) {
