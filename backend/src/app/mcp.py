@@ -267,7 +267,7 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["workspace_id"], "properties": WS}, "annotations": {"readOnlyHint": True}},
     {"name": "set_auto_bid", "description": "키워드에 자동입찰 규칙을 만들거나 덮어쓴다(바로 저장). 10분마다 순위를 읽어 목표보다 아래면 입찰가를 20% 올리고 "
      "위면 10% 내린다(최대 입찰가 이하). 한 번에 목표 순위로 가지 않고 몇십 분에 걸쳐 맞춘다. 조직당 20개까지. "
-     "기기·목표 순위·최대 입찰가를 사용자에게 확인받은 뒤 호출. enabled=false면 규칙을 남긴 채 중지.",
+     "키워드·기기·목표 순위·최대 입찰가를 채팅에 표로 보여 준 뒤 호출(허용 버튼이 승인). enabled=false면 규칙을 남긴 채 중지.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "keywords", "device", "target_rank", "max_bid"], "properties": {
          **WS, "keywords": KEYS, "device": {"enum": ["PC", "MOBILE"]},
          "target_rank": {"type": "integer", "description": "목표 순위. PC 1~10, 모바일 1~5"},
@@ -281,7 +281,7 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["workspace_id"], "properties": {**WS, "keywords": KEYS}},
      "annotations": {"destructiveHint": True}},
     {"name": "create_ad", "description": "파워링크 광고그룹에 소재를 등록한다(바로 실행, OFF 상태로 만들어져 검수 후 사용자가 켬). "
-     "먼저 제목·설명·URL 초안을 사용자에게 보여 주고 승인받은 뒤 호출. 제목은 15자, 설명은 45자 이내(띄어쓰기 포함)로 쓰고, 초안마다 글자 수를 함께 보여 준다. "
+     "먼저 제목·설명·URL 초안을 사용자에게 채팅에 표로 보여 준 뒤 호출(허용 버튼이 승인). 제목은 15자, 설명은 45자 이내(띄어쓰기 포함)로 쓰고, 초안마다 글자 수를 함께 보여 준다. "
      "넘치면 서버가 그 문구와 글자 수를 오류로 돌려주니 줄여서 다시 보여 준다. RSA_AD(반응형)는 제목 여러 개·설명 여러 개, TEXT_45는 첫 제목·설명만 쓴다. "
      "개수 제한은 네이버가 검사해 오류로 알려 준다.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id", "headlines", "descriptions", "pc_url"], "properties": {
@@ -289,7 +289,7 @@ TOOLS = [
          "headlines": {"type": "array", "items": {"type": "string"}}, "descriptions": {"type": "array", "items": {"type": "string"}},
          "pc_url": {"type": "string", "description": "PC 연결 URL"}, "mobile_url": {"type": "string", "description": "비우면 PC URL"}}},
      "annotations": {"destructiveHint": True}},
-    {"name": "create_ad_extension", "description": "파워링크 광고그룹에 확장소재를 등록한다(바로 실행). 사용자 승인 후 호출. "
+    {"name": "create_ad_extension", "description": "파워링크 광고그룹에 확장소재를 등록한다(바로 실행). 넣을 내용을 채팅에 표로 보여 준 뒤 호출(허용 버튼이 승인). "
      "DESCRIPTION(홍보문구: heading은 할인·사은품·추가선물증정·이벤트·신상품 중 하나, description 14자), HEADLINE(추가제목: heading에 15자), "
      "DESCRIPTION_EXTRA(추가설명: description 45자), SUB_LINKS(서브링크: links [{name, final}]).",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id", "ext_type"], "properties": {
@@ -300,15 +300,15 @@ TOOLS = [
     {"name": "list_channels", "description": "광고 계정의 비즈채널(사이트·쇼핑몰 등) 목록. 광고그룹을 만들 때 비즈채널 ID를 여기서 고른다.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id"], "properties": ACC}, "annotations": {"readOnlyHint": True}},
     {"name": "preview_changes", "description": "ON/OFF·입찰가·일예산 변경, 캠페인·광고그룹·키워드 등록, 캠페인·광고그룹·키워드 삭제의 미리보기를 만든다. 아직 네이버에 반영되지 않는다. "
-     "행마다 검증 결과(VALID/INVALID)가 나오니 사용자에게 보여 주고 승인을 받은 뒤 execute_job을 부른다.",
+     "행마다 검증 결과(VALID/INVALID)가 나오니 채팅에 표로 보여 준 뒤 execute_job을 부른다(허용 버튼이 승인).",
      "inputSchema": {"type": "object", "required": ["workspace_id", "changes"], "properties": {
          **WS, "changes": {"type": "array", "items": CHANGE, "minItems": 1}}}},
-    {"name": "execute_job", "description": "미리보기 작업을 네이버에 실제 반영한다. 사용자가 preview_changes 결과를 확인하고 실행을 승인했을 때만 호출. "
+    {"name": "execute_job", "description": "미리보기 작업을 네이버에 실제 반영한다. preview_changes 결과를 채팅에 표로 보여 준 뒤 호출(허용 버튼이 승인). "
      "한 번에 몇 행씩 실행하므로 status가 RUNNING이면 같은 job_id로 다시 호출한다.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "job_id"], "properties": {**WS, "job_id": {"type": "integer"}}},
      "annotations": {"destructiveHint": True}},
     {"name": "schedule_job", "description": "미리보기 작업을 정한 시각에 실행하도록 예약한다(예: 11월 12일 0시에 ON). 10분마다 도는 크론이 실행해 최대 10분 늦을 수 있다. "
-     "사용자가 preview_changes 결과와 시각을 승인했을 때만 호출. scheduled_at을 null로 주면 예약 취소.",
+     "preview_changes 결과와 예약 시각을 채팅에 표로 보여 준 뒤 호출(허용 버튼이 승인). scheduled_at을 null로 주면 예약 취소.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "job_id", "scheduled_at"], "properties": {
          **WS, "job_id": {"type": "integer"},
          "scheduled_at": {"type": ["string", "null"], "description": "시간대 포함 ISO 시각, 한국 시간이면 +09:00 (예: 2026-11-12T00:00:00+09:00)"}}},
@@ -417,10 +417,11 @@ async def mcp(request: Request):
             result = {"protocolVersion": v if v in PROTOCOLS else PROTOCOLS[0], "capabilities": {"tools": {}},
                       "serverInfo": {"name": "naverads", "version": "0.1.0"},
                       "instructions": "네이버 검색광고 관리. 먼저 list_ad_accounts로 조직·계정을 확인한다. "
-                                      "변경은 preview_changes → 사용자 승인 → execute_job(또는 schedule_job으로 예약) 순서로만 한다. "
+                                      "변경은 preview_changes → 채팅에 미리보기 표 → execute_job(또는 schedule_job으로 예약) 순서로만 한다. "
                                       "변경 도구(execute_job, schedule_job, create_ad, create_ad_extension, set_auto_bid, delete_auto_bid, run_auto_bids)를 "
-                                      "부르기 전에 넣을 내용(계정·광고그룹·문구와 글자 수·입찰가 등)을 채팅에 표로 먼저 보여 주고, "
-                                      "사용자가 채팅으로 진행하라고 답한 뒤에만 부른다. 같은 답에서 보여 주기와 호출을 함께 하지 않는다."}
+                                      "부르기 직전에 바뀔 내용(계정·광고그룹·대상·지금 값 → 바뀔 값, 문구와 글자 수, 입찰가, 예약 시각, preview_changes의 VALID/INVALID 행)을 "
+                                      "채팅에 표로 보여 준 다음 그 도구를 부른다. 사용자는 표를 보고 Claude 화면의 허용 버튼으로 승인한다(채팅 답을 따로 기다리지 않는다). "
+                                      "표 없이 변경 도구를 부르지 않는다."}
         elif method == "ping":
             result = {}
         elif method == "tools/list":
