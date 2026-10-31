@@ -1676,3 +1676,17 @@ def test_seo_ssrf_more(monkeypatch):
         assert not any("169.254" in u for u in seen)
     out = seo.fetch("https://example.com/")
     assert out["status"] == 200 and "<title>ok" in out["html"]
+
+
+def test_shopping_ad_create():
+    h, ws, acc = _account("shop-ad@a.com", "9161")
+    url, g = f"/workspaces/{ws}/shopping-ads", "grp-9161-sh1"
+    r = c.post(url, headers=h, json={"ad_account_id": acc, "adgroup_naver_id": g, "product_id": " 12345 ", "bid_amt": 300})
+    ad = store("9161")["ads"][r.json()["naver_id"]]
+    assert r.status_code == 200 and r.json()["status"] == "OFF" and r.json()["payload"]["productId"] == "12345"
+    assert ad["type"] == "SHOPPING_PRODUCT_AD" and ad["referenceKey"] == "12345" and ad["adAttr"] == {"bidAmt": 300, "useGroupBidAmt": False}
+    for bad in ({"product_id": "abc"}, {"product_id": "1", "bid_amt": 45}, {"product_id": "1", "bid_amt": 305},
+                {"product_id": "1", "adgroup_naver_id": "grp-9161-pl1"}):  # 숫자 아님·최소 미만·10원 단위 아님·파워링크 그룹
+        assert c.post(url, headers=h, json={"ad_account_id": acc, "adgroup_naver_id": g, **bad}).status_code == 400, bad
+    out, err = _mcp_call(_mcp_headers(h), "create_shopping_ad", workspace_id=ws, ad_account_id=acc, adgroup_id=g, product_id="777")
+    assert not err and out["use_group_bid"] and store("9161")["ads"][out["naver_id"]]["adAttr"] == {"useGroupBidAmt": True}

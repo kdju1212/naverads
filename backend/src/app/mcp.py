@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
-from . import bulk, main as api
+from . import bulk, main as api, shopping_ads
 from .access import membership_of, user_from_header
 from .db import SessionLocal
 from .models import OAuthUsed, User, now
@@ -316,6 +316,7 @@ TOOLS = [
     {"name": "list_negative_keywords", "description": "광고그룹의 제외검색어 목록(naver_id·keyword). 등록·삭제는 preview_changes의 entity_type=negative_keyword로.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id"], "properties": {**ACC, "adgroup_id": {"type": "string"}}},
      "annotations": {"readOnlyHint": True}},
+    shopping_ads.TOOL,
 ]
 
 
@@ -388,6 +389,8 @@ async def _call(db, user: User, name: str, a: dict):
     if name == "create_ad":
         return bulk.create_ad(db, m, acc, a["adgroup_id"], a.get("ad_type") or "RSA_AD", a["headlines"], a["descriptions"],
                               a["pc_url"], a.get("mobile_url") or "")
+    if name == "create_shopping_ad":
+        return shopping_ads.create_shopping_ad(db, m, acc, a["adgroup_id"], str(a["product_id"]), a.get("bid_amt"))
     if name == "create_ad_extension":
         return await api.create_ad_extension(api.ExtensionIn(ad_account_id=acc, adgroup_naver_id=a["adgroup_id"], **{
             k: a[k] for k in ("ext_type", "heading", "description", "links") if k in a}), m=m, db=db)
@@ -418,7 +421,7 @@ async def mcp(request: Request):
                       "serverInfo": {"name": "naverads", "version": "0.1.0"},
                       "instructions": "네이버 검색광고 관리. 먼저 list_ad_accounts로 조직·계정을 확인한다. "
                                       "변경은 preview_changes → 채팅에 미리보기 표 → execute_job(또는 schedule_job으로 예약) 순서로만 한다. "
-                                      "변경 도구(execute_job, schedule_job, create_ad, create_ad_extension, set_auto_bid, delete_auto_bid, run_auto_bids)를 "
+                                      "변경 도구(execute_job, schedule_job, create_ad, create_shopping_ad, create_ad_extension, set_auto_bid, delete_auto_bid, run_auto_bids)를 "
                                       "부르기 직전에 바뀔 내용(계정·광고그룹·대상·지금 값 → 바뀔 값, 문구와 글자 수, 입찰가, 예약 시각, preview_changes의 VALID/INVALID 행)을 "
                                       "채팅에 표로 보여 준 다음 그 도구를 부른다. 사용자는 표를 보고 Claude 화면의 허용 버튼으로 승인한다(채팅 답을 따로 기다리지 않는다). "
                                       "표 없이 변경 도구를 부르지 않는다."}

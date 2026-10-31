@@ -1133,6 +1133,7 @@ async def subscription(m: Membership = Depends(admin_membership), db: Session = 
 
 
 # Claude 커넥터(MCP)는 위 엔드포인트 함수들을 불러 쓰므로 맨 아래에서 등록
-from . import mcp  # noqa: E402
+from . import mcp, shopping_ads  # noqa: E402
 
 app.include_router(mcp.router)
+app.include_router(shopping_ads.router)

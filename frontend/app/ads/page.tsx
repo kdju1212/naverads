@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { BulkBar } from "@/components/BulkBar";
 import { Col, DataTable } from "@/components/DataTable";
 import { DataStatus } from "@/components/DataStatus";
+import { ShoppingAdCreate } from "@/components/ShoppingAdCreate";
 import { Badge, PageTitle } from "@/components/ui";
 import { fmt, inspectLabel } from "@/lib/api";
 import { NAd as Ad, useNaverData } from "@/lib/naverData";
@@ -54,6 +55,7 @@ export default function AdsPage() {
             className={`-mb-px cursor-pointer border-b-2 px-1 pb-2 text-sm font-medium transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40 ${tab === v ? "border-primary text-primary" : "border-transparent text-muted hover:text-ink"}`}>{label}</button>
         ))}
       </div>
+      {tab === "SHOPPING_PRODUCT_AD" && <ShoppingAdCreate adgroups={data.adgroups} />}
       <DataStatus data={data} />
       <DataTable key={tab} rows={rows} cols={cols} selected={sel} onSelect={setSel} loading={data.loading && !rows.length}
         toolbar={<BulkBar entityType="ad" rows={rows.filter((r) => sel.has(r.id))}

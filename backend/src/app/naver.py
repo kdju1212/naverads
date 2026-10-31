@@ -238,9 +238,9 @@ class RealNaverClient:
             out.update({x["id"]: x for x in r.get("data", [])})
         return out
 
-    def create_ad(self, adgroup_id, ad_type, ad, assets):
-        # 명세 AdRequest. 검수·확인 전에 노출되지 않게 OFF로 만든다. shortcut: 실계정 미확인
-        body = {"nccAdgroupId": adgroup_id, "type": ad_type, "ad": ad, "userLock": True, **({"assets": assets} if assets else {})}
+    def create_ad(self, adgroup_id, ad_type, ad, assets, **extra):
+        # 명세 AdRequest. 검수·확인 전에 노출되지 않게 OFF로 만든다. extra: 쇼핑 상품소재의 referenceKey·adAttr. shortcut: 실계정 미확인
+        body = {"nccAdgroupId": adgroup_id, "type": ad_type, "ad": ad, "userLock": True, **({"assets": assets} if assets else {}), **extra}
         return self._req("POST", "/ncc/ads", json=body)
 
     def serp_ads(self, keyword, device) -> list[str]:
@@ -588,12 +588,14 @@ class MockNaverClient:
                       "convAmt": clk // 20 * 30000, "avgRnk": round(r.uniform(1, 8), 1)}
         return out
 
-    def create_ad(self, adgroup_id, ad_type, ad, assets):
+    def create_ad(self, adgroup_id, ad_type, ad, assets, **extra):
         if adgroup_id not in self.s["adgroups"]:
             raise NaverApiError("광고그룹이 없습니다")
+        if (ad_type == "SHOPPING_PRODUCT_AD") != (self.s["adgroups"][adgroup_id]["adgroupType"] == "SHOPPING"):
+            raise NaverApiError("광고그룹 유형과 소재 유형이 맞지 않습니다")
         aid = f"nad-{self.customer_id}-{len(self.s['ads']) + 1}"
         self.s["ads"][aid] = {"nccAdId": aid, "nccAdgroupId": adgroup_id, "type": ad_type, "userLock": True,
-                              "inspectStatus": "UNDER_REVIEW", "ad": ad, **({"assets": assets} if assets else {})}
+                              "inspectStatus": "UNDER_REVIEW", "ad": ad, **({"assets": assets} if assets else {}), **extra}
         return dict(self.s["ads"][aid])
 
     def serp_ads(self, keyword, device):
