@@ -199,6 +199,14 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
     - execute_job·schedule_job·create_ad·create_ad_extension·자동입찰 도구 다시 바로 실행, get_approval·승인 대기 화면·승인 API 삭제
     - 남긴 것: approval_requests 표(0013, 운영 DB에 이미 있음, 조직 삭제 때 같이 지움), 소재 제목 15자·설명 45자 검사,
       변경 도구는 채팅에 미리보기 표를 먼저 보여 준 뒤 부르고 Claude 허용 버튼으로 승인받으라는 MCP 안내문(서버가 강제하진 못함)
+14-12. 10/31 쇼핑검색 상품소재 등록 → 10/31 배포(fcaf0d0, 마이그레이션 없음)
+    - 웹: 소재 화면 '쇼핑 상품소재' 탭의 '새 상품소재'(쇼핑검색 광고그룹·네이버쇼핑 상품 번호·입찰가, 비우면 그룹 입찰가)
+    - Claude: create_shopping_ad(바로 실행, 표 먼저 보여 주기 안내에 포함). 둘 다 OFF로 만들어짐
+    - 파일: backend/src/app/shopping_ads.py(서버·MCP 도구 정의), frontend/components/ShoppingAdCreate.tsx. 기존 파일은 연결 몇 줄만
+    - 입찰가 50~100,000원·10원 단위(가정값). 상품명은 다음 데이터 받기 때 채워짐
+    - 운영 반영 확인: 서버 주소(/workspaces/{ws}/shopping-ads, 비로그인 401)·웹 화면 코드. 로그인 후 화면 클릭은 안 해 봄
+    - [미확인] 명세에 쇼핑 소재 형식이 없어 referenceKey=상품 번호·adAttr=입찰가로 가정. 쇼핑 계정 연결 후 상품 1개로 실등록 확인,
+      거부되면 shopping_ads.py만 고침 (10번 쇼핑 소재 입찰가와 같이 확인)
 15. 다음 달 예산 증액 — 개발 중, 광고주 승인 후 실행하는 흐름으로
 16. 보안 → 10/28 배포(56a8f60, 마이그레이션 0012): 요청 횟수 제한(IP당 1분 600번, Workers ratelimits — 무료 플랜 배포 성공),
     Claude 인가 코드 1회 사용·갱신 토큰 교체(60초 뒤 재사용은 탈취로 보고 Claude 연결 전부 끊기), 설정 'Claude 연결만 끊기', 회원 탈퇴
