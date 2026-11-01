@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
-from . import bulk, main as api, shopping_ads
+from . import bulk, main as api, place, shopping_ads
 from .access import membership_of, user_from_header
 from .db import SessionLocal
 from .models import OAuthUsed, User, now
@@ -317,6 +317,7 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id"], "properties": {**ACC, "adgroup_id": {"type": "string"}}},
      "annotations": {"readOnlyHint": True}},
     shopping_ads.TOOL,
+    *place.TOOLS,
 ]
 
 
@@ -335,6 +336,8 @@ async def _call(db, user: User, name: str, a: dict):
             w["accounts"] = await api.list_accounts(m=membership_of(db, w["id"], user), db=db)
         return out
     m = membership_of(db, int(a["workspace_id"]), user)
+    if name.startswith("place_ads_"):
+        return place.call_tool(db, m, name, a)
     if name == "get_performance":
         return await api.performance_accounts(_day(a.get("since")), _day(a.get("until")), _joined(a.get("account_ids")), m=m, db=db)
     if name == "get_daily_performance":

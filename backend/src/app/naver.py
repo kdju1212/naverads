@@ -153,6 +153,26 @@ class RealNaverClient:
         tp = self._req("GET", f"/ncc/campaigns/{campaign_id}")["campaignTp"]  # 광고그룹 유형은 캠페인 유형을 따른다
         return self._req("POST", "/ncc/adgroups", json=_adgroup_body(campaign_id, tp, name, channel_id, bid, daily_budget))
 
+    # 플레이스광고(LOCAL_AD) 그룹: 2026-09-16 릴리스 노트의 POST /ncc/adgroups 예시 본문. 만들자마자 비용이 나가지 않게 OFF로.
+    # ADVoost ON이면 입찰가를 보내지 않는다(ADVoost 그룹은 입찰가 등 고급옵션 변경 불가, 오류 3755). shortcut: 실계정 미확인
+    def create_place_adgroup(self, campaign_id, name, channel_id, bid, use_advoost):
+        return self._req("POST", "/ncc/adgroups", json=_place_adgroup_body(campaign_id, name, channel_id, bid, use_advoost))
+
+    def set_advoost(self, adgroup_id, on: bool):
+        """PUT /ncc/adgroups/{id}?fields=useAdvoost (릴리스 노트 예시). 응답(adgroupAttrJson은 응답에서 JSON 문자열)으로 반영을 확인하고,
+        안 보이면 한 번 다시 읽는다. 쓰기는 재시도하지 않는다."""
+        out = self._req("PUT", f"/ncc/adgroups/{adgroup_id}", params={"fields": "useAdvoost"},
+                        json={"nccAdgroupId": adgroup_id, "adgroupAttrJson": {"useAdvoost": on}})
+        if advoost_on(out) != on and advoost_on(self._req("GET", f"/ncc/adgroups/{adgroup_id}")) != on:
+            raise NaverApiError("네이버에서 ADVoost 설정이 바뀐 것을 확인하지 못했습니다. 네이버 광고관리에서 확인하세요")
+
+    def create_place_ad(self, adgroup_id, place_id, description):
+        # 일반 플레이스 소재(LOCAL_AD): 공식 문서에 응답 모양만 있고 요청 본문이 없어 실계정 호출을 막는다(PLACE_ADS_MAINTENANCE.md 미확인 항목)
+        if os.getenv("NAVER_ALLOW_REAL_WRITE") != "1":
+            raise NaverApiError("일반 플레이스 소재 등록은 네이버 요청 형식이 확인되지 않아 아직 막혀 있습니다. ADVoost를 켜면 소재가 자동으로 만들어집니다")
+        return self._req("POST", "/ncc/ads", json={"nccAdgroupId": adgroup_id, "type": "LOCAL_AD", "ad": {"description": description},
+                                                   "referenceKey": place_id, "userLock": True})
+
     def create_ad_extension(self, adgroup_id, ext_type, content):
         # 명세상 생성에 비즈채널·스케줄이 필수라 소유 광고그룹의 채널을 쓰고 매일 24시간 노출로 만든다
         grp = self._req("GET", f"/ncc/adgroups/{adgroup_id}")
@@ -378,6 +398,18 @@ def _adgroup_body(campaign_id, tp, name, channel_id, bid, daily_budget):
             "bidAmt": bid or MIN_BID[tp], "useDailyBudget": daily_budget is not None, "dailyBudget": daily_budget or 0, "userLock": True}
 
 
+def _place_adgroup_body(campaign_id, name, channel_id, bid, use_advoost):
+    body = {"nccCampaignId": campaign_id, "name": name, "adgroupType": "LOCAL_AD", "pcChannelId": channel_id, "mobileChannelId": channel_id,
+            "useDailyBudget": False, "userLock": True, "adgroupAttrJson": {"useAdvoost": use_advoost}}  # 하루예산은 캠페인에서 건다
+    return body if use_advoost else {**body, "bidAmt": bid}
+
+
+def advoost_on(g) -> bool:
+    """광고그룹의 ADVoost 플레이스 사용 여부. adgroupAttrJson은 요청에선 객체, 응답에선 JSON 문자열(릴리스 노트 2026-09-16)."""
+    attr = _json((g or {}).get("adgroupAttrJson"))
+    return isinstance(attr, dict) and attr.get("useAdvoost") is True
+
+
 def channel_row(aid, c):
     return {"ad_account_id": aid, "naver_id": c["nccBusinessChannelId"], "name": c.get("name", ""), "channel_tp": c.get("channelTp", ""),
             "key": c.get("channelKey", ""), "inspect_status": c.get("inspectStatus", "")}
@@ -441,7 +473,15 @@ def _seed(cid: str) -> dict:
     s["channels"] = {f"bsn-{cid}-site": {"nccBusinessChannelId": f"bsn-{cid}-site", "name": "자사몰", "channelTp": "SITE",
                                          "channelKey": "https://example.com", "inspectStatus": "APPROVED"},
                      f"bsn-{cid}-shop": {"nccBusinessChannelId": f"bsn-{cid}-shop", "name": "쇼핑몰", "channelTp": "MALL",
-                                         "channelKey": "shop-example", "inspectStatus": "APPROVED"}}
+                                         "channelKey": "shop-example", "inspectStatus": "APPROVED"},
+                     # 플레이스 업체: mockImages(스마트플레이스 업체 이미지 있음)·mockMedical(병의원)은 ADVoost 조건 흉내용
+                     f"bsn-{cid}-place": {"nccBusinessChannelId": f"bsn-{cid}-place", "name": "행복 분식", "channelTp": "PLACE",
+                                          "channelKey": f"{cid}101", "inspectStatus": "APPROVED", "mockImages": True},
+                     f"bsn-{cid}-place-noimg": {"nccBusinessChannelId": f"bsn-{cid}-place-noimg", "name": "사진 없는 가게",
+                                                "channelTp": "PLACE", "channelKey": f"{cid}102", "inspectStatus": "APPROVED", "mockImages": False},
+                     f"bsn-{cid}-place-clinic": {"nccBusinessChannelId": f"bsn-{cid}-place-clinic", "name": "튼튼 의원", "channelTp": "PLACE",
+                                                 "channelKey": f"{cid}103", "inspectStatus": "APPROVED", "mockImages": True,
+                                                 "mockMedical": True}}
     g = f"grp-{cid}-sh1"
     s["adgroups"][g] = {"nccAdgroupId": g, "nccCampaignId": sh, "name": "쇼핑그룹1", "adgroupType": "SHOPPING", "userLock": False, "bidAmt": 300}
     for p in (1, 2, 3):
@@ -493,6 +533,60 @@ class MockNaverClient:
         self.s["adgroups"][nid] = {"nccAdgroupId": nid, **_adgroup_body(campaign_id, camp["campaignTp"], name, channel_id, bid, daily_budget)}
         return dict(self.s["adgroups"][nid])
 
+    # ---- 플레이스: 2026-09-16 릴리스 노트의 ADVoost 제한과 오류 코드를 그대로 흉내 낸다
+    def _advoost_ok(self, channel_id):
+        ch = self.s["channels"][channel_id]
+        if ch.get("mockMedical"):
+            raise NaverApiError('400 {"code":3756,"title":"병의원 업종 업체는 애드부스트 플레이스 광고를 집행할 수 없습니다"}')
+        if not ch.get("mockImages"):
+            raise NaverApiError('400 {"code":3752,"title":"스마트플레이스에 업체 이미지가 없어 광고그룹을 저장할 수 없습니다"}')
+
+    def _linked_ad(self, adgroup_id):
+        return next((a for a in self.s["ads"].values() if a["nccAdgroupId"] == adgroup_id and a["type"] == "ADVOOST_PLACE_AD"), None)
+
+    def _new_linked_ad(self, adgroup_id, place_id):
+        aid = f"nad-{self.customer_id}-{len(self.s['ads']) + 1}"
+        self.s["ads"][aid] = {"nccAdId": aid, "nccAdgroupId": adgroup_id, "type": "ADVOOST_PLACE_AD", "ad": {}, "adAttr": {},
+                              "userLock": False, "inspectStatus": "UNDER_REVIEW", "referenceKey": place_id}
+
+    def create_place_adgroup(self, campaign_id, name, channel_id, bid, use_advoost):
+        camp = self.s["campaigns"].get(campaign_id)
+        if camp is None or camp["campaignTp"] != "PLACE":
+            raise NaverApiError("플레이스 캠페인이 아닙니다")
+        ch = self.s.get("channels", {}).get(channel_id)
+        if ch is None or ch["channelTp"] != "PLACE":
+            raise NaverApiError("플레이스 비즈채널이 아닙니다")
+        if use_advoost:
+            self._advoost_ok(channel_id)
+        nid = f"grp-{self.customer_id}-new{len(self.s['adgroups']) + 1}"
+        body = _place_adgroup_body(campaign_id, name, channel_id, bid, use_advoost)
+        body["adgroupAttrJson"] = json.dumps(body["adgroupAttrJson"])  # 응답처럼 문자열로
+        self.s["adgroups"][nid] = {"nccAdgroupId": nid, "bidAmt": 0, **body, "status": "ELIGIBLE"}
+        if use_advoost:
+            self._new_linked_ad(nid, ch["channelKey"])
+        return dict(self.s["adgroups"][nid])
+
+    def set_advoost(self, adgroup_id, on: bool):
+        g = self.s["adgroups"].get(adgroup_id)
+        if g is None or g.get("adgroupType") != "LOCAL_AD":
+            raise NaverApiError("플레이스 광고그룹이 아닙니다")
+        if on:
+            self._advoost_ok(g["pcChannelId"])
+        g["adgroupAttrJson"] = json.dumps({"useAdvoost": on})
+        linked = self._linked_ad(adgroup_id)
+        if on and linked is None:
+            self._new_linked_ad(adgroup_id, self.s["channels"][g["pcChannelId"]]["channelKey"])
+        elif linked is not None:
+            linked["userLock"] = not on  # 끄면 연동형 소재는 지워지지 않고 OFF가 된다
+
+    def create_place_ad(self, adgroup_id, place_id, description):
+        g = self.s["adgroups"].get(adgroup_id)
+        if g is None or g.get("adgroupType") != "LOCAL_AD":
+            raise NaverApiError("플레이스 광고그룹이 아닙니다")
+        if advoost_on(g):
+            raise NaverApiError('400 {"code":3839,"title":"ADVoost 플레이스 광고그룹에는 소재를 추가할 수 없습니다"}')
+        return self.create_ad(adgroup_id, "LOCAL_AD", {"description": description}, None, referenceKey=place_id)
+
     def create_ad_extension(self, adgroup_id, ext_type, content):
         if adgroup_id not in self.s["adgroups"]:
             raise NaverApiError("대상 광고그룹이 존재하지 않습니다")
@@ -523,6 +617,8 @@ class MockNaverClient:
     def create_restricted_keyword(self, adgroup_id, keyword):
         if adgroup_id not in self.s["adgroups"]:
             raise NaverApiError("대상 광고그룹이 존재하지 않습니다")
+        if advoost_on(self.s["adgroups"][adgroup_id]):
+            raise NaverApiError('400 {"code":3754,"title":"ADVoost 플레이스 광고그룹에는 제외검색어를 등록할 수 없습니다"}')
         rid = f"nrk-{self.customer_id}-{len(self.s.setdefault('restricted', {})) + 1}"
         self.s["restricted"][rid] = {"nccAdgroupRestrictKwdId": rid, "nccAdgroupId": adgroup_id, "keyword": keyword, "type": "KEYWORD_PLUS_RESTRICT"}
         return dict(self.s["restricted"][rid])
@@ -623,7 +719,10 @@ class MockNaverClient:
     def create_ad(self, adgroup_id, ad_type, ad, assets, **extra):
         if adgroup_id not in self.s["adgroups"]:
             raise NaverApiError("광고그룹이 없습니다")
-        if (ad_type == "SHOPPING_PRODUCT_AD") != (self.s["adgroups"][adgroup_id]["adgroupType"] == "SHOPPING"):
+        if ad_type == "ADVOOST_PLACE_AD":
+            raise NaverApiError('400 {"code":3840,"title":"연동형 소재는 직접 등록할 수 없습니다"}')
+        gtype = self.s["adgroups"][adgroup_id]["adgroupType"]
+        if (ad_type == "SHOPPING_PRODUCT_AD") != (gtype == "SHOPPING") or (ad_type == "LOCAL_AD") != (gtype == "LOCAL_AD"):
             raise NaverApiError("광고그룹 유형과 소재 유형이 맞지 않습니다")
         aid = f"nad-{self.customer_id}-{len(self.s['ads']) + 1}"
         self.s["ads"][aid] = {"nccAdId": aid, "nccAdgroupId": adgroup_id, "type": ad_type, "userLock": True,
@@ -646,6 +745,10 @@ class MockNaverClient:
         obj = self.s[res].get(naver_id)
         if obj is None:
             raise NaverApiError("대상 객체가 존재하지 않습니다")
+        if (entity_type, field) == ("adgroup", "bid_amt") and advoost_on(obj):
+            raise NaverApiError('400 {"code":3755,"title":"ADVoost 플레이스 광고그룹은 입찰가 등 고급옵션을 바꿀 수 없습니다"}')
+        if (entity_type, field) == ("ad", "status") and obj.get("type") == "ADVOOST_PLACE_AD":
+            raise NaverApiError('400 {"code":3838,"title":"연동형 소재의 ON/OFF는 광고그룹의 ADVoost 설정으로만 바뀝니다"}')
         _check_expected(field, obj, expect)
         apply(obj, value)
 

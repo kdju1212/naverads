@@ -90,7 +90,7 @@ export function downloadCsv(rows: (string | number | null)[][], filename: string
 
 export const fmt = (n: number | null | undefined, suffix = "") => (n == null ? "-" : n.toLocaleString("ko-KR") + suffix);
 
-export const PRODUCT_LABEL: Record<string, string> = { WEB_SITE: "파워링크", SHOPPING: "쇼핑검색" };
+export const PRODUCT_LABEL: Record<string, string> = { WEB_SITE: "파워링크", SHOPPING: "쇼핑검색", PLACE: "플레이스" };
 // 네이버 광고그룹 statusReason/status (공식 명세 enum). 동기화 시점 기준
 export const SERVING_LABEL: Record<string, string> = {
   ELIGIBLE: "노출 가능", LIMITED_ELIGIBLE: "일부 제한", PAUSED: "중지", DELETED: "삭제됨",

@@ -144,7 +144,7 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
 [조건이 생기면 / 나중에]
 10. 쇼핑 소재 등록·입찰가 — 11/01 코드 수정(14-13), 검수 통과 쇼핑몰 채널·nvMid 상품으로 실호출 확인 남음
 11. 소재·확장소재 엑셀 등록
-12. SMB 광고주용 쉬운 등록 화면
+12. SMB 광고주용 쉬운 등록 화면 (플레이스광고는 14-15에서 쉬운 화면으로 시작, 파워링크·쇼핑은 아직)
 13. (선택) 연관 키워드 클릭수·클릭률 / 디자인 남은 것은 10/28 배포(813c68a): 계정 검색(6개 이상일 때), 표 상태·검수 필터, KPI 증감 색, 불러오는 중 회색 막대, 완료 토스트(작업 실행·네이버 데이터 받기) — 화면은 직접 확인 필요. 필터 칩은 안 함
 14. 회원가입 → 10/28 Google 로그인으로 해결(배포 81cfffa). 가입은 Google로만(운영 비밀번호 가입 403), 같은 이메일은 기존 계정으로 로그인
     - 키: Cloudflare 대시보드 naverads-api Secret GOOGLE_CLIENT_ID·GOOGLE_CLIENT_SECRET, 리디렉션 URI …/auth/google/callback
@@ -235,6 +235,22 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
     - 0014: sync_runs.workspace_id 추가(기존 기록은 한 조직에만 연결된 계정이면 그 조직으로 채움)
     - 확인: 백엔드 72개·프론트 10개 테스트, 로컬 Workers+D1에서 로그인 제한·SEO 리다이렉트·성과 조회 확인
     - localhost:3000 로그인 허용은 유지(로컬 프론트 개발용, 사용자 결정)
+14-15. 11/01 플레이스광고(일반·ADVoost) 추가 — 브랜치 feat/place-ads, main 병합·배포 안 함(사용자 지시 대기)
+    - 유지보수 문서: docs/PLACE_ADS_MAINTENANCE.md (차이·API·조건·규칙·오류코드·테스트·장애 대응·공식 문서·미확인)
+    - 서버 backend/src/app/place.py: 상태 조회 + 계획(plan)→승인(apply). 웹 /workspaces/{ws}/place, /place/plan, /place/apply,
+      Claude 도구 place_ads_status·place_ads_plan·place_ads_apply
+    - 승인: approval_requests(0013, 마이그레이션 추가 없음) — 만든 사람만·같은 내용(해시)·15분·한 번. 실행 직전 권한·상한 재검사.
+      14-11(웹 승인 화면 없음, Claude 허용 버튼 = 승인) 유지: 웹 승인 페이지 대신 plan→apply 두 단계
+    - 상한(서버 강제): 하루예산 1,000~100,000원(PLACE_DAILY_BUDGET_MAX), 입찰가 50~5,000원(PLACE_BID_MAX).
+      켜기·입찰가·ADVoost 켜기는 캠페인 하루예산이 상한 이하일 때만
+    - ADVoost(2026-09-16 릴리스 노트): useAdvoost 그룹은 입찰가(3755)·제외검색어(3754)·소재 추가(3839)·연동 소재 ON/OFF(3838)를
+      호출 전에 막고 쉬운 설명. 새 캠페인·그룹은 OFF로, 결과는 SUCCESS/PARTIAL/FAILED + "검토 후 노출·반영 지연" 안내
+    - 화면 frontend/app/place/page.tsx(메뉴 광고 관리 > 플레이스광고): 용어 설명, 업체 선택→예산→광고 내용 확인→최종 승인
+    - 성과 동기화에 PLACE 캠페인 포함(sync.py), 성과 상품 유형에 PLACE
+    - 테스트: backend/tests/test_place.py 8개(전체 백엔드 80개 통과), 프론트 테스트·빌드·lint 통과
+    - [미확인] 실계정 호출 안 함: PLACE 캠페인·LOCAL_AD 그룹 생성, useAdvoost 변경, 조회 응답 모양.
+      일반 플레이스 소재(LOCAL_AD) 등록 요청 형식은 문서에 없어 실계정에서 막음(ADVoost나 네이버 화면 안내)
+    - 화면은 빌드만 확인, 브라우저로 눌러 보지 않음
 15. 다음 달 예산 증액 — 개발 중, 광고주 승인 후 실행하는 흐름으로
 16. 보안 → 10/28 배포(56a8f60, 마이그레이션 0012): 요청 횟수 제한(IP당 1분 600번, Workers ratelimits — 무료 플랜 배포 성공),
     Claude 인가 코드 1회 사용·갱신 토큰 교체(60초 뒤 재사용은 탈취로 보고 Claude 연결 전부 끊기), 설정 'Claude 연결만 끊기', 회원 탈퇴

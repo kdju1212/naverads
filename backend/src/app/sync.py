@@ -18,7 +18,7 @@ def sync_account(db: Session, account: AdAccount, client, workspace_id: int, off
     다 받았거나 실패하면 (SyncRun, None)."""
     try:
         campaigns = {c["nccCampaignId"]: c["campaignTp"] for c in client.list_campaigns()
-                     if c["campaignTp"] in ("WEB_SITE", "SHOPPING")}  # MVP 범위 밖 캠페인 유형은 저장하지 않는다
+                     if c["campaignTp"] in ("WEB_SITE", "SHOPPING", "PLACE")}  # 그 밖의 캠페인 유형은 저장하지 않는다
         ids = sorted(campaigns)  # 나눠 받는 동안 순서가 바뀌지 않게
         _sync_stats(db, account, client, campaigns, ids[offset:offset + SYNC_CHUNK], prune=offset == 0)
     except NaverApiError as e:

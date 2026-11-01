@@ -655,7 +655,7 @@ async def naver_objects(account_id: int, kind: Literal["campaigns", "adgroups", 
     return [ROW_OF[kind](account_id, o) for o in _naver(db, m, account_id, lambda c: c.get_many(kind, id_list))]
 
 
-ProductType = Literal["WEB_SITE", "SHOPPING"] | None
+ProductType = Literal["WEB_SITE", "SHOPPING", "PLACE"] | None
 
 
 # ---------- 확장소재 ----------
@@ -1048,7 +1048,7 @@ def _account_performance(db: Session, ws_id: int, ids: set[int], since: date, un
          .where(PerformanceDaily.ad_account_id.in_(ids), PerformanceDaily.date.between(since, until), _own_stats(db, ws_id, ids))
          .group_by(PerformanceDaily.ad_account_id, PerformanceDaily.campaign_tp))
     names = dict(db.execute(select(AdAccount.id, AdAccount.name).where(AdAccount.id.in_(ids))).all())
-    out = {i: {"ad_account_id": i, "name": names[i], "WEB_SITE": None, "SHOPPING": None} for i in ids}
+    out = {i: {"ad_account_id": i, "name": names[i], "WEB_SITE": None, "SHOPPING": None, "PLACE": None} for i in ids}
     for acc, tp, imp, clk, cost, conv, rev in db.execute(q):
         out[acc][tp] = _perf(imp, clk, cost, conv, rev)
     return list(out.values())
@@ -1155,7 +1155,8 @@ async def subscription(m: Membership = Depends(admin_membership), db: Session = 
 
 
 # Claude 커넥터(MCP)는 위 엔드포인트 함수들을 불러 쓰므로 맨 아래에서 등록
-from . import mcp, shopping_ads  # noqa: E402
+from . import mcp, place, shopping_ads  # noqa: E402
 
 app.include_router(mcp.router)
 app.include_router(shopping_ads.router)
+app.include_router(place.router)

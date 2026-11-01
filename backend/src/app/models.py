@@ -47,7 +47,8 @@ class OAuthUsed(Base):
 
 
 class ApprovalRequest(Base):
-    """Claude(MCP)가 요청한 광고 변경. 웹에서 사람이 승인해야 서버가 저장된 내용 그대로(승인한 사람 권한으로) 실행한다."""
+    """승인 후 실행하는 광고 변경. 지금은 플레이스광고(place.py)가 쓴다: tool='place:<action>', 계획을 만든 사람만 같은 내용(payload_hash)으로
+    expires_at 전에 한 번 실행(PENDING→RUNNING→DONE|PARTIAL|FAILED)."""
     __tablename__ = "approval_requests"
     id: Mapped[int] = mapped_column(primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
