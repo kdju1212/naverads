@@ -1002,6 +1002,29 @@ def test_shared_account_stats_only_until_own_sync():
     assert "A 키 거부" in errs and "B만의 오류" not in errs
 
 
+def test_logout_revokes_only_this_token(monkeypatch):
+    import time
+
+    from app import security
+
+    user("out@a.com")
+    login = lambda: {"Authorization": f"Bearer {c.post('/auth/login', json={'email': 'out@a.com', 'password': 'password1'}).json()['token']}"}  # noqa: E731
+    pc = login()
+    real = time.time
+    monkeypatch.setattr(security.time, "time", lambda: real() + 5)  # 다른 기기는 다른 시각에 로그인(같은 초면 토큰이 같다)
+    phone = login()
+    monkeypatch.setattr(security.time, "time", real)
+    mcp = _mcp_headers(pc)
+    assert c.get("/auth/me", headers=pc).status_code == 200
+    assert c.post("/auth/logout", headers=pc).json() == {"ok": True}
+    assert c.get("/auth/me", headers=pc).status_code == 401  # 로그아웃한 토큰은 12시간 만료 전이라도 거부
+    assert c.post("/auth/logout", headers=pc).status_code == 401  # 이미 무효
+    assert c.get("/auth/me", headers=phone).status_code == 200  # 다른 기기는 그대로
+    r = c.post("/mcp", headers=mcp, json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    assert r.status_code == 200 and "result" in r.json()  # Claude 연결도 그대로
+    assert c.post("/auth/logout", headers={"Authorization": "Bearer nope"}).status_code == 401
+
+
 def test_goal_guards(monkeypatch):
     from datetime import datetime
     from app import bulk

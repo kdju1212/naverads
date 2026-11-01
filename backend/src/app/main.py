@@ -17,9 +17,9 @@ from sqlalchemy.orm import Session
 
 from . import bulk, naver, safety, seo
 from .access import (ADMIN_ROLES, accessible_account_ids, admin_membership, current_user, membership, membership_of, resolve_account_ids,
-                     user_from_header)
+                     logged_out_key, user_from_header)
 from .db import Base, engine, get_db
-from .models import (AccountAccess, AccountGoal, AccountSafety, AdAccount, ApprovalRequest, AuditLog, AutoBidRule, BulkJob, BulkJobRow, LoginFailure, Membership, NaverApiCredential,
+from .models import (AccountAccess, AccountGoal, AccountSafety, AdAccount, ApprovalRequest, AuditLog, AutoBidRule, BulkJob, BulkJobRow, LoginFailure, Membership, NaverApiCredential, OAuthUsed,
                      PerformanceDaily, Plan, Subscription, SyncRun, User, Workspace, WorkspaceAdAccount, KST, now, today_kst)
 from .naver import NaverApiError, client_for
 from .security import decrypt, encrypt, hash_password, key_of, make_token, read_payload, sign_payload, verify_password
@@ -148,6 +148,18 @@ async def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
 @app.get("/auth/me")
 async def me(user: User = Depends(current_user)):
     return {"id": user.id, "email": user.email, "name": user.name, "has_password": user.password_hash != GOOGLE_ONLY}
+
+
+@app.post("/auth/logout")
+async def logout(authorization: str = Header(""), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """이 기기만 로그아웃: 지금 토큰을 만료 시각까지 서버에서 무효로 한다(다른 기기·Claude 연결은 그대로)."""
+    token = authorization.removeprefix("Bearer ").strip()
+    key = logged_out_key(token)
+    db.execute(delete(OAuthUsed).where(OAuthUsed.expires_at < now()))  # 만료된 기록은 지워 표가 커지지 않게
+    if not db.get(OAuthUsed, key):
+        db.add(OAuthUsed(key=key, used_at=now(), expires_at=datetime.fromtimestamp(int(token.split(".")[-2]), timezone.utc)))
+    db.commit()
+    return {"ok": True}
 
 
 @app.post("/auth/logout-all")

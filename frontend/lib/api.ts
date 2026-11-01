@@ -47,6 +47,9 @@ export async function setToken(t: string | null) {
 
 /** 전체 새로고침으로 이동해 메모리에 남은 이전 사용자 데이터를 비운다 */
 export async function logout() {
+  // 서버에서도 이 토큰을 무효로(이 기기만). 실패해도(이미 만료·네트워크) 브라우저에서는 지운다
+  const t = getToken();
+  if (t) await fetch(`${API_URL}/auth/logout`, { method: "POST", headers: { Authorization: `Bearer ${t}` } }).catch(() => {});
   await setToken(null);
   // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- 상태 초기화를 위해 의도적으로 전체 새로고침
   location.href = "/login";
