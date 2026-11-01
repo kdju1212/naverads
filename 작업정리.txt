@@ -30,7 +30,7 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
 - 배포: main에 push하면 Cloudflare Workers Builds가 프론트(naverads)·백엔드(naverads-api) 자동 배포
   GitHub 커밋의 Workers Builds 두 개가 성공한 뒤 확인 (프론트가 먼저 뜨면 잠깐 "Not Found" → 새로고침)
 - DB 변경은 자동 배포 안 됨 → push 전에 backend 폴더에서: npx wrangler d1 migrations apply naverads --remote
-  (0014까지 적용 완료, 11/01)
+  (0015까지 적용 완료, 11/01)
 - 디버깅: npx wrangler tail naverads-api --format json / DB 읽기: npx wrangler d1 execute naverads --remote --command "SELECT ..."
 - 무료 플랜만 사용: 요청 1번에 외부 호출+D1 쿼리 50번, CPU 10ms → 대량 작업은 5행씩 나눠 실행, 크론도 조금씩 나눠 진행
 - 광고 데이터(캠페인~확장소재)는 서버 DB에 없음: 브라우저(IndexedDB)가 네이버 마스터 보고서로 받아 보관(7일, 화면 "새로고침")
@@ -256,7 +256,9 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
     - [미확인] 실계정 호출 안 함: PLACE 캠페인·LOCAL_AD 그룹 생성, useAdvoost 변경, 조회 응답 모양.
       일반 플레이스 소재(LOCAL_AD) 등록 요청 형식은 문서에 없어 실계정에서 막음(ADVoost나 네이버 화면 안내)
     - 화면은 빌드만 확인, 브라우저로 눌러 보지 않음
-14-16. 11/01 광고비 안전장치·변경 승인 강화 — 브랜치 feat/ad-safety, main 병합·배포 안 함(사용자 지시 대기), 마이그레이션 0015
+14-16. 11/01 광고비 안전장치·변경 승인 강화 → 11/01 배포(1da19d1, 0015 운영 적용, Workers Builds 둘 다 성공)
+    - 운영 확인: 안전장치·긴급 중지·플레이스 취소 경로, 로그인 없으면 401, 남의 계정 403. 기존 자동입찰 규칙 0개(재승인 대상 없음)
+    - [할 일] 설정 > 광고 계정에서 실계정(4285993) 안전장치를 정해야 켜기·예산 증액·입찰가 변경 가능(지금 account_safety 0행)
     - 유지보수 문서: docs/AD_SAFETY_AND_APPROVALS.md (계산 방식·한계·출처·승인 흐름·자동입찰 범위·코드 위치·전환 절차·장애 대응)
     - 계정별(조직 단위) 하루예산 관리 기준·클릭당 최대 입찰가(account_safety). 관리자가 현황을 보고 금액을 직접 확인해 저장, 이력 SAFETY_SET
     - 켜기·예산 증액은 실행 직전 네이버를 다시 읽어 '켜진 캠페인 하루예산 설정액 합계'(캠페인 예산 우선, 없으면 켜진 그룹 합, 중복 없음)를 검사.
