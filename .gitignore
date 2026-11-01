@@ -15,3 +15,9 @@ d1_backup_*.sql
 
 # Claude 점검 전용 계정 (비밀번호 포함)
 .test-account
+
+# 보안 점검 기록 (취약점 내용 — 공개 저장소에 올리지 않음)
+보안점검.txt
+
+# skills 설치 원본(같은 내용이 .claude/skills에 있어 그것만 올림)
+.agents/

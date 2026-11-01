@@ -12,7 +12,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import and_, bindparam, delete, false, func, or_, select, text, update
 from sqlalchemy.orm import Session
 
 from . import bulk, naver, seo
@@ -20,7 +20,7 @@ from .access import (ADMIN_ROLES, accessible_account_ids, admin_membership, curr
                      user_from_header)
 from .db import Base, engine, get_db
 from .models import (AccountAccess, AccountGoal, AdAccount, ApprovalRequest, AuditLog, AutoBidRule, BulkJob, BulkJobRow, LoginFailure, Membership, NaverApiCredential,
-                     PerformanceDaily, Plan, Subscription, SyncRun, User, Workspace, WorkspaceAdAccount, now, today_kst)
+                     PerformanceDaily, Plan, Subscription, SyncRun, User, Workspace, WorkspaceAdAccount, KST, now, today_kst)
 from .naver import NaverApiError, client_for
 from .security import decrypt, encrypt, hash_password, key_of, make_token, read_payload, sign_payload, verify_password
 from .sync import sync_account
@@ -105,25 +105,30 @@ def _login_keys(email: str, ip: str | None) -> dict[str, int]:
     return keys
 
 
+_COUNT_ATTEMPT = text("INSERT INTO login_failures (key, count, first_at) VALUES (:k, 1, :t) "
+                      "ON CONFLICT (key) DO UPDATE SET count = count + 1").bindparams(
+    bindparam("t", type_=LoginFailure.__table__.c.first_at.type))
+
+
 def login_blocked(db: Session, email: str, ip: str | None) -> bool:
+    """이번 시도를 비밀번호 확인 전에 먼저 센다(한 문장으로 올려서 동시에 보낸 요청도 하나씩 셈). 한도를 넘으면 True.
+    맞는 비밀번호면 record_login이 되돌린다."""
     keys = _login_keys(email, ip)
-    q = select(LoginFailure.key, LoginFailure.count).where(LoginFailure.key.in_(keys), LoginFailure.first_at > now() - LOGIN_WINDOW)
-    return any(n >= keys[k] for k, n in db.execute(q))
+    db.execute(delete(LoginFailure).where(LoginFailure.first_at <= now() - LOGIN_WINDOW))  # 지난 기록은 지워 표가 커지지 않게
+    for k in keys:
+        db.execute(_COUNT_ATTEMPT, {"k": k, "t": now()})
+    db.commit()
+    return any(n > keys[k] for k, n in db.execute(select(LoginFailure.key, LoginFailure.count).where(LoginFailure.key.in_(keys))))
 
 
 def record_login(db: Session, email: str, ip: str | None, ok: bool):
-    """성공이면 그 이메일의 실패 기록을 지우고, 실패면 이메일·IP 횟수를 올린다.
-    shortcut: 동시에 틀린 요청은 한두 번 덜 셀 수 있다, 정확히 세야 하면 UPDATE count = count + 1로"""
-    keys = _login_keys(email, ip)
-    if ok:
-        db.execute(delete(LoginFailure).where(LoginFailure.key == next(iter(keys))))
-    else:
-        db.execute(delete(LoginFailure).where(LoginFailure.first_at <= now() - LOGIN_WINDOW))  # 지난 기록은 지워 표가 커지지 않게
-        for k in keys:
-            if f := db.get(LoginFailure, k):
-                f.count += 1
-            else:
-                db.add(LoginFailure(key=k, count=1, first_at=now()))
+    """시도는 login_blocked가 이미 셌다. 성공이면 그 이메일 기록을 지우고 IP 횟수에서 이번 시도를 뺀다."""
+    if not ok:
+        return
+    email_key, *ip_key = _login_keys(email, ip)
+    db.execute(delete(LoginFailure).where(LoginFailure.key == email_key))
+    if ip_key:
+        db.execute(update(LoginFailure).where(LoginFailure.key == ip_key[0]).values(count=LoginFailure.count - 1))
     db.commit()
 
 
@@ -166,7 +171,7 @@ def _delete_workspace(db: Session, ws_id: int):
     acc_ids = list(db.scalars(select(WorkspaceAdAccount.ad_account_id).where(WorkspaceAdAccount.workspace_id == ws_id)))
     db.execute(delete(AuditLog).where(AuditLog.workspace_id == ws_id))
     db.execute(delete(BulkJobRow).where(BulkJobRow.job_id.in_(select(BulkJob.id).where(BulkJob.workspace_id == ws_id))))
-    for model in (BulkJob, AutoBidRule, AccountGoal, Subscription, ApprovalRequest):
+    for model in (BulkJob, AutoBidRule, AccountGoal, Subscription, ApprovalRequest, SyncRun):
         db.execute(delete(model).where(model.workspace_id == ws_id))
     db.execute(delete(AccountAccess).where(AccountAccess.membership_id.in_(select(Membership.id).where(Membership.workspace_id == ws_id))))
     for model in (Membership, WorkspaceAdAccount, NaverApiCredential):
@@ -519,17 +524,31 @@ async def disconnect_account(account_id: int, m: Membership = Depends(admin_memb
 @app.get("/workspaces/{ws_id}/ad-accounts")
 async def list_accounts(m: Membership = Depends(membership), db: Session = Depends(get_db)):
     ids = resolve_account_ids(db, m, None)
-    last = _last_syncs(db, ids)
+    last = _last_syncs(db, m.workspace_id, ids)
     # Mock은 mock{조직}-{번호}로 저장하지만(connect_account) 화면에는 넣은 번호만
     return [{"id": acc.id, "customer_id": acc.customer_id.rpartition("-")[2], "name": acc.name, "is_mock": acc.is_mock,
              "last_sync": (s := last.get(acc.id)) and {"status": s.status, "error": s.error, "at": s.finished_at}}
             for acc in db.scalars(select(AdAccount).where(AdAccount.id.in_(ids)))]
 
 
-def _last_syncs(db: Session, ids) -> dict[int, SyncRun]:
-    """계정별 마지막 동기화를 쿼리 한 번으로(계정마다 따로 조회하면 무료 플랜 요청당 쿼리 한도를 넘는다)."""
-    latest = select(func.max(SyncRun.id)).where(SyncRun.ad_account_id.in_(ids)).group_by(SyncRun.ad_account_id)
-    return {s.ad_account_id: s for s in db.scalars(select(SyncRun).where(SyncRun.id.in_(latest)))}
+def _last_syncs(db: Session, ws_id: int, ids, status: str | None = None) -> dict[int, SyncRun]:
+    """이 조직이 한 계정별 마지막 동기화를 쿼리 한 번으로(계정마다 따로 조회하면 무료 플랜 요청당 쿼리 한도를 넘는다).
+    같은 광고 계정을 다른 조직도 연결할 수 있어 조직별로 본다."""
+    latest = select(func.max(SyncRun.id)).where(SyncRun.workspace_id == ws_id, SyncRun.ad_account_id.in_(ids))
+    if status:
+        latest = latest.where(SyncRun.status == status)
+    return {s.ad_account_id: s for s in db.scalars(select(SyncRun).where(SyncRun.id.in_(latest.group_by(SyncRun.ad_account_id))))}
+
+
+def _own_stats(db: Session, ws_id: int, ids):
+    """성과는 계정마다 이 조직이 마지막으로 직접 동기화에 성공한 날까지만(동기화는 어제까지 받는다).
+    광고 계정·성과 표는 조직끼리 공유되는데, 광고주가 다른 대행사로 옮기면 예전 대행사 키는 네이버가 거부해 동기화가 실패하므로
+    그 뒤 새 대행사가 받은 성과는 예전 대행사에 안 보인다."""
+    upto = {}
+    for i, s in _last_syncs(db, ws_id, ids, "SUCCESS").items():
+        at = s.finished_at if s.finished_at.tzinfo else s.finished_at.replace(tzinfo=timezone.utc)  # SQLite는 시간대 없이 돌려준다
+        upto[i] = at.astimezone(KST).date() - timedelta(days=1)
+    return or_(*(and_(PerformanceDaily.ad_account_id == i, PerformanceDaily.date <= d) for i, d in upto.items())) if upto else false()
 
 
 @app.post("/workspaces/{ws_id}/ad-accounts/{account_id}/sync")
@@ -543,7 +562,7 @@ async def sync(account_id: int, offset: int = 0, m: Membership = Depends(members
         client = client_for(db.get(NaverApiCredential, link.credential_id), acc.customer_id, decrypt)
     except NaverApiError as e:
         raise HTTPException(400, str(e))
-    run, nxt = sync_account(db, acc, client, max(offset, 0))
+    run, nxt = sync_account(db, acc, client, m.workspace_id, max(offset, 0))
     if run is None:
         return {"status": "RUNNING", "error": None, "next_offset": nxt}
     return {"status": run.status, "error": run.error, "next_offset": None}
@@ -857,8 +876,11 @@ def _editable(db: Session, m: Membership, refs: list[KeywordRef]) -> list[Keywor
     return refs
 
 
-def _rule(db: Session, m: Membership, naver_id: str) -> AutoBidRule | None:
-    return db.scalar(select(AutoBidRule).where(AutoBidRule.workspace_id == m.workspace_id, AutoBidRule.keyword_naver_id == naver_id))
+def _rule(db: Session, m: Membership, k: KeywordRef) -> AutoBidRule | None:
+    r = db.scalar(select(AutoBidRule).where(AutoBidRule.workspace_id == m.workspace_id, AutoBidRule.keyword_naver_id == k.naver_id))
+    if r and r.ad_account_id != k.ad_account_id:  # 요청한 계정은 _editable이 검사했다 — 규칙이 다른 계정 것이면 그 계정 권한 없이 못 건드린다
+        raise HTTPException(403, "다른 광고 계정의 자동입찰 규칙입니다")
+    return r
 
 
 @app.get("/workspaces/{ws_id}/auto-bids")
@@ -885,7 +907,7 @@ async def set_auto_bids(body: AutoBidIn, m: Membership = Depends(membership), db
     if body.enabled and len(on | {k.naver_id for k in kws}) > AUTO_BID_LIMIT:
         raise HTTPException(400, f"자동입찰은 조직당 {AUTO_BID_LIMIT}개까지입니다 (지금 {len(on)}개 사용 중)")
     for k in kws:
-        r = _rule(db, m, k.naver_id)
+        r = _rule(db, m, k)
         if r is None:
             r = AutoBidRule(workspace_id=m.workspace_id, keyword_naver_id=k.naver_id)
             db.add(r)
@@ -902,7 +924,7 @@ async def set_auto_bids(body: AutoBidIn, m: Membership = Depends(membership), db
 @app.post("/workspaces/{ws_id}/auto-bids/delete")
 async def delete_auto_bids(body: AutoBidKeysIn, m: Membership = Depends(membership), db: Session = Depends(get_db)):
     for k in _editable(db, m, body.keywords):
-        r = _rule(db, m, k.naver_id)
+        r = _rule(db, m, k)
         if r:
             db.delete(r)
             db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=k.ad_account_id,
@@ -1019,11 +1041,11 @@ async def audit_logs(user_id: int | None = None, account_id: int | None = None, 
                  "entity_type", "naver_id", "field", "before", "after", "created_at")
 
 
-def _account_performance(db: Session, ids: set[int], since: date, until: date):
+def _account_performance(db: Session, ws_id: int, ids: set[int], since: date, until: date):
     q = (select(PerformanceDaily.ad_account_id, PerformanceDaily.campaign_tp, func.sum(PerformanceDaily.impressions),
                 func.sum(PerformanceDaily.clicks), func.sum(PerformanceDaily.cost), func.sum(PerformanceDaily.conversions),
                 func.sum(PerformanceDaily.revenue))
-         .where(PerformanceDaily.ad_account_id.in_(ids), PerformanceDaily.date.between(since, until))
+         .where(PerformanceDaily.ad_account_id.in_(ids), PerformanceDaily.date.between(since, until), _own_stats(db, ws_id, ids))
          .group_by(PerformanceDaily.ad_account_id, PerformanceDaily.campaign_tp))
     names = dict(db.execute(select(AdAccount.id, AdAccount.name).where(AdAccount.id.in_(ids))).all())
     out = {i: {"ad_account_id": i, "name": names[i], "WEB_SITE": None, "SHOPPING": None} for i in ids}
@@ -1072,7 +1094,7 @@ async def performance_accounts(since: date | None = None, until: date | None = N
                          m: Membership = Depends(membership), db: Session = Depends(get_db)):
     until = until or today_kst() - timedelta(days=1)
     since = since or until - timedelta(days=6)
-    return _account_performance(db, resolve_account_ids(db, m, _ids(account_ids)), since, until)
+    return _account_performance(db, m.workspace_id, resolve_account_ids(db, m, _ids(account_ids)), since, until)
 
 
 @app.get("/workspaces/{ws_id}/performance/daily")
@@ -1084,7 +1106,7 @@ async def performance_daily(since: date, until: date, account_ids: str | None = 
     ids = resolve_account_ids(db, m, _ids(account_ids))
     q = (select(PerformanceDaily.date, func.sum(PerformanceDaily.impressions), func.sum(PerformanceDaily.clicks),
                 func.sum(PerformanceDaily.cost), func.sum(PerformanceDaily.conversions), func.sum(PerformanceDaily.revenue))
-         .where(PerformanceDaily.ad_account_id.in_(ids), PerformanceDaily.date.between(since, until))
+         .where(PerformanceDaily.ad_account_id.in_(ids), PerformanceDaily.date.between(since, until), _own_stats(db, m.workspace_id, ids))
          .group_by(PerformanceDaily.date))
     if product:
         q = q.where(PerformanceDaily.campaign_tp == product)
@@ -1109,7 +1131,7 @@ async def dashboard(account_ids: str | None = None, m: Membership = Depends(memb
     for job_id, status, n in db.execute(select(BulkJobRow.job_id, BulkJobRow.status, func.count())
                                         .where(BulkJobRow.job_id.in_(list(counts))).group_by(BulkJobRow.job_id, BulkJobRow.status)):
         counts[job_id][status] = n
-    failed_syncs = [{"ad_account_id": i, "error": s.error, "at": s.finished_at} for i, s in _last_syncs(db, ids).items() if s.status == "FAILED"]
+    failed_syncs = [{"ad_account_id": i, "error": s.error, "at": s.finished_at} for i, s in _last_syncs(db, m.workspace_id, ids).items() if s.status == "FAILED"]
     return {
         "connected_accounts": len(ids),
         "recent_jobs": [_rows([j], "id", "status", "source", "parent_job_id", "created_by", "created_at", "executed_at", "scheduled_at")[0]

@@ -1,3 +1,4 @@
+import { csvCell } from "./csv";
 import { clearLocal } from "./localData";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "https://naverads-api.djkim0509.workers.dev";
@@ -83,9 +84,8 @@ export function downloadBlob(blob: Blob, filename: string) {
 }
 
 export function downloadCsv(rows: (string | number | null)[][], filename: string) {
-  const esc = (v: string | number | null) => `"${String(v ?? "").replace(/"/g, '""')}"`;
   // BOM: 엑셀에서 한글이 깨지지 않게
-  downloadBlob(new Blob(["﻿" + rows.map((r) => r.map(esc).join(",")).join("\n")], { type: "text/csv" }), filename);
+  downloadBlob(new Blob(["﻿" + rows.map((r) => r.map(csvCell).join(",")).join("\n")], { type: "text/csv" }), filename);
 }
 
 export const fmt = (n: number | null | undefined, suffix = "") => (n == null ? "-" : n.toLocaleString("ko-KR") + suffix);

@@ -13,7 +13,7 @@ STATS_DAYS = 30
 SYNC_CHUNK = 30
 
 
-def sync_account(db: Session, account: AdAccount, client, offset: int = 0) -> tuple[SyncRun | None, int | None]:
+def sync_account(db: Session, account: AdAccount, client, workspace_id: int, offset: int = 0) -> tuple[SyncRun | None, int | None]:
     """offset번째 캠페인부터 SYNC_CHUNK개. 남았으면 (None, 다음 offset) — 화면이 그 offset으로 다시 부른다.
     다 받았거나 실패하면 (SyncRun, None)."""
     try:
@@ -23,13 +23,13 @@ def sync_account(db: Session, account: AdAccount, client, offset: int = 0) -> tu
         _sync_stats(db, account, client, campaigns, ids[offset:offset + SYNC_CHUNK], prune=offset == 0)
     except NaverApiError as e:
         db.rollback()
-        run = SyncRun(ad_account_id=account.id, status="FAILED", error=str(e)[:300], finished_at=now())
+        run = SyncRun(ad_account_id=account.id, workspace_id=workspace_id, status="FAILED", error=str(e)[:300], finished_at=now())
         db.add(run)
         db.commit()
         return run, None
     if offset + SYNC_CHUNK < len(ids):
         return None, offset + SYNC_CHUNK
-    run = SyncRun(ad_account_id=account.id, status="SUCCESS", finished_at=now())
+    run = SyncRun(ad_account_id=account.id, workspace_id=workspace_id, status="SUCCESS", finished_at=now())
     db.add(run)
     db.commit()
     return run, None

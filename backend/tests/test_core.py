@@ -923,6 +923,72 @@ def test_auto_bid_guards(monkeypatch):
     assert "오늘 자동 변경 1번" in c.get(url, headers=owner).json()[0]["last_result"]
 
 
+def test_auto_bid_rule_bound_to_its_account():
+    owner, ws, a2, a1, hs, _ = _staff_org("abr", "9302", "9301")  # 직원 sb: a1(9301)만 수정
+    staff = hs["sb"]
+    url = f"/workspaces/{ws}/auto-bids"
+    b_kw = {"ad_account_id": a2, "naver_id": "kwd-9302-11", "keyword": "b"}
+    assert c.put(url, headers=owner, json={"keywords": [b_kw], "device": "PC", "target_rank": 1, "max_bid": 5000}).status_code == 200
+    # a1 계정 ID를 붙여 a2 규칙을 지우거나 덮어쓰지 못한다
+    spoof = {**b_kw, "ad_account_id": a1}
+    assert c.post(f"{url}/delete", headers=staff, json={"keywords": [spoof]}).status_code == 403
+    assert c.put(url, headers=staff, json={"keywords": [spoof], "device": "PC", "target_rank": 3, "max_bid": 100,
+                                           "enabled": False}).status_code == 403
+    rule = c.get(url, headers=owner).json()[0]
+    assert (rule["ad_account_id"], rule["target_rank"], rule["enabled"]) == (a2, 1, True)
+    assert c.post(f"{url}/delete", headers=owner, json={"keywords": [b_kw]}).status_code == 200  # 제 계정 ID면 그대로 됨
+
+
+def test_login_limit_counts_before_password_check():
+    """동시에 보낸 요청: 모두 비밀번호 확인 전에 login_blocked를 지나가도 한도를 넘는 것은 막힌다."""
+    from app import main
+    from app.db import SessionLocal
+
+    with SessionLocal() as db:
+        results = [main.login_blocked(db, "race@a.com", "198.51.100.7") for _ in range(main.LOGIN_MAX["email"] + 3)]
+        assert results == [False] * main.LOGIN_MAX["email"] + [True] * 3
+        main.record_login(db, "race2@a.com", "198.51.100.8", True)  # 기록 없는 상태에서 성공해도 오류 없음
+
+
+def test_shared_account_stats_only_until_own_sync():
+    """광고주가 대행사 A → B로 옮기면 A는 네이버가 거부해 동기화가 실패한다. A는 자기가 마지막으로 받은 날까지만 성과를 보고,
+    그 뒤 B가 받은 성과와 B의 동기화 오류는 못 본다."""
+    from datetime import timedelta
+
+    from app.db import SessionLocal
+    from app.models import AdAccount, PerformanceDaily, SyncRun, WorkspaceAdAccount, now, today_kst
+
+    owner_a, ws_a, _ = _account("mvA@a.com", "9401")
+    owner_b, ws_b, _ = _account("mvB@a.com", "9402")
+    with SessionLocal() as db:
+        x = AdAccount(customer_id="770001", name="옮긴 광고주", is_mock=False)
+        db.add(x)
+        db.flush()
+        for ws, h in ((ws_a, owner_a), (ws_b, owner_b)):
+            cred = c.get(f"/workspaces/{ws}/credentials", headers=h).json()[0]["id"]
+            db.add(WorkspaceAdAccount(workspace_id=ws, ad_account_id=x.id, credential_id=cred, connected_by=1))
+        t = today_kst()
+        db.add_all([PerformanceDaily(ad_account_id=x.id, campaign_naver_id="cmp-mv", campaign_tp="WEB_SITE", date=d,
+                                     impressions=10, clicks=1, cost=cost) for d, cost in ((t - timedelta(days=10), 100),
+                                                                                         (t - timedelta(days=3), 200))])
+        db.add_all([SyncRun(ad_account_id=x.id, workspace_id=ws_a, status="SUCCESS", finished_at=now() - timedelta(days=7)),
+                    SyncRun(ad_account_id=x.id, workspace_id=ws_a, status="FAILED", error="A 키 거부", finished_at=now()),
+                    SyncRun(ad_account_id=x.id, workspace_id=ws_b, status="SUCCESS", finished_at=now() - timedelta(hours=1)),
+                    SyncRun(ad_account_id=x.id, workspace_id=ws_b, status="FAILED", error="B만의 오류", finished_at=now())])
+        db.commit()
+        xid = x.id
+    t = today_kst()
+    q = f"since={t - timedelta(days=12)}&until={t - timedelta(days=1)}&account_ids={xid}"
+    cost = lambda ws, h: {r["date"]: r["cost"] for r in c.get(f"/workspaces/{ws}/performance/daily?{q}", headers=h).json()}  # noqa: E731
+    a, b = cost(ws_a, owner_a), cost(ws_b, owner_b)
+    assert (a[str(t - timedelta(days=10))], a[str(t - timedelta(days=3))]) == (100, 0)  # A: 옮기기 전까지만
+    assert (b[str(t - timedelta(days=10))], b[str(t - timedelta(days=3))]) == (100, 200)
+    acc_a = c.get(f"/workspaces/{ws_a}/performance/accounts?{q}", headers=owner_a).json()
+    assert [r["WEB_SITE"]["cost"] for r in acc_a] == [100]
+    errs = [e["error"] for e in c.get(f"/workspaces/{ws_a}/dashboard", headers=owner_a).json()["sync_errors"]]
+    assert "A 키 거부" in errs and "B만의 오류" not in errs
+
+
 def test_goal_guards(monkeypatch):
     from datetime import datetime
     from app import bulk
@@ -1398,7 +1464,9 @@ def test_seo_ssrf_bypasses(monkeypatch):
 
     for bad in ("http://2130706433/", "http://127.1/", "http://0x7f.0.0.1/", "http://localhost./", "http://a.localhost/",
                 "http://printer.local/", "http://metadata.google.internal/", "http://169.254.169.254/latest/meta-data/",
-                "http://[::ffff:127.0.0.1]/", "http://10.0.0.1/"):
+                "http://[::ffff:127.0.0.1]/", "http://10.0.0.1/",
+                # JS fetch(WHATWG)는 아래를 127.0.0.1 등으로 바꿔 접속한다
+                "http://127.0.0.0x1/", "http://1.0x7f/", "http://0x7f000001/", "http://127%2e0%2e0%2e1/"):
         try:
             seo.check_url(bad)
             raise AssertionError(bad)
@@ -1417,6 +1485,41 @@ def test_seo_ssrf_bypasses(monkeypatch):
     except seo.SeoError:
         pass
     assert calls == ["https://example.com/"]
+
+
+def test_seo_redirects_not_followed_by_transport(monkeypatch):
+    """Workers에서 JS fetch가 리다이렉트를 스스로 따라가지 않게 SEO 요청에만 redirect:'manual'을 넘긴다."""
+    import httpx
+
+    from app import seo
+
+    seen = []
+    seo = _mock_web(monkeypatch, lambda req: seen.append(req.extensions.get("redirect")) or httpx.Response(200, text="ok"))
+    seo.fetch("https://example.com/")
+    assert seen and set(seen) == {"manual"}
+
+    class FakeJs:  # jsfetch 모듈 흉내: fetch에 넘긴 옵션을 기록
+        calls = []
+
+        class Object:
+            fromEntries = None
+
+        @classmethod
+        def fetch(cls, url, data):
+            cls.calls.append(data)
+
+    class FakeJsfetch:
+        js, HEADERS_TO_IGNORE = FakeJs, ("host",)
+        to_js = staticmethod(lambda v, **kw: v)
+        _do_fetch = staticmethod(lambda request, body, abort: "기존 경로")
+
+    seo._manual_redirects(FakeJsfetch)
+    abort = type("A", (), {"signal": "sig"})()
+    plain = httpx.Request("GET", "https://api.example.com/")
+    assert FakeJsfetch._do_fetch(plain, b"", abort) == "기존 경로"  # 다른 httpx 요청은 그대로
+    manual = httpx.Request("GET", "https://example.com/", extensions={"redirect": "manual"})
+    FakeJsfetch._do_fetch(manual, b"", abort)
+    assert FakeJs.calls[-1]["redirect"] == "manual" and FakeJs.calls[-1]["method"] == "GET" and "host" not in FakeJs.calls[-1]["headers"]
 
 
 def test_security_headers():
@@ -1623,8 +1726,8 @@ def _mock_web(monkeypatch, handler):
 
     from app import seo
 
-    client = httpx.Client(transport=httpx.MockTransport(handler))
-    monkeypatch.setattr(seo.httpx, "stream", lambda method, url, **kw: client.stream(method, url, headers=kw.get("headers")))
+    real_client = httpx.Client
+    monkeypatch.setattr(seo.httpx, "Client", lambda **kw: real_client(transport=httpx.MockTransport(handler)))
     monkeypatch.setattr(seo, "_check_dns", lambda host: None)  # 공개 도메인 DNS는 테스트에서 조회하지 않음
     return seo
 

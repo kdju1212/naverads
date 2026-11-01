@@ -1,5 +1,6 @@
 """SEO·GEO 점검용 페이지 가져오기. 판정은 브라우저(frontend/lib/seo.ts)가 한다(HTML 분석을 파이썬이 하면 CPU 한도 초과)."""
 import ipaddress
+import re
 import socket
 import sys
 from dataclasses import dataclass, field
@@ -45,8 +46,9 @@ def check_url(url: str) -> str:
         ip = ipaddress.ip_address(host.strip("[]"))
     except ValueError:
         ip = None
-    # 2130706433·127.1·0x7f.1처럼 숫자로만 된 주소는 내부 IP로 해석될 수 있어 도메인 이름만 받는다
-    numeric = ip is None and not any(ch.isalpha() for ch in host.rsplit(".", 1)[-1])
+    # 2130706433·127.1·0x7f.1·127.0.0.0x1·127%2e0%2e0%2e1처럼 숫자로 해석되는 주소는 JS fetch가 IP로 바꿔 접속해서 도메인 이름만 받는다
+    last = host.rsplit(".", 1)[-1]
+    numeric = ip is None and ("%" in host or not any(ch.isalpha() for ch in last) or re.fullmatch(r"0x[0-9a-f]*", last))
     if host == "localhost" or host.endswith(INTERNAL_SUFFIXES) or numeric or (ip and not _public(ip)):
         raise SeoError("내부 주소는 점검할 수 없습니다")
     if ip is None and not ON_WORKERS:
@@ -79,9 +81,31 @@ class Page:
     text: str = ""
 
 
+def _manual_redirects(jsfetch):
+    """Workers의 httpx는 JS fetch가 리다이렉트를 스스로 따라가서 _get의 단계별 주소 검사를 건너뛴다.
+    extensions={"redirect": "manual"} 요청만 fetch에 redirect:'manual'을 넘겨 3xx를 그대로 받는다(다른 httpx 요청은 그대로).
+    shortcut: httpx 내부 함수 jsfetch._do_fetch를 감싼다, httpx를 올리면 이 함수 모양이 그대로인지 확인"""
+    orig = jsfetch._do_fetch
+
+    def _do_fetch(request, request_body, abort_controller_js):
+        if request.extensions.get("redirect") != "manual":
+            return orig(request, request_body, abort_controller_js)
+        data = {"headers": {k: v for k, v in request.headers.items() if k not in jsfetch.HEADERS_TO_IGNORE},
+                "body": jsfetch.to_js(request_body), "method": request.method, "signal": abort_controller_js.signal,
+                "redirect": "manual"}
+        return jsfetch.js.fetch(request.url, jsfetch.to_js(data, dict_converter=jsfetch.js.Object.fromEntries))
+    jsfetch._do_fetch = _do_fetch
+
+
+if ON_WORKERS:
+    from httpx._transports import jsfetch as _jsfetch
+    _manual_redirects(_jsfetch)
+
+
 def _fetch_once(url: str) -> Page:
     """한 번 요청(리다이렉트 안 따라감). 본문은 받는 중에 MAX_BODY를 넘으면 끊는다."""
-    with httpx.stream("GET", url, headers={"User-Agent": UA}, timeout=TIMEOUT) as r:
+    with httpx.Client() as client, client.stream("GET", url, headers={"User-Agent": UA}, timeout=TIMEOUT,
+                                                 extensions={"redirect": "manual"}) as r:
         if int(r.headers.get("content-length") or 0) > MAX_BODY:
             raise SeoError("페이지가 너무 큽니다")
         body = bytearray()
@@ -119,8 +143,7 @@ def fetch(url: str) -> dict:
     r = _get(check_url(url))
     if r is None:
         raise SeoError("페이지에 접속하지 못했습니다")
-    final = str(r.url)
-    # Workers의 httpx(JS fetch)는 리다이렉트를 스스로 따라갈 수 있어 최종 주소도 다시 검사한다
+    final = str(r.url)  # 리다이렉트는 _get이 한 단계씩 따라가며 검사했다(Workers도 _manual_redirects로)
     check_url(final)
     origin = "{0.scheme}://{0.netloc}".format(urlsplit(final))
     robots = _extra(origin + "/robots.txt")

@@ -30,7 +30,7 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
 - 배포: main에 push하면 Cloudflare Workers Builds가 프론트(naverads)·백엔드(naverads-api) 자동 배포
   GitHub 커밋의 Workers Builds 두 개가 성공한 뒤 확인 (프론트가 먼저 뜨면 잠깐 "Not Found" → 새로고침)
 - DB 변경은 자동 배포 안 됨 → push 전에 backend 폴더에서: npx wrangler d1 migrations apply naverads --remote
-  (0013까지 적용 완료, 10/30)
+  (0014까지 적용 완료, 11/01)
 - 디버깅: npx wrangler tail naverads-api --format json / DB 읽기: npx wrangler d1 execute naverads --remote --command "SELECT ..."
 - 무료 플랜만 사용: 요청 1번에 외부 호출+D1 쿼리 50번, CPU 10ms → 대량 작업은 5행씩 나눠 실행, 크론도 조금씩 나눠 진행
 - 광고 데이터(캠페인~확장소재)는 서버 DB에 없음: 브라우저(IndexedDB)가 네이버 마스터 보고서로 받아 보관(7일, 화면 "새로고침")
@@ -227,6 +227,14 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
     - 테스트: backend/tests/test_shopping_api.py 추가, 백엔드 68개 통과, 프론트 npm test 9개 통과·빌드·lint 통과 (11/01 로컬)
     - [미확인] 실계정 검증 안 함: 검수 통과한 쇼핑몰 채널 + nvMid 있는 상품이 아직 없음. 등록 성공 응답 모양·입찰가 변경 응답은
       Mock·가짜 응답 테스트로만 확인. 채널 검수 통과 후 상품 1개로 ① 등록 ② 입찰가 변경 ③ 네이버 화면에서 값 확인할 것
+14-14. 11/01 보안 점검(Cloudflare security-audit 스킬, 코드 읽기 위주) 후 수정 → 11/01 배포(마이그레이션 0014)
+    - 자세한 내용(취약점·재현 방법)은 공개 저장소에 올리지 않고 로컬 보안점검.txt(.gitignore)에만 둠
+    - 고친 것: 자동입찰 규칙 계정 확인, 로그인 실패 횟수를 비밀번호 확인 전에 셈, CSV 다운로드 수식 무력화,
+      SEO 점검 주소 검사 보강(숫자 주소·Workers 리다이렉트 단계별 검사), 공유 광고 계정 성과는 조직별로
+      (각 조직은 자기가 마지막으로 동기화에 성공한 날까지만 봄 → 광고주가 다른 대행사로 옮기면 예전 대행사는 그 뒤 성과 못 봄)
+    - 0014: sync_runs.workspace_id 추가(기존 기록은 한 조직에만 연결된 계정이면 그 조직으로 채움)
+    - 확인: 백엔드 72개·프론트 10개 테스트, 로컬 Workers+D1에서 로그인 제한·SEO 리다이렉트·성과 조회 확인
+    - localhost:3000 로그인 허용은 유지(로컬 프론트 개발용, 사용자 결정)
 15. 다음 달 예산 증액 — 개발 중, 광고주 승인 후 실행하는 흐름으로
 16. 보안 → 10/28 배포(56a8f60, 마이그레이션 0012): 요청 횟수 제한(IP당 1분 600번, Workers ratelimits — 무료 플랜 배포 성공),
     Claude 인가 코드 1회 사용·갱신 토큰 교체(60초 뒤 재사용은 탈취로 보고 Claude 연결 전부 끊기), 설정 'Claude 연결만 끊기', 회원 탈퇴

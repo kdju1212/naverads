@@ -219,6 +219,8 @@ class SyncRun(Base):
     __tablename__ = "sync_runs"
     id: Mapped[int] = mapped_column(primary_key=True)
     ad_account_id: Mapped[int] = mapped_column(ForeignKey("ad_accounts.id"), index=True)
+    # 동기화한 조직(같은 계정을 여러 조직이 연결할 수 있다). NULL = 0014 이전 기록 중 주인을 알 수 없는 것
+    workspace_id: Mapped[int | None] = mapped_column(ForeignKey("workspaces.id"), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(10))  # SUCCESS | FAILED
     error: Mapped[str | None] = mapped_column(String(300), nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

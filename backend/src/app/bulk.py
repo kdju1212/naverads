@@ -230,7 +230,8 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
             audit.update(action="CREATE", naver_id=created["nccKeywordId"], field="keyword", after=kw)
         elif row.field == "delete":
             if row.entity_type == "keyword":
-                db.execute(delete(AutoBidRule).where(AutoBidRule.workspace_id == m.workspace_id, AutoBidRule.keyword_naver_id == row.naver_id))
+                db.execute(delete(AutoBidRule).where(AutoBidRule.workspace_id == m.workspace_id, AutoBidRule.keyword_naver_id == row.naver_id,
+                                                   AutoBidRule.ad_account_id == row.ad_account_id))
             audit.update(action="DELETE", field=row.entity_type, after=None)
         row.status = "SUCCESS"
         db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=row.ad_account_id, job_id=job.id,
