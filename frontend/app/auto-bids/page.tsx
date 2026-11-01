@@ -13,7 +13,7 @@ import { useFetch } from "@/lib/useFetch";
 
 interface AutoBid {
   id: number; ad_account_id: number; keyword_naver_id: string; keyword: string; device: "PC" | "MOBILE"; target_rank: number;
-  max_bid: number; enabled: boolean; last_run_at: string | null; last_result: string | null;
+  max_bid: number; enabled: boolean; last_run_at: string | null; last_result: string | null; ends_on: string | null;
 }
 
 const DEVICE_LABEL = { PC: "PC", MOBILE: "모바일" };
@@ -25,6 +25,7 @@ function AutoBidBar({ picked, onDone, rankButton }: { picked: Keyword[]; onDone:
   const [device, setDevice] = useState<"PC" | "MOBILE">("PC");
   const [rank, setRank] = useState("3");
   const [maxBid, setMaxBid] = useState("");
+  const [ends, setEnds] = useState(""); // 승인하는 실행 기간의 마지막 날
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -60,8 +61,16 @@ function AutoBidBar({ picked, onDone, rankButton }: { picked: Keyword[]; onDone:
       </select>
       <input className={`${inputCls} w-32`} inputMode="numeric" placeholder="최대 입찰가(원)" aria-label="최대 입찰가"
         value={maxBid} onChange={(e) => setMaxBid(e.target.value.replace(/[^0-9]/g, ""))} />
-      <Button disabled={none || !maxBid}
-        onClick={() => call("", { keywords, device, target_rank: Number(rank), max_bid: Number(maxBid) }, "PUT")}>자동입찰 설정</Button>
+      <input type="date" className={inputCls} aria-label="실행 기간 마지막 날" value={ends} onChange={(e) => setEnds(e.target.value)} />
+      <Button disabled={none || !maxBid || !ends}
+        onClick={() => confirm(`자동입찰 범위를 승인할까요?
+· 키워드 ${picked.length}개: ${picked.slice(0, 5).map((k) => k.keyword).join(", ")}${picked.length > 5 ? " 외" : ""}`
+          + `
+· ${device === "PC" ? "PC" : "모바일"} 목표 ${rank}위, 최대 입찰가 ${Number(maxBid).toLocaleString("ko-KR")}원
+· ${ends}까지`
+          + `
+· 10분마다 순위를 보고 입찰가를 20% 올리거나 10% 내려요(키워드당 하루 24번까지). 범위를 늘리려면 다시 승인해야 해요`)
+          && call("", { keywords, device, target_rank: Number(rank), max_bid: Number(maxBid), ends_on: ends }, "PUT")}>자동입찰 범위 승인</Button>
       <Button variant="secondary" disabled={none} onClick={() => call("/run", { keywords })}>지금 실행</Button>
       <Button variant="danger" disabled={none} onClick={() => confirm(`${picked.length}개 키워드의 자동입찰을 해제할까요?`) && call("/delete", { keywords })}>해제</Button>
     </div>
@@ -100,7 +109,7 @@ export default function AutoBidsPage() {
       render: (r) => {
         const a = rule.get(r.naver_id);
         if (!a) return <span className="text-faint">-</span>;
-        return <span className="text-xs">{DEVICE_LABEL[a.device]} {a.target_rank}위 · 최대 {fmt(a.max_bid, "원")}</span>;
+        return <span className="text-xs">{DEVICE_LABEL[a.device]} {a.target_rank}위 · 최대 {fmt(a.max_bid, "원")} · {a.ends_on ? `${a.ends_on.slice(5)}까지` : <span className="text-warning">기간 승인 필요</span>}</span>;
       },
     },
     {

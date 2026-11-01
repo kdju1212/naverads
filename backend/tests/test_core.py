@@ -13,6 +13,7 @@ from app.main import app  # noqa: E402
 from app.naver import MOCK_FAIL_IDS  # noqa: E402
 
 c = TestClient(app)
+END = (__import__("app.models", fromlist=["today_kst"]).today_kst() + __import__("datetime").timedelta(days=30)).isoformat()  # 자동입찰 승인 기간
 
 
 def user(email):
@@ -20,12 +21,20 @@ def user(email):
     return {"Authorization": f"Bearer {r.json()['token']}"}
 
 
+def _safe(h, ws, acc, limit=100_000_000, max_bid=100_000):
+    """광고비 안전장치를 넉넉하게 정해 둔다(기존 기능 테스트용). 안전장치 자체는 test_safety.py에서 검증."""
+    r = c.put(f"/workspaces/{ws}/ad-accounts/{acc}/safety", headers=h, json={"daily_budget_limit": limit, "max_bid": max_bid, "confirmed": True})
+    assert r.status_code == 200, r.json()
+
+
 def setup_agency():
     owner = user("owner@a.com")
     ws = c.post("/workspaces", json={"name": "대행사A"}, headers=owner).json()["id"]
     cred = c.post(f"/workspaces/{ws}/credentials", json={"label": "mock", "api_key": "k", "secret_key": "s"}, headers=owner).json()["id"]
     a1 = c.post(f"/workspaces/{ws}/ad-accounts", json={"credential_id": cred, "customer_id": "1001", "name": "광고주1"}, headers=owner).json()
+    _safe(owner, ws, a1["id"])
     a2 = c.post(f"/workspaces/{ws}/ad-accounts", json={"credential_id": cred, "customer_id": "1002", "name": "광고주2"}, headers=owner).json()
+    _safe(owner, ws, a2["id"])
     for a in (a1, a2):
         assert c.post(f"/workspaces/{ws}/ad-accounts/{a['id']}/sync", headers=owner).json()["status"] == "SUCCESS"
     staff = user("staff@a.com")
@@ -183,6 +192,7 @@ def _account(email, cid):
     ws = c.post("/workspaces", json={"name": email}, headers=owner).json()["id"]
     cred = c.post(f"/workspaces/{ws}/credentials", json={"label": "m", "api_key": "k", "secret_key": "s"}, headers=owner).json()["id"]
     acc = c.post(f"/workspaces/{ws}/ad-accounts", json={"credential_id": cred, "customer_id": cid, "name": "x"}, headers=owner).json()["id"]
+    _safe(owner, ws, acc)
     assert c.post(f"/workspaces/{ws}/ad-accounts/{acc}/sync", headers=owner).json()["status"] == "SUCCESS"
     return owner, ws, acc
 
@@ -196,16 +206,16 @@ def test_auto_bid():
     k2 = {"ad_account_id": acc, "naver_id": "kwd-4004-12", "keyword": "여름 원피스1"}  # 600
     url = f"/workspaces/{ws}/auto-bids"
 
-    assert c.put(url, headers=owner, json={"keywords": [k1], "device": "MOBILE", "target_rank": 6, "max_bid": 500}).status_code == 400
-    assert c.put(url, headers=owner, json={"keywords": [k1], "device": "PC", "target_rank": 1, "max_bid": 505}).status_code == 400
+    assert c.put(url, headers=owner, json={"keywords": [k1], "device": "MOBILE", "target_rank": 6, "max_bid": 500, "ends_on": END}).status_code == 400
+    assert c.put(url, headers=owner, json={"keywords": [k1], "device": "PC", "target_rank": 1, "max_bid": 505, "ends_on": END}).status_code == 400
     outsider = user("bid2@b.com")
     ws_b = c.post("/workspaces", json={"name": "B2"}, headers=outsider).json()["id"]
     assert c.put(f"/workspaces/{ws_b}/auto-bids", headers=outsider,
-                 json={"keywords": [k1], "device": "PC", "target_rank": 1, "max_bid": 500}).status_code == 403
+                 json={"keywords": [k1], "device": "PC", "target_rank": 1, "max_bid": 500, "ends_on": END}).status_code == 403
 
     # Mock 검색 화면: 경쟁 광고 900·700·500·300·150원. 원피스1(300원) 5위 → 목표 1위라 20% 올림, 여름 원피스1(600원) 3위 = 목표
-    c.put(url, headers=owner, json={"keywords": [k1], "device": "PC", "target_rank": 1, "max_bid": 500})
-    c.put(url, headers=owner, json={"keywords": [k2], "device": "MOBILE", "target_rank": 3, "max_bid": 5000})
+    c.put(url, headers=owner, json={"keywords": [k1], "device": "PC", "target_rank": 1, "max_bid": 500, "ends_on": END})
+    c.put(url, headers=owner, json={"keywords": [k2], "device": "MOBILE", "target_rank": 3, "max_bid": 5000, "ends_on": END})
     jobs = c.post(f"{url}/run", headers=owner).json()["job_ids"]
     assert len(jobs) == 1 and c.get(f"/workspaces/{ws}/bulk-jobs/{jobs[0]}", headers=owner).json()["status"] == "DONE"
     kws = store("4004")["keywords"]
@@ -246,7 +256,7 @@ def test_auto_bid():
     from app import main
     main.AUTO_BID_LIMIT = 1
     try:
-        body = {"device": "PC", "target_rank": 1, "max_bid": 500}
+        body = {"device": "PC", "target_rank": 1, "max_bid": 500, "ends_on": END}
         assert c.put(url, headers=owner, json={**body, "keywords": [k1]}).status_code == 200
         assert c.put(url, headers=owner, json={**body, "keywords": [k1]}).status_code == 200
         r = c.put(url, headers=owner, json={**body, "keywords": [k2]})
@@ -274,7 +284,7 @@ def test_delete_extension_already_gone():
 def test_keyword_create_delete():
     owner, ws, acc = _account("kwc@a.com", "6006")
     old = {"ad_account_id": acc, "naver_id": "kwd-6006-11", "keyword": "원피스1"}
-    c.put(f"/workspaces/{ws}/auto-bids", headers=owner, json={"keywords": [old], "device": "PC", "target_rank": 1, "max_bid": 500})
+    c.put(f"/workspaces/{ws}/auto-bids", headers=owner, json={"keywords": [old], "device": "PC", "target_rank": 1, "max_bid": 500, "ends_on": END})
 
     new = lambda grp, value, **kw: ch(acc, "keyword", grp, "create", value, product="WEB_SITE", **kw)  # noqa: E731
     job = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [
@@ -689,6 +699,7 @@ def test_keyword_tool():
     ws = c.post("/workspaces", json={"name": "T"}, headers=owner).json()["id"]
     cred = c.post(f"/workspaces/{ws}/credentials", json={"label": "m", "api_key": "k", "secret_key": "s"}, headers=owner).json()["id"]
     acc = c.post(f"/workspaces/{ws}/ad-accounts", json={"credential_id": cred, "customer_id": "7007", "name": "t"}, headers=owner).json()["id"]
+    _safe(owner, ws, acc)
     url = f"/workspaces/{ws}/keyword-tool"
     rows = c.get(url, params={"account_id": acc, "hint": "린넨 원피스, 린넨원피스,"}, headers=owner).json()
     assert len(rows) == 5 and rows[0]["keyword"].startswith("린넨원피스")  # 띄어쓰기 제거·중복 제거
@@ -719,6 +730,7 @@ def test_master_reports_and_lookup():
     ws = c.post("/workspaces", json={"name": "M"}, headers=owner).json()["id"]
     cred = c.post(f"/workspaces/{ws}/credentials", json={"label": "m", "api_key": "k", "secret_key": "s"}, headers=owner).json()["id"]
     acc = c.post(f"/workspaces/{ws}/ad-accounts", json={"credential_id": cred, "customer_id": "9009", "name": "t"}, headers=owner).json()["id"]
+    _safe(owner, ws, acc)
     base = f"/workspaces/{ws}/ad-accounts/{acc}"
     job = c.post(f"{base}/master-reports", params={"item": "Keyword"}, headers=owner).json()
     assert c.get(f"{base}/master-reports/{job['id']}", headers=owner).json()["status"] == "BUILT"
@@ -759,6 +771,7 @@ def test_mcp_oauth_and_tools():
     ws = c.post("/workspaces", json={"name": "M"}, headers=owner).json()["id"]
     cred = c.post(f"/workspaces/{ws}/credentials", json={"label": "m", "api_key": "k", "secret_key": "s"}, headers=owner).json()["id"]
     acc = c.post(f"/workspaces/{ws}/ad-accounts", json={"credential_id": cred, "customer_id": "8008", "name": "m"}, headers=owner).json()["id"]
+    _safe(owner, ws, acc)
 
     # 토큰 없으면 401 + 로그인 안내 주소
     r = c.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
@@ -841,8 +854,8 @@ def test_mcp_oauth_and_tools():
     # 자동입찰: 순위 확인 → 규칙 저장 → 지금 실행. 원피스1(300→400원)은 Mock 검색 화면 4위, 목표 1위라 20% 올림
     k = [{"ad_account_id": acc, "naver_id": kws[0]["naver_id"], "keyword": kws[0]["keyword"]}]
     assert call("check_ranks", workspace_id=ws, keywords=k)[0][0]["PC"] == 4
-    assert call("set_auto_bid", workspace_id=ws, keywords=k, device="PC", target_rank=11, max_bid=1000)[1]  # PC는 10위까지
-    assert call("set_auto_bid", workspace_id=ws, keywords=k, device="PC", target_rank=1, max_bid=1000) == ({"ok": True}, False)
+    assert call("set_auto_bid", workspace_id=ws, keywords=k, device="PC", target_rank=11, max_bid=1000, ends_on=END)[1]  # PC는 10위까지
+    assert call("set_auto_bid", workspace_id=ws, keywords=k, device="PC", target_rank=1, max_bid=1000, ends_on=END)[0]["ok"]
     call("run_auto_bids", workspace_id=ws, keywords=k)
     assert store("8008")["keywords"][kws[0]["naver_id"]]["bidAmt"] == 480
     assert call("list_auto_bids", workspace_id=ws)[0][0]["last_result"] == "지금 4위 (목표 1위) · 400원 → 480원"
@@ -911,7 +924,7 @@ def test_auto_bid_guards(monkeypatch):
     viewer = _viewer(owner, ws, acc, "capv@a.com")
     url = f"/workspaces/{ws}/auto-bids"
     k = {"ad_account_id": acc, "naver_id": "kwd-6300-11", "keyword": "원피스1"}  # 300원, 5위
-    c.put(url, headers=owner, json={"keywords": [k], "device": "PC", "target_rank": 1, "max_bid": 5000})
+    c.put(url, headers=owner, json={"keywords": [k], "device": "PC", "target_rank": 1, "max_bid": 5000, "ends_on": END})
     kws = store("6300")["keywords"]
     assert c.post(f"{url}/run", headers=viewer).json() == {"job_ids": []} and kws["kwd-6300-11"]["bidAmt"] == 300
 
@@ -928,11 +941,11 @@ def test_auto_bid_rule_bound_to_its_account():
     staff = hs["sb"]
     url = f"/workspaces/{ws}/auto-bids"
     b_kw = {"ad_account_id": a2, "naver_id": "kwd-9302-11", "keyword": "b"}
-    assert c.put(url, headers=owner, json={"keywords": [b_kw], "device": "PC", "target_rank": 1, "max_bid": 5000}).status_code == 200
+    assert c.put(url, headers=owner, json={"keywords": [b_kw], "device": "PC", "target_rank": 1, "max_bid": 5000, "ends_on": END}).status_code == 200
     # a1 계정 ID를 붙여 a2 규칙을 지우거나 덮어쓰지 못한다
     spoof = {**b_kw, "ad_account_id": a1}
     assert c.post(f"{url}/delete", headers=staff, json={"keywords": [spoof]}).status_code == 403
-    assert c.put(url, headers=staff, json={"keywords": [spoof], "device": "PC", "target_rank": 3, "max_bid": 100,
+    assert c.put(url, headers=staff, json={"keywords": [spoof], "device": "PC", "target_rank": 3, "max_bid": 100, "ends_on": END,
                                            "enabled": False}).status_code == 403
     rule = c.get(url, headers=owner).json()[0]
     assert (rule["ad_account_id"], rule["target_rank"], rule["enabled"]) == (a2, 1, True)
@@ -998,7 +1011,7 @@ def test_goal_guards(monkeypatch):
     monkeypatch.setenv("ROAS_AUTOMATION", "1")  # 정책상 꺼져 있는 기능의 동작 자체를 검증
     owner, ws, acc = _account("goal3@a.com", "6400")
     c.put(f"/workspaces/{ws}/auto-bids", headers=owner, json={"keywords": [{"ad_account_id": acc, "naver_id": "kwd-6400-11"}],
-                                                             "device": "PC", "target_rank": 1, "max_bid": 5000})
+                                                             "device": "PC", "target_rank": 1, "max_bid": 5000, "ends_on": END})
     url = f"/workspaces/{ws}/account-goals"
     c.put(url, headers=owner, json={"ad_account_id": acc, "roas_target": 300, "max_bid": 1000, "off_cost": 20000})
     stats = {"cmp-6400-pl": {"clkCnt": 100, "salesAmt": 30000, "ccnt": 0},                  # 계정 전환 0 = 추적 안 됨일 수 있음
@@ -1210,9 +1223,10 @@ def test_delete_account():
     ws = c.post("/workspaces", json={"name": "혼자"}, headers=owner).json()["id"]
     cred = c.post(f"/workspaces/{ws}/credentials", json={"label": "m", "api_key": "k", "secret_key": "s"}, headers=owner).json()["id"]
     acc = c.post(f"/workspaces/{ws}/ad-accounts", json={"credential_id": cred, "customer_id": "7117", "name": "m"}, headers=owner).json()["id"]
+    _safe(owner, ws, acc)
     assert c.post(f"/workspaces/{ws}/ad-accounts/{acc}/sync", headers=owner).json()["status"] == "SUCCESS"
     assert c.put(f"/workspaces/{ws}/auto-bids", headers=owner, json={"keywords": [{"ad_account_id": acc, "naver_id": "nkw-1"}], "device": "PC",
-                                                                    "target_rank": 3, "max_bid": 500}).status_code == 200
+                                                                    "target_rank": 3, "max_bid": 500, "ends_on": END}).status_code == 200
     staff = user("leaver-staff@a.com")
     c.post(f"/workspaces/{ws}/members", json={"email": "leaver-staff@a.com"}, headers=owner)
     # 남의 조직의 직원이기도 하다 → 그 조직은 남고 나만 빠진다
@@ -1354,7 +1368,7 @@ def test_tenant_isolation_api():
         ch(acc_a, "keyword", "kwd-9101-11", "bid_amt", "900", product="WEB_SITE"),
         ch(acc_a, "campaign", "cmp-9101-pl", "delete")]}).json()
     assert {r["status"] for x in job["accounts"] for r in x["rows"]} == {"INVALID"} and all(x["name"] is None for x in job["accounts"])
-    kw = {"keywords": [{"ad_account_id": acc_a, "naver_id": "kwd-9101-11"}], "device": "PC", "target_rank": 1, "max_bid": 5000}
+    kw = {"keywords": [{"ad_account_id": acc_a, "naver_id": "kwd-9101-11"}], "device": "PC", "target_rank": 1, "max_bid": 5000, "ends_on": END}
     assert c.put(f"{base}/auto-bids", headers=b, json=kw).status_code == 403
     assert c.post(f"{base}/auto-bids/delete", headers=b, json={"keywords": kw["keywords"]}).status_code == 403
     assert c.post(f"{base}/ad-extensions", headers=b, json={"ad_account_id": acc_a, "adgroup_naver_id": "grp-9101-pl1",
@@ -1385,7 +1399,7 @@ def test_tenant_isolation_mcp():
                                       "pc_url": "https://a.com"}),
                        ("execute_job", {"job_id": job_a}), ("schedule_job", {"job_id": job_a, "scheduled_at": None}),
                        ("set_auto_bid", {"keywords": [{"ad_account_id": acc_a, "naver_id": "kwd-9111-11"}], "device": "PC",
-                                         "target_rank": 1, "max_bid": 500})):
+                                         "target_rank": 1, "max_bid": 500, "ends_on": END})):
         _, err = _mcp_call(mb, name, workspace_id=ws_b, **args)
         assert err, name
     prev, _ = _mcp_call(mb, "preview_changes", workspace_id=ws_b, changes=[ch(acc_a, "keyword", "kwd-9111-11", "bid_amt", "900")])
@@ -1397,6 +1411,7 @@ def test_role_permissions():
     owner, ws, acc1 = _account("role-o@a.com", "9141")
     cred = c.get(f"/workspaces/{ws}/credentials", headers=owner).json()[0]["id"]
     acc2 = c.post(f"/workspaces/{ws}/ad-accounts", headers=owner, json={"credential_id": cred, "customer_id": "9142", "name": "y"}).json()["id"]
+    _safe(owner, ws, acc2)
     staff = user("role-s@a.com")
     mid = c.post(f"/workspaces/{ws}/members", headers=owner, json={"email": "role-s@a.com"}).json()["membership_id"]
     c.put(f"/workspaces/{ws}/members/{mid}/access", headers=owner, json={"ad_account_id": acc1, "level": "EDIT"})
@@ -1413,7 +1428,7 @@ def test_role_permissions():
         ch(acc2, "campaign", "cmp-9142-pl", "status", "OFF", before="ON", product="WEB_SITE"),
         ch(acc1, "campaign", "cmp-9141-pl", "status", "OFF", before="ON", product="WEB_SITE")]}).json()
     assert sorted(r["status"] for x in job["accounts"] for r in x["rows"]) == ["INVALID", "VALID"]
-    kw = {"keywords": [{"ad_account_id": acc2, "naver_id": "kwd-9142-11"}], "device": "PC", "target_rank": 1, "max_bid": 500}
+    kw = {"keywords": [{"ad_account_id": acc2, "naver_id": "kwd-9142-11"}], "device": "PC", "target_rank": 1, "max_bid": 500, "ends_on": END}
     assert c.put(f"/workspaces/{ws}/auto-bids", headers=staff, json=kw).status_code == 403
     assert c.post(f"/workspaces/{ws}/ad-extensions", headers=staff, json={"ad_account_id": acc2, "adgroup_naver_id": "grp-9142-pl1",
                                                                          "ext_type": "HEADLINE", "heading": "x"}).status_code == 403
@@ -1560,6 +1575,7 @@ def _staff_org(prefix, c1, c2):
     owner, ws, acc1 = _account(f"{prefix}-o@a.com", c1)
     cred = c.get(f"/workspaces/{ws}/credentials", headers=owner).json()[0]["id"]
     acc2 = c.post(f"/workspaces/{ws}/ad-accounts", headers=owner, json={"credential_id": cred, "customer_id": c2, "name": "광고주2"}).json()["id"]
+    _safe(owner, ws, acc2)
     c.post(f"/workspaces/{ws}/ad-accounts/{acc2}/sync", headers=owner)
     hs, mids = {}, {}
     for who, role in (("adm", "ADMIN"), ("sa", "MEMBER"), ("sb", "MEMBER")):
@@ -1629,6 +1645,7 @@ def test_bulk_duplicate_key_per_account():
     owner, ws, acc1 = _account("dupk@a.com", "9211")
     cred = c.get(f"/workspaces/{ws}/credentials", headers=owner).json()[0]["id"]
     acc2 = c.post(f"/workspaces/{ws}/ad-accounts", headers=owner, json={"credential_id": cred, "customer_id": "9212", "name": "y"}).json()["id"]
+    _safe(owner, ws, acc2)
     job = c.post(f"/workspaces/{ws}/bulk-jobs", headers=owner, json={"changes": [
         ch(acc1, "campaign", "WEB_SITE", "create", "브랜드|10000", product="WEB_SITE"),
         ch(acc2, "campaign", "WEB_SITE", "create", "브랜드|10000", product="WEB_SITE"),   # 다른 계정이면 중복 아님

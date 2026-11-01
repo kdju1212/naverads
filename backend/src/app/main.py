@@ -15,11 +15,11 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy import and_, bindparam, delete, false, func, or_, select, text, update
 from sqlalchemy.orm import Session
 
-from . import bulk, naver, seo
+from . import bulk, naver, safety, seo
 from .access import (ADMIN_ROLES, accessible_account_ids, admin_membership, current_user, membership, membership_of, resolve_account_ids,
                      user_from_header)
 from .db import Base, engine, get_db
-from .models import (AccountAccess, AccountGoal, AdAccount, ApprovalRequest, AuditLog, AutoBidRule, BulkJob, BulkJobRow, LoginFailure, Membership, NaverApiCredential,
+from .models import (AccountAccess, AccountGoal, AccountSafety, AdAccount, ApprovalRequest, AuditLog, AutoBidRule, BulkJob, BulkJobRow, LoginFailure, Membership, NaverApiCredential,
                      PerformanceDaily, Plan, Subscription, SyncRun, User, Workspace, WorkspaceAdAccount, KST, now, today_kst)
 from .naver import NaverApiError, client_for
 from .security import decrypt, encrypt, hash_password, key_of, make_token, read_payload, sign_payload, verify_password
@@ -171,7 +171,7 @@ def _delete_workspace(db: Session, ws_id: int):
     acc_ids = list(db.scalars(select(WorkspaceAdAccount.ad_account_id).where(WorkspaceAdAccount.workspace_id == ws_id)))
     db.execute(delete(AuditLog).where(AuditLog.workspace_id == ws_id))
     db.execute(delete(BulkJobRow).where(BulkJobRow.job_id.in_(select(BulkJob.id).where(BulkJob.workspace_id == ws_id))))
-    for model in (BulkJob, AutoBidRule, AccountGoal, Subscription, ApprovalRequest, SyncRun):
+    for model in (BulkJob, AutoBidRule, AccountGoal, Subscription, ApprovalRequest, SyncRun, AccountSafety):
         db.execute(delete(model).where(model.workspace_id == ws_id))
     db.execute(delete(AccountAccess).where(AccountAccess.membership_id.in_(select(Membership.id).where(Membership.workspace_id == ws_id))))
     for model in (Membership, WorkspaceAdAccount, NaverApiCredential):
@@ -525,9 +525,12 @@ async def disconnect_account(account_id: int, m: Membership = Depends(admin_memb
 async def list_accounts(m: Membership = Depends(membership), db: Session = Depends(get_db)):
     ids = resolve_account_ids(db, m, None)
     last = _last_syncs(db, m.workspace_id, ids)
+    guard = {g.ad_account_id: {"daily_budget_limit": g.daily_budget_limit, "max_bid": g.max_bid}
+             for g in db.scalars(select(AccountSafety).where(AccountSafety.workspace_id == m.workspace_id))}
     # Mock은 mock{조직}-{번호}로 저장하지만(connect_account) 화면에는 넣은 번호만
     return [{"id": acc.id, "customer_id": acc.customer_id.rpartition("-")[2], "name": acc.name, "is_mock": acc.is_mock,
-             "last_sync": (s := last.get(acc.id)) and {"status": s.status, "error": s.error, "at": s.finished_at}}
+             "last_sync": (s := last.get(acc.id)) and {"status": s.status, "error": s.error, "at": s.finished_at},
+             "safety": guard.get(acc.id)}
             for acc in db.scalars(select(AdAccount).where(AdAccount.id.in_(ids)))]
 
 
@@ -549,6 +552,46 @@ def _own_stats(db: Session, ws_id: int, ids):
         at = s.finished_at if s.finished_at.tzinfo else s.finished_at.replace(tzinfo=timezone.utc)  # SQLite는 시간대 없이 돌려준다
         upto[i] = at.astimezone(KST).date() - timedelta(days=1)
     return or_(*(and_(PerformanceDaily.ad_account_id == i, PerformanceDaily.date <= d) for i, d in upto.items())) if upto else false()
+
+
+class SafetyIn(BaseModel):
+    daily_budget_limit: int
+    max_bid: int
+    confirmed: bool = False  # 화면에서 금액과 현황을 보고 '확인했어요'를 체크해야 true
+
+
+@app.get("/workspaces/{ws_id}/ad-accounts/{account_id}/safety")
+async def get_safety(account_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    """광고비 안전장치 설정과 네이버의 지금 하루예산 설정액 현황·필요한 조치(처음 연결 때 보여 줌)."""
+    resolve_account_ids(db, m, [account_id])
+    return safety.status(db, m.workspace_id, account_id, lambda: bulk._client(db, m.workspace_id, account_id))
+
+
+@app.put("/workspaces/{ws_id}/ad-accounts/{account_id}/safety")
+async def put_safety(body: SafetyIn, account_id: int, m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
+    resolve_account_ids(db, m, [account_id])
+    safety.save(db, m, account_id, body.daily_budget_limit, body.max_bid, body.confirmed)
+    return safety.status(db, m.workspace_id, account_id, lambda: bulk._client(db, m.workspace_id, account_id))
+
+
+class StopIn(BaseModel):
+    ad_account_id: int
+    entity_type: Literal["campaign", "adgroup", "keyword", "ad", "ad_extension"]
+    naver_id: str
+
+
+@app.post("/workspaces/{ws_id}/stop")
+async def emergency_stop(body: StopIn, m: Membership = Depends(membership), db: Session = Depends(get_db)):
+    """광고 긴급 중지(OFF): 승인·안전장치 검사 없이 바로 끈다(돈이 더 나가지 않는 방향). 수정 권한은 확인하고 이력을 남긴다."""
+    bulk._check_edit(db, m, body.ad_account_id)
+    try:
+        bulk._client(db, m.workspace_id, body.ad_account_id).update(body.entity_type, body.naver_id, "status", "OFF")
+    except NaverApiError as e:
+        raise HTTPException(400, f"네이버가 끄기 요청을 받아들이지 않았어요: {e}")
+    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=body.ad_account_id, action="EMERGENCY_STOP",
+                    entity_type=body.entity_type, naver_id=body.naver_id, field="status", after="OFF"))
+    db.commit()
+    return {"ok": True, "message": "껐어요. 네이버 검색 결과에서 빠지기까지 조금 걸릴 수 있어요"}
 
 
 @app.post("/workspaces/{ws_id}/ad-accounts/{account_id}/sync")
@@ -772,7 +815,18 @@ def _job_out(db: Session, job: BulkJob):
 
 @app.post("/workspaces/{ws_id}/bulk-jobs")
 async def create_bulk_job(body: BulkIn, m: Membership = Depends(membership), db: Session = Depends(get_db)):
-    return _job_out(db, bulk.create_job(db, m, [c.model_dump() for c in body.changes], body.source))
+    job = bulk.create_job(db, m, [c.model_dump() for c in body.changes], body.source)
+    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, job_id=job.id, action="JOB_PREVIEW", entity_type="job"))
+    db.commit()
+    return {**_job_out(db, job), "safety": _job_safety(db, m, job)}
+
+
+def _job_safety(db: Session, m: Membership, job: BulkJob) -> list[dict]:
+    """미리보기·승인용: 계정마다 변경 후 하루예산 설정액 합계·클릭당 최대 입찰가·막히는 이유(네이버 지금 값 기준)."""
+    ops: dict[int, list] = {}
+    for r in db.scalars(select(BulkJobRow).where(BulkJobRow.job_id == job.id, BulkJobRow.status == "VALID")):
+        ops.setdefault(r.ad_account_id, []).extend(safety.ops_of_row(r.entity_type, r.field, r.naver_id, r.after or ""))
+    return [safety.preview(db, m.workspace_id, acc, o, lambda acc=acc: bulk._client(db, m.workspace_id, acc)) for acc, o in ops.items() if o]
 
 
 @app.post("/workspaces/{ws_id}/bulk-jobs/excel/parse")
@@ -795,7 +849,8 @@ async def list_bulk_jobs(m: Membership = Depends(membership), db: Session = Depe
 
 @app.get("/workspaces/{ws_id}/bulk-jobs/{job_id}")
 async def get_bulk_job(job_id: int, m: Membership = Depends(membership), db: Session = Depends(get_db)):
-    return _job_out(db, _job(db, m, job_id))
+    job = _job(db, m, job_id)
+    return {**_job_out(db, job), **({"safety": _job_safety(db, m, job)} if job.status == "PREVIEW" else {})}
 
 
 @app.post("/workspaces/{ws_id}/bulk-jobs/{job_id}/execute")
@@ -825,8 +880,12 @@ async def schedule_bulk_job(body: ScheduleIn, job_id: int, m: Membership = Depen
             raise HTTPException(400, "시간대가 있는 시각이어야 합니다")
         if not now() < at < now() + timedelta(days=366):
             raise HTTPException(400, "예약 시각은 지금부터 1년 안이어야 합니다")
-        if not db.scalar(select(func.count()).select_from(BulkJobRow).where(BulkJobRow.job_id == job.id, BulkJobRow.status == "VALID")):
+        valid = db.scalars(select(BulkJobRow).where(BulkJobRow.job_id == job.id, BulkJobRow.status == "VALID")).all()
+        if not valid:
             raise HTTPException(400, "실행할 수 있는 행이 없습니다")
+        # 예약 시점에도 안전장치를 검사한다(실행 시점에 다시 검사해 그때 조건이 달라졌으면 실행하지 않는다)
+        if blocked := bulk.safety_blocks(db, m.workspace_id, valid, {}):
+            raise HTTPException(400, f"광고비 안전장치에 걸려 예약할 수 없어요: {next(iter(blocked.values()))}")
     # SQLite·D1은 시간대를 버리고 저장하므로 다른 시각(now(), UTC)과 비교되게 UTC로 맞춘다
     job.scheduled_at = at and at.astimezone(timezone.utc)
     db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, job_id=job.id, action="JOB_SCHEDULE",
@@ -863,6 +922,10 @@ class AutoBidIn(BaseModel):
     target_rank: int
     max_bid: int
     enabled: bool = True
+    ends_on: date | None = None  # 승인하는 실행 기간의 마지막 날(한국 날짜, 최대 90일 뒤). 켜는 규칙은 필수
+
+
+AUTO_BID_DAYS_MAX = 90
 
 
 class AutoBidKeysIn(BaseModel):
@@ -888,7 +951,7 @@ async def list_auto_bids(m: Membership = Depends(membership), db: Session = Depe
     ids = resolve_account_ids(db, m, None)
     q = select(AutoBidRule).where(AutoBidRule.workspace_id == m.workspace_id, AutoBidRule.ad_account_id.in_(ids)).order_by(AutoBidRule.id)
     return _rows(db.scalars(q), "id", "ad_account_id", "keyword_naver_id", "keyword", "device", "target_rank", "max_bid", "enabled",
-                 "last_run_at", "last_result")
+                 "last_run_at", "last_result", "ends_on")
 
 
 @app.put("/workspaces/{ws_id}/auto-bids")
@@ -901,6 +964,15 @@ async def set_auto_bids(body: AutoBidIn, m: Membership = Depends(membership), db
     if not lo <= body.max_bid <= hi or body.max_bid % 10:
         raise HTTPException(400, f"최대 입찰가는 {lo:,}~{hi:,}원, 10원 단위")
     kws = _editable(db, m, body.keywords)
+    if body.enabled:  # 저장 = 범위 승인: 대상 키워드·최대 입찰가·기간. 범위를 바꾸려면 다시 저장(재승인)
+        if body.ends_on is None or not today_kst() <= body.ends_on <= today_kst() + timedelta(days=AUTO_BID_DAYS_MAX):
+            raise HTTPException(400, f"자동입찰을 실행할 기간(마지막 날)을 오늘부터 {AUTO_BID_DAYS_MAX}일 안으로 정해 주세요")
+        for acc in {k.ad_account_id for k in kws}:
+            sf = safety.get(db, m.workspace_id, acc)
+            if sf is None:
+                raise HTTPException(400, safety.NOT_SET)
+            if body.max_bid > sf.max_bid:
+                raise HTTPException(400, f"자동입찰 최대 입찰가 {body.max_bid:,}원이 이 계정의 클릭당 최대 입찰가 {sf.max_bid:,}원보다 높아요")
     on = set(db.scalars(select(AutoBidRule.keyword_naver_id).where(AutoBidRule.workspace_id == m.workspace_id,
                                                                    AutoBidRule.enabled.is_(True))))
     # 무료 플랜은 크론 1회당 외부 호출 수 한도가 있어 키워드가 많으면 실행이 끊긴다
@@ -914,11 +986,16 @@ async def set_auto_bids(body: AutoBidIn, m: Membership = Depends(membership), db
         r.ad_account_id, r.keyword = k.ad_account_id, k.keyword[:100]
         r.device, r.target_rank, r.max_bid, r.enabled, r.created_by = (body.device, body.target_rank, body.max_bid,
                                                                        body.enabled, m.user_id)
+        r.ends_on = body.ends_on if body.enabled else r.ends_on
         db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=k.ad_account_id, action="AUTO_BID_SET",
                         entity_type="keyword", naver_id=k.naver_id, field="auto_bid",
-                        after=f"{body.device} {body.target_rank}위 최대 {body.max_bid}" + ("" if body.enabled else " 중지")))
+                        after=(f"{body.device} {body.target_rank}위 최대 {body.max_bid} ~{body.ends_on:%m/%d}" if body.enabled else "중지")))
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "scope": body.enabled and {
+        "keywords": [k.keyword or k.naver_id for k in kws], "device": body.device, "target_rank": body.target_rank,
+        "max_bid": body.max_bid, "ends_on": body.ends_on,
+        "how": f"10분마다 순위를 읽어 목표보다 아래면 입찰가를 20% 올리고 위면 10% 내려요(최대 {body.max_bid:,}원, 키워드당 하루 "
+               f"{bulk.AUTO_BID_DAILY_MAX}번까지, {body.ends_on}까지). 대상·기간·최대 입찰가를 늘리려면 다시 승인(저장)해야 해요"}}
 
 
 @app.post("/workspaces/{ws_id}/auto-bids/delete")

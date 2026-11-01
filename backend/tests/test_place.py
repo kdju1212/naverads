@@ -1,7 +1,7 @@
 """플레이스광고(place.py): 일반/ADVoost 허용·금지 작업, 계정 간 차단, 상한, 승인 변조·재사용, 네이버 실패. 네이버는 Mock만 쓴다."""
 from datetime import timedelta
 
-from test_core import _account, _mcp_call, _mcp_headers, _viewer, c, user
+from test_core import _account, _mcp_call, _mcp_headers, _safe, _viewer, c, user
 
 from app import place
 from app.naver import MOCK_FAIL_IDS, _MOCK_STORE, advoost_on
@@ -116,13 +116,17 @@ def test_caps_enforced():
     assert "입찰가" in _plan(owner, ws, acc, "create", business_id="bsn-8104-place", daily_budget=10000, use_advoost=False,
                             bid=place.BID_MAX + 10).json()["detail"]
     _, camp, grp = _new_place(owner, ws, acc, "8104", advoost=False, bid=100)
-    # 다른 곳(네이버 화면 등)에서 예산을 상한보다 크게 바꿨다면 켜기·입찰가 변경을 막는다
-    _MOCK_STORE["8104"]["campaigns"][camp["nccCampaignId"]]["dailyBudget"] = place.BUDGET_MAX * 5
-    for action, params in (("turn_on", {"target_type": "campaign", "target_id": camp["nccCampaignId"]}),
-                           ("set_bid", {"adgroup_id": grp["nccAdgroupId"], "bid": 200})):
-        r = _plan(owner, ws, acc, action, **params)
-        assert r.status_code == 400 and "상한" in r.json()["detail"]
+    # 계정 광고비 안전장치: 켜진 캠페인 하루예산 설정액 합계(파워링크 5만+쇼핑 3만=8만)가 관리 기준 8.5만이면
+    # 이 캠페인(1만)을 켜면 9만이라 막히고, 최대 입찰가 150원을 넘는 입찰가도 막힌다
+    _safe(owner, ws, acc, limit=85_000, max_bid=150)
+    r = _plan(owner, ws, acc, "turn_on", target_type="campaign", target_id=camp["nccCampaignId"])
+    assert r.status_code == 400 and "90,000원" in r.json()["detail"] and "85,000원" in r.json()["detail"]
+    r = _plan(owner, ws, acc, "set_bid", adgroup_id=grp["nccAdgroupId"], bid=200)
+    assert r.status_code == 400 and "최대 입찰가 150원" in r.json()["detail"]
     assert _plan(owner, ws, acc, "turn_off", target_type="campaign", target_id=camp["nccCampaignId"]).status_code == 200  # 끄기는 허용
+    _safe(owner, ws, acc, limit=95_000, max_bid=150)
+    s = _plan(owner, ws, acc, "turn_on", target_type="campaign", target_id=camp["nccCampaignId"]).json()["summary"]
+    assert s["safety"]["total_after"] == 90_000 and "합계 90,000원" in s["spend_text"] and "절대 상한이 아니에요" in " ".join(s["notes"])
 
 
 def test_approval_tamper_reuse_expiry_and_owner():

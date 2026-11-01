@@ -135,6 +135,19 @@ class PerformanceDaily(Base):
     revenue: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
+class AccountSafety(Base):
+    """광고비 안전장치(조직·광고 계정별). 관리자가 금액을 직접 확인해 저장한다. 없으면 비용이 늘 수 있는 작업은 막힌다(safety.py)."""
+    __tablename__ = "account_safety"
+    __table_args__ = (UniqueConstraint("workspace_id", "ad_account_id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    ad_account_id: Mapped[int] = mapped_column(ForeignKey("ad_accounts.id"))
+    daily_budget_limit: Mapped[int] = mapped_column(Integer)  # 켜진 캠페인 하루예산 설정액 합계의 관리 기준(원)
+    max_bid: Mapped[int] = mapped_column(Integer)  # 클릭당 최대 입찰가(원)
+    set_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    set_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class AutoBidRule(Base):
     """키워드 자동입찰: 목표 순위의 예상 입찰가로 맞추되 최대 입찰가를 넘지 않는다. 실행은 만든 사람 권한으로."""
     __tablename__ = "auto_bid_rules"
@@ -148,7 +161,8 @@ class AutoBidRule(Base):
     target_rank: Mapped[int] = mapped_column(Integer)
     max_bid: Mapped[int] = mapped_column(Integer)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))  # 범위(대상·최대 입찰가·기간)를 승인한 사람
+    ends_on: Mapped[date | None] = mapped_column(Date, nullable=True)  # 승인한 실행 기간의 마지막 날(한국 날짜). NULL = 승인 전(0015 이전 규칙)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_result: Mapped[str | None] = mapped_column(String(300), nullable=True)
 

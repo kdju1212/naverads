@@ -106,6 +106,22 @@ function JobDetail({ id }: { id: string }) {
         {job.parent_job_id && <Link href={`/jobs?id=${job.parent_job_id}`} className="text-xs text-faint underline">원본 #{job.parent_job_id}</Link>}
       </div>
 
+      {job.status === "PREVIEW" && !!job.safety?.length && (
+        <div className="mb-4 rounded-panel border border-line bg-surface p-3 text-sm">
+          <b>광고비 안전장치 확인</b> <span className="text-xs text-faint">(네이버 지금 설정 기준, 실행 직전에 다시 확인해요)</span>
+          <ul className="mt-1">
+            {job.safety.map((s) => (
+              <li key={s.ad_account_id} className={s.ok ? "" : "text-danger"}>
+                {job.accounts?.find((a) => a.ad_account_id === s.ad_account_id)?.name ?? `#${s.ad_account_id}`}:{" "}
+                {s.ok ? <>변경 후 켜진 캠페인 하루예산 설정액 합계 {s.total_after == null ? "변화 없음" : `${s.total_after.toLocaleString("ko-KR")}원`}
+                  {s.daily_budget_limit != null && ` (관리 기준 ${s.daily_budget_limit.toLocaleString("ko-KR")}원)`}
+                  {s.max_bid != null && ` · 클릭당 최대 입찰가 ${s.max_bid.toLocaleString("ko-KR")}원`}</> : <>실행되지 않아요 — {s.reason}</>}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-1 text-xs text-faint">{job.safety[0].note}</p>
+        </div>
+      )}
       <div className="mb-4 flex flex-wrap items-center gap-3 rounded-panel border border-line bg-surface p-3 text-sm">
         <span>광고주 <b>{job.accounts?.length ?? 0}</b>개</span>
         {job.status === "PREVIEW" ? (

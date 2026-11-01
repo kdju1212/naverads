@@ -9,7 +9,10 @@ export interface Workspace { id: number; name: string; type: string; role: "OWNE
 export interface Account {
   id: number; customer_id: string; name: string; is_mock: boolean;
   last_sync: { status: "SUCCESS" | "FAILED"; error: string | null; at: string } | null;
+  safety: { daily_budget_limit: number; max_bid: number } | null; // 광고비 안전장치(없으면 광고 켜기·증액·입찰가 변경 막힘)
 }
+/** 실행 전 안전장치 검사 결과(계정별). 서버: backend/src/app/safety.py */
+export interface SafetyCheck { ad_account_id: number; ok: boolean; reason?: string; total_after?: number; daily_budget_limit?: number; max_bid?: number; note: string }
 export interface Change {
   entity_type: string; naver_id: string; field: string; value: string;
   // 서버에 광고 데이터 사본이 없어 화면이 같이 보낸다(lib/changes.ts)
@@ -24,6 +27,7 @@ export interface Job {
   created_at: string; executed_at: string | null; scheduled_at: string | null;
   counts: Record<"VALID" | "INVALID" | "SUCCESS" | "FAILED", number>;
   accounts: { ad_account_id: number | null; name: string | null; rows: JobRow[] }[] | null;
+  safety?: SafetyCheck[]; // 미리보기일 때: 계정별 변경 후 하루예산 설정액 합계·최대 입찰가(네이버 지금 값 기준)
 }
 
 /** 작업 완료 알림(components/ui Toaster가 보여준다) */

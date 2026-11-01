@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
+import { SafetyPanel } from "@/components/SafetyPanel";
 import { Badge, Button, Card, ErrorText, inputCls, PageTitle } from "@/components/ui";
 import { api, API_URL, fmt, logout } from "@/lib/api";
 import { refreshAccounts } from "@/lib/naverData";
@@ -46,6 +47,7 @@ function Accounts({ isAdmin }: { isAdmin: boolean }) {
   const [cred, setCred] = useState({ label: "", api_key: "", secret_key: "", is_mock: false });
   const [acc, setAcc] = useState({ credential_id: "", customer_id: "", name: "" });
   const [syncing, setSyncing] = useState<number | null>(null);
+  const [guard, setGuard] = useState<number | null>(null); // 안전장치 패널을 연 계정
   const { error, busy, run } = useAction();
 
   const doSync = async (id: number) => {
@@ -68,16 +70,20 @@ function Accounts({ isAdmin }: { isAdmin: boolean }) {
     <Card title="광고 계정">
       <ErrorText error={error} />
       <table className="mb-4 w-full text-sm">
-        <thead className="text-left text-xs text-faint"><tr><th className="py-2">광고주</th><th>CUSTOMER_ID</th><th>구분</th><th>마지막 동기화</th><th /></tr></thead>
+        <thead className="text-left text-xs text-faint"><tr><th className="py-2">광고주</th><th>CUSTOMER_ID</th><th>구분</th><th>마지막 동기화</th><th>광고비 안전장치</th><th /></tr></thead>
         <tbody>
-          {accounts.map((a) => (
-            <tr key={a.id} className="border-t border-line">
+          {accounts.map((a) => (<Fragment key={a.id}>
+            <tr className="border-t border-line">
               <td className="py-2 font-medium">{a.name}</td>
               <td className="font-mono text-xs">{a.customer_id}</td>
               <td>{a.is_mock ? "Mock" : "실계정"}</td>
               <td>{a.last_sync ? <><Badge value={a.last_sync.status} /> <span className="text-xs text-faint">{a.last_sync.at && new Date(a.last_sync.at).toLocaleString("ko-KR")}</span>{a.last_sync.error && <div className="text-xs text-danger">{a.last_sync.error}</div>}</> : <span className="text-xs text-warning">동기화 필요</span>}</td>
+              <td>{a.safety
+                ? <span className="text-xs">합계 {a.safety.daily_budget_limit.toLocaleString("ko-KR")}원 · 입찰 {a.safety.max_bid.toLocaleString("ko-KR")}원</span>
+                : <span className="text-xs text-warning">설정 필요</span>}</td>
               <td className="text-right">
                 <div className="flex justify-end gap-2">
+                  <Button variant="secondary" onClick={() => setGuard(guard === a.id ? null : a.id)}>{a.safety ? "안전장치" : "안전장치 정하기"}</Button>
                   <Button variant="secondary" disabled={busy} onClick={() => sync(a.id)}>{syncing === a.id ? "동기화 중…" : "동기화"}</Button>
                   {isAdmin && <Button variant="danger" disabled={busy} onClick={() => confirm(`${a.name} 연결을 해제할까요? 데이터와 이력은 보존되고 접근만 차단됩니다.`) && run(async () => {
                     await api(`/workspaces/${ws!.id}/ad-accounts/${a.id}`, { method: "DELETE" });
@@ -86,8 +92,9 @@ function Accounts({ isAdmin }: { isAdmin: boolean }) {
                 </div>
               </td>
             </tr>
-          ))}
-          {accounts.length === 0 && <tr><td colSpan={5} className="py-4 text-center text-faint">연결된 광고 계정이 없습니다</td></tr>}
+            {guard === a.id && <tr><td colSpan={6}><SafetyPanel accountId={a.id} isAdmin={isAdmin} onSaved={reloadAccounts} /></td></tr>}
+          </Fragment>))}
+          {accounts.length === 0 && <tr><td colSpan={6} className="py-4 text-center text-faint">연결된 광고 계정이 없습니다</td></tr>}
         </tbody>
       </table>
 
@@ -112,6 +119,7 @@ function Accounts({ isAdmin }: { isAdmin: boolean }) {
             setAcc({ ...acc, customer_id: "", name: "" });
             await reloadAccounts();
             await doSync(r.id);
+            setGuard(r.id); // 처음 연결: 지금 예산 현황을 보여 주고 관리자가 금액을 직접 정하게
           }); }}>
             <h3 className="text-[15px] font-semibold">② 광고 계정 연결</h3>
             <select className={inputCls} value={acc.credential_id} onChange={(e) => setAcc({ ...acc, credential_id: e.target.value })} required aria-label="자격증명">

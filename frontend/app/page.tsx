@@ -49,7 +49,8 @@ function Delta({ now, prev, better }: { now: number | null | undefined; prev: nu
 }
 
 export default function DashboardPage() {
-  const { ws, query, accountName, product } = useApp();
+  const { ws, query, accountName, product, accounts } = useApp();
+  const unguarded = accounts.filter((a) => !a.safety);
   const [days, setDays] = useState(7);
   const [showTable, setShowTable] = useState(false);
   const [today] = useState(() => Date.now());
@@ -86,6 +87,12 @@ export default function DashboardPage() {
         </select>
       </div>
       <ErrorText error={perf.error ?? daily.error ?? dash.error} />
+      {unguarded.length > 0 && (
+        <p className="rounded-panel border border-line bg-warning-soft p-3 text-sm text-warning">
+          광고비 안전장치를 정하지 않은 계정이 있어요({unguarded.map((a) => a.name).join(", ")}). 정하기 전에는 광고 켜기·예산 올리기·입찰가 바꾸기가 막혀요.{" "}
+          <Link href="/settings" className="font-semibold underline">설정에서 정하기</Link>
+        </p>
+      )}
 
       <div className="grid grid-cols-2 gap-px overflow-hidden rounded-panel border border-line bg-line lg:grid-cols-4">
         {kpis.map(([label, k, unit, better]) => (

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from . import bulk
+from . import bulk, safety
 from .access import membership
 from .db import get_db
 from .models import AuditLog, Membership
@@ -41,6 +41,11 @@ def create_shopping_ad(db: Session, m: Membership, account_id: int, adgroup_nave
         raise HTTPException(400, "상품 ID는 네이버쇼핑 상품 ID(nvMid, 숫자)로 입력하세요. 스마트스토어 상품 번호와 다릅니다")
     if bid_amt is not None and (err := bulk._money(str(bid_amt), "입찰가", *bulk.BID_RANGE["SHOPPING"])):
         raise HTTPException(400, err)
+    if bid_amt:  # 계정 클릭당 최대 입찰가(광고비 안전장치)
+        try:
+            safety.check_bids(safety.get(db, m.workspace_id, account_id), [("bid", bid_amt)])
+        except safety.SafetyError as e:
+            raise HTTPException(400, str(e))
     # referenceKey는 네이버쇼핑 상품 ID(nvMid); 실계정에서 연결 채널과 상품의 등록 가능 여부도 충족해야 한다.
     attr = {"bidAmt": bid_amt, "useGroupBidAmt": False} if bid_amt else {"useGroupBidAmt": True}
     try:

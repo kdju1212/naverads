@@ -8,7 +8,8 @@ import { useFetch } from "@/lib/useFetch";
 
 // 서버: backend/src/app/place.py (계획 → 승인 → 적용). 유지보수: docs/PLACE_ADS_MAINTENANCE.md
 type Change = { ad_account_id: number; action: string; params: Record<string, unknown> };
-type Summary = { label: string; target: string; before: string; after: string; spend_text: string; notes: string[] };
+type Summary = { label: string; target: string; before: string; after: string; spend_text: string; notes: string[];
+  safety?: { total_after?: number; daily_budget_limit?: number | null; max_bid?: number | null } };
 type Plan = { approval_id: number; expires_in_minutes: number; summary: Summary };
 type Result = { status: "SUCCESS" | "PARTIAL" | "FAILED"; steps: { step: string; ok: boolean; error?: string }[]; error: string | null; notice: string | null };
 type Ad = { id: string; type: string; linked: boolean; on: boolean; review: string; text: string };
@@ -39,6 +40,12 @@ export default function PlacePage() {
   const [pending, setPending] = useState<Change | null>(null); // 승인 패널에 띄울 변경
 
   const ask = (action: string, params: Record<string, unknown>) => acc != null && setPending({ ad_account_id: acc, action, params });
+  // 끄기는 승인 없이 바로(긴급 중지). 서버: POST /workspaces/{ws}/stop, 기록이 남는다
+  const stop = async (entity_type: string, naver_id: string, name: string) => {
+    if (!ws || acc == null || !confirm(`'${name}' 광고를 지금 끌까요? 검색 결과에서 빠지기까지 조금 걸릴 수 있어요.`)) return;
+    try { await api(`/workspaces/${ws.id}/stop`, { body: { ad_account_id: acc, entity_type, naver_id } }); await load(); }
+    catch (e) { alert((e as Error).message); }
+  };
 
   return (
     <>
@@ -59,8 +66,9 @@ export default function PlacePage() {
       </details>
 
       {pending && <Approve change={pending} onClose={() => setPending(null)} onDone={load} />}
-      {data && !pending && <CreateFlow data={data} onAsk={ask} />}
-      {data && <Status data={data} onAsk={ask} busy={!!pending} />}
+      {/* 승인 카드가 떠 있어도 만들기 단계는 유지해 '수정'을 누르면 그대로 고칠 수 있게 */}
+      {data && <div hidden={!!pending}><CreateFlow data={data} onAsk={ask} /></div>}
+      {data && <Status data={data} onAsk={ask} onStop={stop} busy={!!pending} />}
     </>
   );
 }
@@ -162,6 +170,13 @@ function Approve({ change, onClose, onDone }: { change: Change; onClose: () => v
     setBusy(false);
   };
 
+  // 수정·취소 모두 이 승인 요청은 거절로 기록하고 닫는다(수정은 만들기 단계 내용이 남아 있어 고친 뒤 다시 승인)
+  const cancel = async (close: boolean) => {
+    if (ws && plan) await api(`/workspaces/${ws.id}/place/cancel`, { body: { approval_id: plan.approval_id } }).catch(() => {});
+    onClose();
+    if (!close) window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
   const s = plan?.summary;
   const tone = { SUCCESS: "text-accent", PARTIAL: "text-warning", FAILED: "text-danger" };
   const label = { SUCCESS: "완료했어요", PARTIAL: "일부만 됐어요", FAILED: "하지 못했어요" };
@@ -176,9 +191,11 @@ function Approve({ change, onClose, onDone }: { change: Change; onClose: () => v
           </tbody></table>
           {s.notes.map((n) => <p key={n} className="text-xs text-faint">· {n}</p>)}
           <p className="mt-1 text-xs text-faint">이 승인은 {plan!.expires_in_minutes}분 동안, 한 번만 쓸 수 있어요.</p>
+          {s.safety?.max_bid != null && <p className="text-xs text-muted">이 계정의 클릭당 최대 입찰가 {s.safety.max_bid.toLocaleString("ko-KR")}원</p>}
           <div className="mt-3 flex gap-2">
             <Button disabled={busy} onClick={approve}>{busy ? "적용 중…" : "승인하고 적용"}</Button>
-            <Button variant="secondary" onClick={onClose}>취소</Button>
+            <Button variant="secondary" disabled={busy} onClick={() => cancel(false)}>수정하기</Button>
+            <Button variant="ghost" disabled={busy} onClick={() => cancel(true)}>취소</Button>
           </div>
         </>
       )}
@@ -195,7 +212,8 @@ function Approve({ change, onClose, onDone }: { change: Change; onClose: () => v
   );
 }
 
-function Status({ data, onAsk, busy }: { data: Overview; onAsk: (a: string, p: Record<string, unknown>) => void; busy: boolean }) {
+function Status({ data, onAsk, onStop, busy }: { data: Overview; onAsk: (a: string, p: Record<string, unknown>) => void;
+  onStop: (type: string, id: string, name: string) => void; busy: boolean }) {
   const ask = (a: string, p: Record<string, unknown>) => !busy && onAsk(a, p);
   const askNumber = (msg: string, a: string, key: string, p: Record<string, unknown>) => {
     const v = window.prompt(msg);
@@ -213,14 +231,16 @@ function Status({ data, onAsk, busy }: { data: Overview; onAsk: (a: string, p: R
             <span className="text-xs text-muted">하루예산 {c.daily_budget == null ? "없음" : `${fmt(c.daily_budget)}원`}</span>
             <span className="text-xs text-faint">지난 7일 노출 {fmt(c.last_7_days.impressions)} · 클릭 {fmt(c.last_7_days.clicks)} · 비용 {fmt(c.last_7_days.cost)}원</span>
             <Button variant="secondary" onClick={() => askNumber("새 하루예산(원)", "set_budget", "daily_budget", { campaign_id: c.id })}>하루예산 바꾸기</Button>
-            <Button variant="secondary" onClick={() => ask(c.on ? "turn_off" : "turn_on", { target_type: "campaign", target_id: c.id })}>{c.on ? "끄기" : "켜기"}</Button>
+            {c.on ? <Button variant="danger" onClick={() => onStop("campaign", c.id, c.name)}>바로 끄기</Button>
+              : <Button variant="secondary" onClick={() => ask("turn_on", { target_type: "campaign", target_id: c.id })}>켜기</Button>}
           </div>
           {c.groups.map((g) => (
             <div key={g.id} className="ml-4 mt-2 text-sm">
               <div className="flex flex-wrap items-center gap-2">
                 <span>{g.name}</span><span className="text-xs">{g.on ? "켜짐" : "꺼짐"}</span>
                 <span className="text-xs text-muted">{g.advoost ? "ADVoost (입찰가·검색어 자동)" : `입찰가 ${fmt(g.bid)}원`}</span>
-                <Button variant="ghost" onClick={() => ask(g.on ? "turn_off" : "turn_on", { target_type: "adgroup", target_id: g.id })}>{g.on ? "끄기" : "켜기"}</Button>
+                {g.on ? <Button variant="ghost" onClick={() => onStop("adgroup", g.id, g.name)}>바로 끄기</Button>
+                  : <Button variant="ghost" onClick={() => ask("turn_on", { target_type: "adgroup", target_id: g.id })}>켜기</Button>}
                 <Button variant="ghost" onClick={() => ask("set_advoost", { adgroup_id: g.id, on: !g.advoost })}>ADVoost {g.advoost ? "끄기" : "켜기"}</Button>
                 {!g.advoost && <Button variant="ghost" onClick={() => askNumber("새 입찰가(원)", "set_bid", "bid", { adgroup_id: g.id })}>입찰가 바꾸기</Button>}
               </div>

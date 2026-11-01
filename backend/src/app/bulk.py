@@ -15,7 +15,8 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from .access import accessible_account_ids
-from .models import KST, AccountGoal, AdAccount, AuditLog, AutoBidRule, BulkJob, BulkJobRow, Membership, NaverApiCredential, WorkspaceAdAccount, now
+from .models import KST, AccountGoal, AdAccount, AuditLog, AutoBidRule, BulkJob, BulkJobRow, Membership, NaverApiCredential, WorkspaceAdAccount, now, today_kst
+from . import safety
 from .naver import NaverApiError, ad_row, client_for, extension_row
 from .security import decrypt, rotated
 
@@ -149,6 +150,13 @@ def create_job(db: Session, m: Membership, changes: list[dict], source: str, par
             seen.add(key)
             row.ad_account_id = ch["ad_account_id"]
             row.error = str(ch["invalid"])[:300] if ch.get("invalid") else _validate(ch)
+            if row.error is None:  # 클릭당 최대 입찰가는 미리보기에서 바로 알려 준다(합계 검사는 실행 직전에 네이버를 읽어서)
+                try:
+                    safety.check_bids(safety.get(db, m.workspace_id, row.ad_account_id),
+                                      safety.ops_of_row(etype, field, nid, value))
+                except safety.SafetyError as e:
+                    if "아직" not in str(e):  # 미설정은 실행 때 막고, 미리보기는 만들 수 있게 둔다(미리보기 응답의 safety에 안내)
+                        row.error = str(e)[:300]
             if row.error is None:
                 row.status = "VALID"
         rows.append(row)
@@ -181,9 +189,13 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
     db.commit()
     allowed = accessible_account_ids(db, m, edit=True)  # 미리보기 이후 권한이 바뀌었을 수 있다
     clients = {}
+    blocked = safety_blocks(db, m.workspace_id, [r for r in rows if r.ad_account_id in allowed], clients)
     for row in rows:
         if row.ad_account_id not in allowed:
             row.status, row.error = "FAILED", "실행 시점에 수정 권한이 없습니다"
+            continue
+        if row.id in blocked:
+            row.status, row.error = "FAILED", blocked[row.id][:300]
             continue
         # 같은 작업을 두 곳에서 동시에 실행해도(Claude가 겹쳐 부름 등) 한 행은 한 번만: 먼저 RUNNING으로 바꾼 요청만 실행
         if db.execute(update(BulkJobRow).where(BulkJobRow.id == row.id, BulkJobRow.status == "VALID")
@@ -247,8 +259,42 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
         results = (results - {"RUNNING"}) | {"FAILED"}
     job.status = "DONE" if results == {"SUCCESS"} else "FAILED" if "SUCCESS" not in results else "PARTIAL"
     job.executed_at = now()
+    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, job_id=job.id, action=f"JOB_{job.status}", entity_type="job"))
     db.commit()
     return job
+
+
+def safety_blocks(db: Session, workspace_id: int, rows: list[BulkJobRow], clients: dict) -> dict[int, str]:
+    """실행 직전 광고비 안전장치 검사. 막을 행 id → 이유. 입찰가 상한은 행마다, 하루예산 합계는 계정마다(그 계정의 켜기·증액 행을 모두
+    반영한 뒤) 네이버를 다시 읽어 검사한다. 웹·Claude·예약·자동입찰·목표 ROAS가 모두 execute_job을 거치므로 여기 한 곳이다."""
+    blocked, by_account = {}, {}
+    for r in rows:
+        ops = safety.ops_of_row(r.entity_type, r.field, r.naver_id, r.after or "")
+        if ops:
+            by_account.setdefault(r.ad_account_id, []).append((r, ops))
+    for acc, items in by_account.items():
+        s = safety.get(db, workspace_id, acc)
+        rest = []
+        for r, ops in items:
+            try:
+                safety.check_bids(s, ops)
+                rest.append((r, ops))
+            except safety.SafetyError as e:
+                blocked[r.id] = str(e)
+        starts = [(r, ops) for r, ops in rest if any(o[0] != "bid" for o in ops)]
+        if not starts:
+            continue
+
+        def client(acc=acc):
+            if acc not in clients:
+                clients[acc] = _client(db, workspace_id, acc)
+            return clients[acc]
+        try:
+            safety.check(db, workspace_id, acc, [o for _, ops in starts for o in ops], client)
+        except safety.SafetyError as e:
+            for r, _ in starts:
+                blocked[r.id] = str(e)
+    return blocked
 
 
 def retry_failed(db: Session, m: Membership, job: BulkJob) -> BulkJob:
@@ -337,11 +383,18 @@ def run_auto_bids(db: Session, workspace_id: int, rule_ids: list[int] | None = N
         m = db.scalar(select(Membership).where(Membership.workspace_id == workspace_id, Membership.user_id == user_id))
         allowed = accessible_account_ids(db, m, edit=True) if m else set()
         by_account: dict[int, list[AutoBidRule]] = {}
+        today = today_kst()
         for r in rules:
             r.last_run_at = now()
+            sf = safety.get(db, workspace_id, r.ad_account_id)
             if r.ad_account_id not in allowed:
                 r.last_result = "규칙을 만든 사람에게 이 계정 수정 권한이 없습니다"
+            elif r.ends_on is None or r.ends_on < today:
+                r.last_result = "승인한 실행 기간이 없거나 끝나 실행하지 않음 (기간을 정해 다시 저장하면 재개)"
+            elif sf is None:
+                r.last_result = "광고비 안전장치가 설정되지 않아 실행하지 않음"
             else:
+                r.max_bid_now = min(r.max_bid, sf.max_bid)  # 승인 범위와 계정 상한 중 낮은 값(계정 상한이 내려갔을 수 있다)
                 by_account.setdefault(r.ad_account_id, []).append(r)
         changes, rule_by_nid = [], {}
         for account_id, rs in by_account.items():
@@ -374,11 +427,11 @@ def run_auto_bids(db: Session, workspace_id: int, rule_ids: list[int] | None = N
                     r.last_result = f"순위 확인 실패: {e}"[:300]
                     continue
                 cur = grp.get("bidAmt", kw["bidAmt"]) if kw.get("useGroupBidAmt") else kw["bidAmt"]
-                target = next_bid(cur, rank, r.target_rank, r.max_bid)
+                target = next_bid(cur, rank, r.target_rank, r.max_bid_now)
                 r.last_result = f"지금 {rank}위" if rank else "지금 노출 안 됨"
                 r.last_result += f" (목표 {r.target_rank}위)"
                 if target == cur:
-                    r.last_result += " · 변경 없음" + (" (최대 입찰가)" if rank != r.target_rank and cur >= r.max_bid else "")
+                    r.last_result += " · 변경 없음" + (" (최대 입찰가)" if rank != r.target_rank and cur >= r.max_bid_now else "")
                     continue
                 r.last_result += f" · {cur:,}원 → {target:,}원"
                 changes.append({"entity_type": "keyword", "naver_id": r.keyword_naver_id, "field": "bid_amt", "value": str(target),

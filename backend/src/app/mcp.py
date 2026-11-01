@@ -265,13 +265,17 @@ TOOLS = [
      "annotations": {"readOnlyHint": True}},
     {"name": "list_auto_bids", "description": "조직의 자동입찰 규칙 목록(기기·목표 순위·최대 입찰가·마지막 실행 결과).",
      "inputSchema": {"type": "object", "required": ["workspace_id"], "properties": WS}, "annotations": {"readOnlyHint": True}},
-    {"name": "set_auto_bid", "description": "키워드에 자동입찰 규칙을 만들거나 덮어쓴다(바로 저장). 10분마다 순위를 읽어 목표보다 아래면 입찰가를 20% 올리고 "
-     "위면 10% 내린다(최대 입찰가 이하). 한 번에 목표 순위로 가지 않고 몇십 분에 걸쳐 맞춘다. 조직당 20개까지. "
-     "키워드·기기·목표 순위·최대 입찰가를 채팅에 표로 보여 준 뒤 호출(허용 버튼이 승인). enabled=false면 규칙을 남긴 채 중지.",
+    {"name": "set_auto_bid", "description": "키워드 자동입찰의 범위를 승인받아 저장한다(저장 = 범위 승인). 10분마다 순위를 읽어 목표보다 아래면 입찰가를 20% 올리고 "
+     "위면 10% 내린다(최대 입찰가 이하, 키워드당 하루 24번까지). 한 번에 목표 순위로 가지 않고 몇십 분에 걸쳐 맞춘다. 조직당 20개까지. "
+     "호출 전에 채팅에 표로: 광고 계정·키워드·기기·목표 순위·최대 입찰가(계정의 클릭당 최대 입찰가 이하)·실행 기간(ends_on까지)·위 변경 방식을 보여 준다. "
+     "대상 추가·기간 연장·최대 입찰가 상향은 다시 이 도구로 승인받아야 한다. 계정 안전장치(get_ad_safety)가 설정돼 있어야 한다. "
+     "enabled=false면 규칙을 남긴 채 중지(언제든 가능, 기간 불필요).",
      "inputSchema": {"type": "object", "required": ["workspace_id", "keywords", "device", "target_rank", "max_bid"], "properties": {
          **WS, "keywords": KEYS, "device": {"enum": ["PC", "MOBILE"]},
          "target_rank": {"type": "integer", "description": "목표 순위. PC 1~10, 모바일 1~5"},
-         "max_bid": {"type": "integer", "description": "최대 입찰가(70~100,000원, 10원 단위)"}, "enabled": {"type": "boolean"}}},
+         "max_bid": {"type": "integer", "description": "최대 입찰가(원, 10원 단위, 계정의 클릭당 최대 입찰가 이하)"},
+         "ends_on": {"type": "string", "description": "실행 기간의 마지막 날 YYYY-MM-DD(오늘~90일 뒤). 켤 때 필수"},
+         "enabled": {"type": "boolean"}}},
      "annotations": {"destructiveHint": True}},
     {"name": "delete_auto_bid", "description": "키워드의 자동입찰 규칙을 지운다(입찰가는 지금 값 그대로).",
      "inputSchema": {"type": "object", "required": ["workspace_id", "keywords"], "properties": {**WS, "keywords": KEYS}},
@@ -318,6 +322,15 @@ TOOLS = [
      "annotations": {"readOnlyHint": True}},
     shopping_ads.TOOL,
     *place.TOOLS,
+    {"name": "get_ad_safety", "description": "광고 계정의 광고비 안전장치: 하루예산 관리 기준·클릭당 최대 입찰가, 네이버에 지금 켜진 캠페인의 하루예산 설정액과 합계, "
+     "문제(공유예산·무제한 예산·기준 초과)와 필요한 조치. 광고 켜기·예산 증액·입찰가 변경 전에 확인한다. 하루예산 설정액은 실제 과금의 절대 상한이 아니다"
+     "(네이버가 광고를 멈추는 데 시간이 걸려 더 과금될 수 있음). 설정은 관리자가 웹 설정 화면에서 직접 한다. 읽기만 한다.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id"], "properties": {**WS, "ad_account_id": {"type": "integer"}}}},
+    {"name": "stop_ad", "description": "광고를 바로 끈다(긴급 중지, 승인 절차 없이 즉시). 캠페인·광고그룹·키워드·소재·확장소재 하나. "
+     "'광고 멈춰', '돈 그만 나가게 해' 같은 요청에 쓴다. 끈 기록이 남는다. 검색 결과에서 빠지기까지 조금 걸릴 수 있다고 함께 알린다.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "entity_type", "naver_id"], "properties": {
+         **WS, "ad_account_id": {"type": "integer"},
+         "entity_type": {"enum": ["campaign", "adgroup", "keyword", "ad", "ad_extension"]}, "naver_id": {"type": "string"}}}},
 ]
 
 
@@ -356,6 +369,10 @@ async def _call(db, user: User, name: str, a: dict):
         return await api.keyword_ranks(api.AutoBidKeysIn(keywords=a["keywords"]), m=m, db=db)
     if name == "list_auto_bids":
         return await api.list_auto_bids(m=m, db=db)
+    if name == "get_ad_safety":
+        return await api.get_safety(int(a["ad_account_id"]), m=m, db=db)
+    if name == "stop_ad":
+        return await api.emergency_stop(api.StopIn(**{k: v for k, v in a.items() if k != "workspace_id"}), m=m, db=db)
     if name == "set_auto_bid":
         return await api.set_auto_bids(api.AutoBidIn(**{k: v for k, v in a.items() if k != "workspace_id"}), m=m, db=db)
     if name == "delete_auto_bid":
