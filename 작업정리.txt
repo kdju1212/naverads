@@ -241,6 +241,7 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
       Claude 도구 place_ads_status·place_ads_plan·place_ads_apply
     - 승인: approval_requests(0013, 마이그레이션 추가 없음) — 만든 사람만·같은 내용(해시)·15분·한 번. 실행 직전 권한·상한 재검사.
       14-11(웹 승인 화면 없음, Claude 허용 버튼 = 승인) 유지: 웹 승인 페이지 대신 plan→apply 두 단계
+      11/01 사용자 결정: 승인 방식은 이대로(본인 확인 + 내용 일치). 웹 승인 화면·관리자 결재는 안 만듦
     - 상한(서버 강제): 하루예산 1,000~100,000원(PLACE_DAILY_BUDGET_MAX), 입찰가 50~5,000원(PLACE_BID_MAX).
       켜기·입찰가·ADVoost 켜기는 캠페인 하루예산이 상한 이하일 때만
     - ADVoost(2026-09-16 릴리스 노트): useAdvoost 그룹은 입찰가(3755)·제외검색어(3754)·소재 추가(3839)·연동 소재 ON/OFF(3838)를

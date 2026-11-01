@@ -71,6 +71,8 @@ MCP 도구(Claude): `place_ads_status`, `place_ads_plan`, `place_ads_apply`. 정
 - 결과: `SUCCESS`(모든 단계 성공)·`PARTIAL`(일부, 예: 캠페인만 생성)·`FAILED`. 표에는 DONE/PARTIAL/FAILED로 남긴다.
 - 변경 이력: 성공한 단계마다 `audit_logs`에 남긴다. `entity_type=place`, field는 campaign/adgroup/ad/daily_budget/bid_amt/status/advoost/negative_kw.
 - 새 캠페인·광고그룹은 꺼진 상태(userLock)로 만든다. 성공 응답의 `notice`는 검토 후 노출되고 반영이 늦다고 안내한다. 즉시 노출된다고 말하지 않는다.
+- 2026-11-01 사용자 결정: 승인은 지금 방식 유지(A). 계획을 만든 본인이 승인한다. 웹 승인 화면(B)과 관리자 결재(C)는 만들지 않는다.
+  한계: 다른 사람의 결재가 아니라 '실행 전 내용 확인'이다. Claude에서 '항상 허용'이면 묻지 않고 적용된다.
 - 2026-10-30 결정(14-11: Claude 변경 도구는 허용 버튼 = 승인)과의 관계: 웹에 따로 승인 화면을 만들지 않았다. 대신 plan→apply 두 단계와 해시 검사를 둔다. Claude에서는 plan 결과 표를 보여 준 뒤 apply를 부르고, 허용 버튼이 승인이다.
 
 ## 5. 네이버 API 주요 제한과 오류 코드
