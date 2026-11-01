@@ -235,7 +235,10 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
     - 0014: sync_runs.workspace_id 추가(기존 기록은 한 조직에만 연결된 계정이면 그 조직으로 채움)
     - 확인: 백엔드 72개·프론트 10개 테스트, 로컬 Workers+D1에서 로그인 제한·SEO 리다이렉트·성과 조회 확인
     - localhost:3000 로그인 허용은 유지(로컬 프론트 개발용, 사용자 결정)
-14-15. 11/01 플레이스광고(일반·ADVoost) 추가 — 브랜치 feat/place-ads, main 병합·배포 안 함(사용자 지시 대기)
+14-15. 11/01 플레이스광고(일반·ADVoost) 추가 → 11/01 main 병합·배포(2341332, 마이그레이션 없음)
+    - 배포: 웹 빌드 성공, API 빌드(Workers Builds)는 실패. 로그는 대시보드에서만 볼 수 있어 원인 미확인
+      (새로 받은 저장소에서 테스트 80개 통과). 로컬에서 uv run pywrangler deploy로 API 배포(버전 585aa79c).
+      운영 확인: /place 3개 경로, 로그인 없으면 401, 남의 계정 403, 웹 /place 200
     - 유지보수 문서: docs/PLACE_ADS_MAINTENANCE.md (차이·API·조건·규칙·오류코드·테스트·장애 대응·공식 문서·미확인)
     - 서버 backend/src/app/place.py: 상태 조회 + 계획(plan)→승인(apply). 웹 /workspaces/{ws}/place, /place/plan, /place/apply,
       Claude 도구 place_ads_status·place_ads_plan·place_ads_apply
