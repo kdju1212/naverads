@@ -578,9 +578,9 @@ def test_real_write_gate(monkeypatch):
     assert calls[-1] == ("PUT", "/ncc/adgroups/grp-1", {"fields": "bidAmt"})
 
     n = len(calls)
-    with pytest.raises(NaverApiError, match="차단"):
-        cl.update("ad", "nad-1", "bid_amt", 300)  # 미검증 항목은 차단, 호출도 안 함
-    assert len(calls) == n
+    with pytest.raises(NaverApiError, match="쇼핑 상품소재"):
+        cl.update("ad", "nad-1", "bid_amt", 300)  # 소재 유형을 확인하고 쇼핑 소재가 아니면 수정하지 않음
+    assert calls[n:] == [("GET", "/ncc/ads/nad-1", None)]
 
 
 def test_real_stats(monkeypatch):

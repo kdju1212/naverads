@@ -13,13 +13,15 @@ from .naver import NaverApiError, ad_row
 router = APIRouter()
 
 TOOL = {"name": "create_shopping_ad", "description": "쇼핑검색 광고그룹에 상품소재를 등록한다(바로 실행, OFF로 만들어져 검수 후 사용자가 켬). "
-        "product_id는 네이버쇼핑 상품 번호(숫자). bid_amt를 비우면 광고그룹 입찰가를 쓴다(50~100,000원, 10원 단위). "
+        "product_id는 네이버쇼핑 상품 ID(nvMid, 숫자)이며 스마트스토어 상품 번호가 아니다. "
+        "상품은 광고그룹에 연결된 쇼핑몰 채널(검수 통과)에서 광고 등록이 가능한 상품이어야 한다. "
+        "bid_amt를 비우면 광고그룹 입찰가를 쓴다(50~100,000원, 10원 단위). "
         "먼저 계정·광고그룹·상품 번호·입찰가를 채팅에 표로 보여 준 뒤 호출(허용 버튼이 승인).",
         "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id", "product_id"], "properties": {
             "workspace_id": {"type": "integer", "description": "조직 ID (list_ad_accounts 결과)"},
             "ad_account_id": {"type": "integer", "description": "광고 계정 ID (list_ad_accounts 결과의 id)"},
             "adgroup_id": {"type": "string", "description": "쇼핑검색 광고그룹 ID"},
-            "product_id": {"type": "string", "description": "네이버쇼핑 상품 번호"},
+            "product_id": {"type": "string", "description": "네이버쇼핑 상품 ID(nvMid). 스마트스토어 상품 번호와 다름"},
             "bid_amt": {"type": "integer", "description": "소재 입찰가(원). 비우면 그룹 입찰가"}}},
         "annotations": {"destructiveHint": True}}
 
@@ -36,10 +38,10 @@ def create_shopping_ad(db: Session, m: Membership, account_id: int, adgroup_nave
     bulk._check_edit(db, m, account_id)
     product_id = product_id.strip()
     if not product_id.isdigit():
-        raise HTTPException(400, "상품 ID는 네이버쇼핑 상품 번호(숫자)로 입력하세요")
+        raise HTTPException(400, "상품 ID는 네이버쇼핑 상품 ID(nvMid, 숫자)로 입력하세요. 스마트스토어 상품 번호와 다릅니다")
     if bid_amt is not None and (err := bulk._money(str(bid_amt), "입찰가", *bulk.BID_RANGE["SHOPPING"])):
         raise HTTPException(400, err)
-    # shortcut: 명세에 쇼핑 소재 형식이 없어 referenceKey=상품 번호·adAttr=입찰가로 가정(실계정 미확인), 네이버가 거부하면 여기만 고친다
+    # referenceKey는 네이버쇼핑 상품 ID(nvMid); 실계정에서 연결 채널과 상품의 등록 가능 여부도 충족해야 한다.
     attr = {"bidAmt": bid_amt, "useGroupBidAmt": False} if bid_amt else {"useGroupBidAmt": True}
     try:
         a = bulk._client(db, m.workspace_id, account_id).create_ad(adgroup_naver_id, "SHOPPING_PRODUCT_AD", {}, None,

@@ -40,7 +40,10 @@ def _set_group_bid(o, v):
 
 
 def _set_ad_bid(o, v):
-    o["adAttr"] = {**o.get("adAttr", {}), "bidAmt": int(v), "useGroupBidAmt": False}
+    attrs = _json(o.get("adAttr"))
+    if not isinstance(attrs, dict):
+        raise NaverApiError("소재 입찰가 정보를 읽을 수 없습니다")
+    o["adAttr"] = {**attrs, "bidAmt": int(v), "useGroupBidAmt": False}
 
 
 def _check_expected(field, o, expect):
@@ -51,8 +54,11 @@ def _check_expected(field, o, expect):
         cur = "OFF" if o.get("userLock") else "ON"
     elif field == "daily_budget" and o.get("useDailyBudget"):
         cur = o.get("dailyBudget")
-    elif field == "bid_amt" and not o.get("useGroupBidAmt"):
-        cur = (o.get("adAttr") if isinstance(o.get("adAttr"), dict) else o).get("bidAmt")
+    elif field == "bid_amt":
+        attrs = _json(o["adAttr"]) if "adAttr" in o else o
+        if not isinstance(attrs, dict) or attrs.get("useGroupBidAmt"):
+            return
+        cur = attrs.get("bidAmt")
     else:
         return
     if str(cur) != str(expect):
@@ -67,13 +73,13 @@ UPDATE_SPEC = {
     ("keyword", "status"): ("keywords", "userLock", _set_lock),
     ("keyword", "bid_amt"): ("keywords", "bidAmt", _set_bid),
     ("ad", "status"): ("ads", "userLock", _set_lock),
-    ("ad", "bid_amt"): ("ads", "adAttr", _set_ad_bid),  # 쇼핑 상품소재 전용 — 검증 필요
+    ("ad", "bid_amt"): ("ads", "adAttr", _set_ad_bid),  # 쇼핑 상품소재 전용
     ("ad_extension", "status"): ("ad-extensions", "userLock", _set_lock),
 }
 # 공식 샘플 AdManagementSample.java·명세(gh-pages assets/json/ncc-heroes-ncc.json)로 경로·fields를 확인한 것만
-# (쇼핑 소재 입찰가는 미확인)
+# 소재 입찰가는 네이버 공식 답변의 fields=adAttr 방식으로 변경한다.
 VERIFIED_WRITES = {("campaign", "status"), ("campaign", "daily_budget"), ("adgroup", "status"), ("adgroup", "bid_amt"),
-                   ("keyword", "status"), ("keyword", "bid_amt"), ("ad", "status"),
+                   ("keyword", "status"), ("keyword", "bid_amt"), ("ad", "status"), ("ad", "bid_amt"),
                    # 확장소재: 명세에 fields 목록은 없지만 userLock이 ON/OFF용으로 정의돼 있다(응답 검증으로 반영 확인)
                    ("ad_extension", "status")}
 
@@ -239,8 +245,22 @@ class RealNaverClient:
         return out
 
     def create_ad(self, adgroup_id, ad_type, ad, assets, **extra):
-        # 명세 AdRequest. 검수·확인 전에 노출되지 않게 OFF로 만든다. extra: 쇼핑 상품소재의 referenceKey·adAttr. shortcut: 실계정 미확인
+        # 쇼핑 소재는 한 건도 배열과 isList=true가 필요하다 (공식 이슈 #188, #202).
         body = {"nccAdgroupId": adgroup_id, "type": ad_type, "ad": ad, "userLock": True, **({"assets": assets} if assets else {}), **extra}
+        if ad_type == "SHOPPING_PRODUCT_AD":
+            try:
+                result = self._req("POST", "/ncc/ads", params={"isList": "true"}, json=[body])
+            except NaverApiError as e:
+                if str(e).startswith("네트워크"):  # 요청이 네이버에 닿았는지 모름 → 다시 누르기 전에 확인하게 한다
+                    raise NaverApiError(f"{e} — 등록 여부를 알 수 없습니다. 네이버에서 소재가 생겼는지 확인한 뒤 다시 시도하세요") from e
+                raise
+            item = result[0] if isinstance(result, list) and len(result) == 1 else None
+            if not isinstance(item, dict) or not item.get("nccAdId"):
+                status = item.get("resultStatus") if isinstance(item, dict) else None
+                if isinstance(status, dict):
+                    raise NaverApiError(f"{status.get('code', '')} {status.get('message') or status.get('title') or '소재 등록 실패'}")
+                raise NaverApiError("상품소재 등록 결과의 ID를 확인할 수 없습니다. 네이버에서 등록 여부를 확인하세요")
+            return item
         return self._req("POST", "/ncc/ads", json=body)
 
     def serp_ads(self, keyword, device) -> list[str]:
@@ -293,11 +313,23 @@ class RealNaverClient:
             raise NaverApiError("이 항목의 실계정 수정은 공식 API 검증 전이라 아직 차단되어 있습니다")
         res, fields, apply = UPDATE_SPEC[(entity_type, field)]
         obj = self._req("GET", f"/ncc/{res}/{naver_id}")
+        if (entity_type, field) == ("ad", "bid_amt") and obj.get("type") != "SHOPPING_PRODUCT_AD":
+            raise NaverApiError("소재 입찰가는 쇼핑 상품소재에만 변경할 수 있습니다")
         _check_expected(field, obj, expect)
         before = dict(obj)
         apply(obj, value)
         want = {k: v for k, v in obj.items() if before.get(k) != v}
-        out = self._req("PUT", f"/ncc/{res}/{naver_id}", params={"fields": fields}, json=obj)
+        payload = ({"nccAdId": naver_id, "type": obj["type"], "adAttr": obj["adAttr"]}
+                   if (entity_type, field) == ("ad", "bid_amt") else obj)
+        out = self._req("PUT", f"/ncc/{res}/{naver_id}", params={"fields": fields}, json=payload)
+        if (entity_type, field) == ("ad", "bid_amt"):
+            # 응답으로 확인이 안 되면(adAttr 없음·이전 값) 한 번 다시 읽어 확인한다. 쓰기 요청은 재시도하지 않는다.
+            def applied(o):
+                a = _json(o.get("adAttr")) if isinstance(o, dict) else None
+                return isinstance(a, dict) and str(a.get("bidAmt")) == str(int(value)) and a.get("useGroupBidAmt") is False
+            if not applied(out) and not applied(self._req("GET", f"/ncc/ads/{naver_id}")):
+                raise NaverApiError("네이버에서 변경된 소재 입찰가를 확인할 수 없습니다. 네이버에서 실제 값을 확인하세요")
+            return
         # 네이버가 200을 주면서 이전 값을 돌려주는 경우가 있어(searchad-apidoc#982) 바꾼 필드가 응답에 반영됐는지 확인한다
         got = {k: out.get(k) for k in want}
         if got != want:
@@ -366,7 +398,7 @@ def adgroup_row(aid, g):
 
 
 def ad_row(aid, a):
-    attr = a.get("adAttr") or {}
+    attr = _json(a.get("adAttr"))
     payload = a.get("ad", {})
     if a.get("assets"):  # RSA_AD: 제목·설명은 ad가 아니라 assets에 온다
         payload = {**payload, **_rsa_texts(a["assets"])}

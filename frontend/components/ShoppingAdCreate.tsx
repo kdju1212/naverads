@@ -44,7 +44,7 @@ export function ShoppingAdCreate({ adgroups }: { adgroups: NAdGroup[] }) {
           <option value="">쇼핑검색 광고그룹 선택</option>
           {groups.map((g) => <option key={g.id} value={g.naver_id}>{accountName(g.ad_account_id)} · {g.name}</option>)}
         </select>
-        <input className={inputCls} placeholder="네이버쇼핑 상품 번호" inputMode="numeric" required aria-label="상품 번호"
+        <input className={inputCls} placeholder="네이버쇼핑 상품 ID (nvMid)" inputMode="numeric" required aria-label="네이버쇼핑 상품 ID (nvMid)"
           value={form.product_id} onChange={(e) => setForm({ ...form, product_id: digits(e.target.value) })} />
         <input className={`${inputCls} w-48`} placeholder="입찰가 (비우면 그룹 입찰가)" inputMode="numeric" aria-label="입찰가"
           value={form.bid_amt} onChange={(e) => setForm({ ...form, bid_amt: digits(e.target.value) })} />
@@ -52,6 +52,7 @@ export function ShoppingAdCreate({ adgroups }: { adgroups: NAdGroup[] }) {
       </form>
       <ErrorText error={error} />
       {msg && <p className="mt-2 text-sm text-accent">{msg}</p>}
+      <p className="mt-2 text-xs text-faint">네이버쇼핑 상품 ID(nvMid)를 입력하세요. 스마트스토어 상품 번호와 다릅니다. 상품은 연결된 쇼핑몰 채널에서 광고 등록이 가능해야 합니다.</p>
       <p className="mt-2 text-xs text-faint">입찰가는 50~100,000원, 10원 단위. 상품 정보(이름·가격)는 쇼핑몰에서 가져오며 여기서 바꾸지 않습니다.</p>
     </Card>
   );

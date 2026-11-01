@@ -142,7 +142,7 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
 9. 크론 한도 — 자동입찰·목표 ROAS·예약이 한 크론에 같이 돌면 끊길 수 있음, AUTO_BID_LIMIT 10으로 낮추기 검토
 
 [조건이 생기면 / 나중에]
-10. 쇼핑 소재 입찰가 — 쇼핑검색 계정 연결 후 실호출 확인
+10. 쇼핑 소재 등록·입찰가 — 11/01 코드 수정(14-13), 검수 통과 쇼핑몰 채널·nvMid 상품으로 실호출 확인 남음
 11. 소재·확장소재 엑셀 등록
 12. SMB 광고주용 쉬운 등록 화면
 13. (선택) 연관 키워드 클릭수·클릭률 / 디자인 남은 것은 10/28 배포(813c68a): 계정 검색(6개 이상일 때), 표 상태·검수 필터, KPI 증감 색, 불러오는 중 회색 막대, 완료 토스트(작업 실행·네이버 데이터 받기) — 화면은 직접 확인 필요. 필터 칩은 안 함
@@ -214,6 +214,19 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
       → 네이버 광고 화면에서 상품소재 1개를 직접 붙이고 그 소재의 실제 데이터와 비교해 shopping_ads.py 고침
     - 같이 고칠 것(그때 함께): ① 비즈채널 검수 상태가 늘 빈칸 — 네이버는 pcInspectStatus·mobileInspectStatus로 주는데
       naver.py channel_row가 inspectStatus를 읽음 ② 상품 번호 안내를 'nvMid(스마트스토어 상품 번호 아님)'로(웹 입력칸·Claude 도구 설명)
+14-13. 11/01 쇼핑 상품소재 등록 형식·소재 입찰가 변경 수정 (브랜치 fix/shopping-ad-list-and-bid, main 머지·배포 안 함)
+    - 등록: SHOPPING_PRODUCT_AD는 한 건이어도 POST /ncc/ads?isList=true + 배열 본문(공식 이슈 #188·#202). 응답 배열 1건에
+      nccAdId가 있어야 성공, 항목 오류(resultStatus)·빈 배열·여러 건·객체 응답은 실패. 자동 재시도 없음,
+      네트워크 오류는 "등록 여부를 알 수 없음 → 네이버에서 확인 후 다시"로 안내. OFF(userLock)로 만듦. 파워링크 소재는 기존 단건 그대로
+    - 입찰가: PUT /ncc/ads/{id}?fields=adAttr, 본문 {nccAdId, type, adAttr{bidAmt, useGroupBidAmt:false}}(공식 이슈 #782 답변·사용자 성공 예)
+      조회한 소재가 SHOPPING_PRODUCT_AD가 아니면 거부(PUT 안 함). 응답 adAttr로 확인 안 되면 GET으로 한 번 다시 읽어 확인,
+      그래도 안 되면 실패("실제 값 확인"). PUT은 재시도 안 함. VERIFIED_WRITES에 ("ad","bid_amt") 추가(실계정 차단 해제)
+    - 예약 실행 이전 값 비교: 소재는 adAttr 안의 bidAmt로 비교(adAttr가 JSON 문자열이어도), 그룹 입찰가 사용 중이면 비교 건너뜀
+    - 안내: 웹 입력칸·Claude 도구 설명에 "네이버쇼핑 상품 ID(nvMid), 스마트스토어 상품 번호 아님, 연결된 쇼핑몰 채널에서 광고 가능한 상품"
+      (14-12 '같이 고칠 것' ②는 해결, ① 비즈채널 검수 상태 빈칸은 아직)
+    - 테스트: backend/tests/test_shopping_api.py 추가, 백엔드 68개 통과, 프론트 npm test 9개 통과·빌드·lint 통과 (11/01 로컬)
+    - [미확인] 실계정 검증 안 함: 검수 통과한 쇼핑몰 채널 + nvMid 있는 상품이 아직 없음. 등록 성공 응답 모양·입찰가 변경 응답은
+      Mock·가짜 응답 테스트로만 확인. 채널 검수 통과 후 상품 1개로 ① 등록 ② 입찰가 변경 ③ 네이버 화면에서 값 확인할 것
 15. 다음 달 예산 증액 — 개발 중, 광고주 승인 후 실행하는 흐름으로
 16. 보안 → 10/28 배포(56a8f60, 마이그레이션 0012): 요청 횟수 제한(IP당 1분 600번, Workers ratelimits — 무료 플랜 배포 성공),
     Claude 인가 코드 1회 사용·갱신 토큰 교체(60초 뒤 재사용은 탈취로 보고 Claude 연결 전부 끊기), 설정 'Claude 연결만 끊기', 회원 탈퇴
