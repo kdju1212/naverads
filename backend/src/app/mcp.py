@@ -309,7 +309,7 @@ TOOLS = [
          **WS, "changes": {"type": "array", "items": CHANGE, "minItems": 1}}}},
     {"name": "execute_job", "description": "미리보기 작업을 네이버에 실제 반영한다. preview_changes 결과를 채팅에 표로 보여 준 뒤 호출(허용 버튼이 승인). "
      "한 번에 몇 행씩 실행하므로 status가 RUNNING이면 같은 job_id로 다시 호출한다. "
-     "계정 하루예산 합계가 늘 수 있는 변경(캠페인 하루예산 올리기·캠페인/광고그룹 켜기)이 있으면 실행하지 않고 approval(웹 승인 요청)을 돌려준다: "
+     "계정 하루예산 합계가 늘 수 있는 변경(캠페인 하루예산 올리기·캠페인 켜기)이 있으면 실행하지 않고 approval(웹 승인 요청)을 돌려준다: "
      "이때는 '실행됨'이라고 말하지 말고 approval.message의 웹 승인 주소를 사장님께 알려 준다. Claude는 승인할 수 없다. 결과는 get_approval로 확인.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "job_id"], "properties": {**WS, "job_id": {"type": "integer"}}},
      "annotations": {"destructiveHint": True}},
@@ -453,7 +453,7 @@ async def mcp(request: Request):
                                       "변경 도구(execute_job, schedule_job, create_ad, create_shopping_ad, create_ad_extension, set_auto_bid, delete_auto_bid, run_auto_bids)를 "
                                       "부르기 직전에 바뀔 내용(계정·광고그룹·대상·지금 값 → 바뀔 값, 문구와 글자 수, 입찰가, 예약 시각, preview_changes의 VALID/INVALID 행)을 "
                                       "채팅에 표로 보여 준 다음 그 도구를 부른다. 사용자는 표를 보고 Claude 화면의 허용 버튼으로 승인한다(채팅 답을 따로 기다리지 않는다). "
-                                      "표 없이 변경 도구를 부르지 않는다. 계정 하루예산 합계가 늘 수 있는 변경(캠페인 하루예산 올리기·캠페인/광고그룹 켜기·"
+                                      "표 없이 변경 도구를 부르지 않는다. 계정 하루예산 합계가 늘 수 있는 변경(캠페인 하루예산 올리기·캠페인 켜기·"
                                       "ADVoost 켜기)은 도구가 실행하지 않고 웹 승인 요청(approval)을 돌려준다. 그때는 실행됐다고 말하지 말고 승인 주소를 알려 주며, "
                                       "결과는 get_approval로 확인해 성공·실패·대기를 구분해서 전한다. 하루예산 설정액은 실제 과금의 절대 상한이 아니다."}
         elif method == "ping":

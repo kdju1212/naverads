@@ -195,7 +195,7 @@ def job_approval(db: Session, job: BulkJob, statuses=("APPROVED", "RUNNING")) ->
 
 
 def needs_web_approval(db: Session, workspace_id: int, rows: list[BulkJobRow], clients: dict) -> bool:
-    """계정 하루예산 설정액 합계를 늘릴 수 있는 행(캠페인 예산 증액·캠페인/광고그룹 켜기)이 있으면 웹 승인이 필요하다(safety.web_approval_needed)."""
+    """계정 하루예산 설정액 합계를 늘릴 수 있는 행(캠페인 예산 증액·캠페인 켜기)이 있으면 웹 승인이 필요하다(safety.web_approval_needed)."""
     by_account: dict[int, list] = {}
     for r in rows:
         by_account.setdefault(r.ad_account_id, []).extend(safety.ops_of_row(r.entity_type, r.field, r.naver_id, r.after or ""))

@@ -15,7 +15,7 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
     운영 Worker는 11/01 버전 그대로, 운영 D1은 0016만 대기, API 시크릿 4개 있음, /health cred_key_loaded true
   - 배포 순서·검증·롤백: docs/SECURITY_OPERATIONS.md 6~7절
 [11/02에 한 것] 브랜치 feat/web-approval-security — 아직 main 병합·배포 안 함(사용자 지시 전까지 하지 말 것). 자세한 건 아래 14-18
-  - 웹 승인(사용자 결정 11/02): 계정 하루예산 합계가 늘 수 있는 변경(캠페인 예산 올리기·캠페인/광고그룹 켜기·ADVoost 켜기)만
+  - 웹 승인(사용자 결정 11/02): 계정 하루예산 합계가 늘 수 있는 변경(캠페인 예산 올리기·캠페인 켜기·ADVoost 켜기)만 — 광고그룹 켜기는 11/02 2차 결정으로 웹 승인에서 뺌(안전장치는 그대로)
     웹 /approvals에서 로그인한 사람이 승인해야 실행. Claude는 요청만, 결과는 get_approval. 나머지는 지금처럼 Claude 허용 버튼
   - 안전장치 보완: 입찰가 올리기도 합계 검사, 켤 때 실제 입찰가(그룹 상속), ADVoost는 캠페인 예산 있을 때만, 계정별 실행 잠금(account_locks)
   - 로그인: HttpOnly 쿠키 + CSRF 헤더·출처 검사, CORS 웹 주소만, 예전 토큰 자동 전환, Google sub로 식별·설정에서 연결, CRED_KEY 없으면 저장 거부

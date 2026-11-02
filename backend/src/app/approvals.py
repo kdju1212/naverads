@@ -1,4 +1,4 @@
-"""웹 승인(사용자 결정 2026-11-02): 계정 하루예산 설정액 합계를 늘릴 수 있는 변경(캠페인 하루예산 증액, 캠페인·광고그룹 켜기,
+"""웹 승인(사용자 결정 2026-11-02): 계정 하루예산 설정액 합계를 늘릴 수 있는 변경(캠페인 하루예산 증액, 캠페인 켜기,
 ADVoost 켜기)은 웹에 로그인한 사람이 이 화면에서 승인해야만 서버가 실행한다.
 
 - Claude(MCP)는 승인 요청만 만든다. 승인 엔드포인트는 웹 로그인으로만 부를 수 있다(access.user_from_header가 Claude 토큰을 거부, 쿠키는 CSRF 검사).
@@ -51,7 +51,7 @@ def _audit(db, m, ar: ApprovalRequest, action: str, after: str | None = None):
 def _job_summary(db: Session, m: Membership, job: BulkJob, rows: list[BulkJobRow], claimed: dict[int, str | None]) -> dict:
     names = dict(db.execute(select(AdAccount.id, AdAccount.name).where(AdAccount.id.in_({r.ad_account_id for r in rows}))).all())
     return {"title": f"대량 작업 #{job.id} 실행" + (f" (예약 {job.scheduled_at:%Y-%m-%d %H:%M} UTC)" if job.scheduled_at else ""),
-            "why": "계정의 하루예산 설정액 합계가 늘 수 있는 변경(캠페인 하루예산 올리기·캠페인/광고그룹 켜기)이 있어 웹 승인이 필요해요",
+            "why": "계정의 하루예산 설정액 합계가 늘 수 있는 변경(캠페인 하루예산 올리기·캠페인 켜기)이 있어 웹 승인이 필요해요",
             "rows": [{"account": names.get(r.ad_account_id), "ad_account_id": r.ad_account_id, "entity_type": r.entity_type,
                       "naver_id": r.naver_id, "what": LABEL.get(r.field, r.field), "before": r.before, "after": r.after,
                       # 화면·Claude가 '지금 값'이라고 보낸 값이 네이버와 다르면 함께 보여 준다(실행 기준은 before = 서버가 읽은 값)

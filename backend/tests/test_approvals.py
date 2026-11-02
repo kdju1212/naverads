@@ -179,12 +179,15 @@ def test_turn_on_checks_effective_bid():
     assert out["status"] == "FAILED" and st["keywords"]["kwd-7405-21"]["userLock"]
     st["keywords"]["kwd-7405-11"]["userLock"] = True  # 300원은 통과
     assert _run(owner, ws, _job(owner, ws, [ch(acc, "keyword", "kwd-7405-11", "status", "ON")])["id"])["status"] == "DONE"
-    # 광고그룹 켜기(웹 승인): 안에 최대 입찰가를 넘는 켜진 키워드가 있으면 승인해도 실행 직전에 막힌다
+    # 광고그룹 켜기(웹 승인 대상 아님, 11/02 2차 결정): 승인 요청 없이 실행되지만, 안에 최대 입찰가를 넘는 켜진 키워드가 있으면 실행 직전에 막힌다
     st["adgroups"]["grp-7405-pl1"]["userLock"] = True
     st["keywords"]["kwd-7405-13"]["userLock"] = False
-    _, ap = _request(owner, ws, [ch(acc, "adgroup", "grp-7405-pl1", "status", "ON")])
-    r = _approve(owner, ws, ap["approval_id"]).json()
-    assert r["status"] == "FAILED" and "높은 입찰가" in _rows(r["job"])["grp-7405-pl1"]["error"] and st["adgroups"]["grp-7405-pl1"]["userLock"]
+    out = _run(owner, ws, _job(owner, ws, [ch(acc, "adgroup", "grp-7405-pl1", "status", "ON")])["id"])
+    assert "approval" not in out and out["status"] == "FAILED" and "높은 입찰가" in _rows(out)["grp-7405-pl1"]["error"]
+    assert st["adgroups"]["grp-7405-pl1"]["userLock"]
+    st["keywords"]["kwd-7405-13"]["userLock"] = True  # 넘는 키워드를 끄면 승인 없이 켜진다
+    out = _run(owner, ws, _job(owner, ws, [ch(acc, "adgroup", "grp-7405-pl1", "status", "ON")])["id"])
+    assert "approval" not in out and out["status"] == "DONE" and st["adgroups"]["grp-7405-pl1"]["userLock"] is False
     # 쇼핑 상품소재 켜기
     st["ads"]["ad-7405-sh3"].update(adAttr={"bidAmt": 900, "useGroupBidAmt": False}, userLock=True)
     out = _run(owner, ws, _job(owner, ws, [ch(acc, "ad", "ad-7405-sh3", "status", "ON")])["id"])
@@ -277,7 +280,8 @@ def test_advoost_and_place_spend_text():
     cid = camp["nccCampaignId"]
     gid = grp["nccAdgroupId"]
     s = _plan(owner, ws, acc, "turn_on", target_type="adgroup", target_id=gid).json()["summary"]
-    assert s["web_required"] and any("ADVoost" in n for n in s["safety"]["uncontrolled"])  # 통제할 수 없는 항목을 표시
+    # 광고그룹 켜기는 웹 승인 대상이 아니지만(11/02 2차 결정) ADVoost 그룹이면 통제할 수 없는 항목을 표시한다
+    assert not s["web_required"] and any("ADVoost" in n for n in s["safety"]["uncontrolled"])
     # 캠페인 하루예산이 없으면 ADVoost 켜기를 막는다(입찰가도 예산도 상한이 없게 되므로)
     _MOCK_STORE["7408"]["campaigns"][cid].update(dailyBudget=0, useDailyBudget=False)
     r = _plan(owner, ws, acc, "turn_on", target_type="adgroup", target_id=gid)

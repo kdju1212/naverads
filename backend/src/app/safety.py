@@ -240,8 +240,9 @@ def _effective_on(snap: Snapshot, etype: str, nid: str, max_bid: int, notes: lis
 
 def web_approval_needed(ops: list[tuple], get_client) -> bool:
     """웹에서 사람이 승인해야 하는 변경인지(사용자 결정 2026-11-02): 계정 하루예산 설정액 합계를 늘릴 수 있는 것만 —
-    캠페인 하루예산 증액, 캠페인·광고그룹 켜기, ADVoost 켜기. 증액인지는 네이버 지금 값으로 본다(못 읽으면 승인 필요로 본다)."""
-    if any(o[0] == "advoost" or (o[0] == "on" and o[1] in ("campaign", "adgroup")) for o in ops):
+    캠페인 하루예산 증액, 캠페인 켜기, ADVoost 켜기. 증액인지는 네이버 지금 값으로 본다(못 읽으면 승인 필요로 본다).
+    광고그룹 켜기는 웹 승인 대상이 아니다(사용자 결정 11/02 2차) — 실행 직전 안전장치(실제 입찰가·합계)는 그대로 거친다."""
+    if any(o[0] == "advoost" or (o[0] == "on" and o[1] == "campaign") for o in ops):
         return True
     budgets = [o for o in ops if o[0] == "budget"]
     if not budgets:

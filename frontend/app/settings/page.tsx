@@ -250,7 +250,7 @@ function MyAccount() {
         <ul className="mt-2 list-disc pl-5 text-sm">
           <li>Claude는 내가 속한 조직·담당 계정만 봅니다. 볼 수 있는 범위는 이 앱의 권한과 같습니다.</li>
           <li>입찰가·소재 등 변경은 Claude가 채팅에 미리보기 표를 먼저 보여 주고, Claude 화면의 &quot;허용&quot;을 눌러야 실행(또는 예약)됩니다.</li>
-          <li><strong>캠페인 하루예산 올리기, 캠페인·광고그룹 켜기, ADVoost 켜기</strong>는 Claude가 실행할 수 없고, 이 웹의 <Link href="/approvals" className="underline">승인</Link> 화면에서 직접 승인해야 실행됩니다.</li>
+          <li><strong>캠페인 하루예산 올리기, 캠페인 켜기, ADVoost 켜기</strong>는 Claude가 실행할 수 없고, 이 웹의 <Link href="/approvals" className="underline">승인</Link> 화면에서 직접 승인해야 실행됩니다.</li>
           <li><strong>Claude 화면에서 변경 도구(실행·예약·소재·확장소재·자동입찰)는 &quot;항상 허용&quot;으로 두지 마세요.</strong> 그러면 묻지 않고 바로 광고에 반영될 수 있습니다.</li>
           <li>Claude에게 &quot;내 광고 계정 보여줘&quot;, &quot;캠페인 목록 보여줘&quot;처럼 말하면 됩니다.</li>
           <li>연결은 7일 동안 쓰지 않으면 끊깁니다. 끊기면 Claude 커넥터 화면에서 &quot;연결&quot;을 다시 누르세요.</li>

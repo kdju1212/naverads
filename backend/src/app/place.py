@@ -559,7 +559,7 @@ TOOLS = [
      "ADVoost가 켜진 그룹은 입찰가 변경·제외검색어·광고 직접 추가가 막혀 있다(오류에 이유가 나온다).",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "action", "params"], "properties": {**_WS, **_CHANGE}}},
     {"name": "place_ads_apply", "description":
-     "place_ads_plan으로 만든 계획을 네이버에 실제로 적용한다. 계획 결과에 web_required가 true면(예산 올리기·캠페인/광고그룹 켜기·ADVoost 켜기) "
+     "place_ads_plan으로 만든 계획을 네이버에 실제로 적용한다. 계획 결과에 web_required가 true면(예산 올리기·캠페인 켜기·ADVoost 켜기) "
      "이 도구로는 적용되지 않으니 approve_url을 사장님께 알려 웹에서 승인받게 하고 get_approval로 결과를 확인한다. "
      "그 밖에는 계획과 똑같은 ad_account_id·action·params와 approval_id를 넣어야 하며 "
      "(하나라도 다르면 거부), 같은 계획은 한 번만, 15분 안에만 적용된다. 결과 status는 SUCCESS(모두 성공)·PARTIAL(일부만 성공)·FAILED. "

@@ -9,7 +9,7 @@ import { applyJob } from "@/lib/naverData";
 import { useApp } from "@/lib/store";
 import { useFetch } from "@/lib/useFetch";
 
-/** 서버: backend/src/app/approvals.py. 계정 하루예산 합계가 늘 수 있는 변경(예산 올리기·캠페인/광고그룹 켜기·ADVoost 켜기)만 여기서 승인한다 */
+/** 서버: backend/src/app/approvals.py. 계정 하루예산 합계가 늘 수 있는 변경(예산 올리기·캠페인 켜기·ADVoost 켜기)만 여기서 승인한다 */
 interface JobRowSummary { account: string | null; entity_type: string; naver_id: string; what: string; before: string | null; after: string; claimed_before?: string | null }
 interface Approval {
   approval_id: number; kind: "job" | "place"; status: string; job_id: number | null; ad_account_id: number | null;
@@ -42,7 +42,7 @@ function Approvals() {
   const done = list.filter((a) => !open.includes(a));
   return (
     <>
-      <PageTitle desc="캠페인 하루예산 올리기, 캠페인·광고그룹 켜기, ADVoost 켜기는 돈이 새로 나가기 시작할 수 있어 여기서 직접 승인해야 실행돼요. Claude는 요청만 만들 수 있어요.">
+      <PageTitle desc="캠페인 하루예산 올리기, 캠페인 켜기, ADVoost 켜기는 돈이 새로 나가기 시작할 수 있어 여기서 직접 승인해야 실행돼요. Claude는 요청만 만들 수 있어요.">
         승인
       </PageTitle>
       <ErrorText error={error} />
