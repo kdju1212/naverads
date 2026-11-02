@@ -57,7 +57,14 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
 
 [그 뒤 남은 출시 차단 항목]
   - 약관·개인정보처리방침 법률 검토(14-1)
-  - (보안 Medium) 로그인 토큰 localStorage → HttpOnly 쿠키: 11/02 브랜치에서 구현(14-18). 웹·API가 workers.dev 아래 같은 사이트라 도메인 이전 없이 됨, 배포 전
+  - (보안 Medium) 로그인 토큰 localStorage → HttpOnly 쿠키: 11/02 구현(14-18)·운영 배포(14-25). 브라우저 확인은 남음(아래)
+  - ★ main 브랜치 보호 — 일반 광고주 공개 직전에 켤 것(사용자 결정 11/02: 혼자 개발이라 지금은 미룸)
+    · 이유: main push = 테스트 없이 바로 운영 배포. 막는 대상은 다른 사람이 아니라 본인·Claude의 실수(깨진 코드 push, main에 잘못 push, 강제 push)
+    · 공개 전 전체 설정(GitHub Settings > Rules > New branch ruleset, 대상 main, Bypass 비움): 삭제 금지, PR 필수(승인 0), 강제 push 금지,
+      필수 검사 backend·frontend(Workers Builds 두 개는 넣지 말 것 — 브랜치에서 늘 실패해 병합이 막힘). 공개 저장소라 Actions의 외부 기여자 실행 승인도 켜기
+    · 지금 해도 불편 없는 최소 설정(선택): Block force pushes + Restrict deletions
+    · 자세한 절차: docs/SECURITY_OPERATIONS.md 4절
+  - 운영 브라우저 확인(14-25 미확인): 로그인·새로고침·로그아웃·쿠키 속성, 꺼진 캠페인 ON → /approvals → 거절 → 계속 OFF(SECURITY_OPERATIONS 7-2절)
   - 광고주별 지출·입찰 상한 → 11/01 해결(14-16), 로그아웃 시 서버 토큰 폐기 → 11/01 해결(14-17)
 
 [주의]
