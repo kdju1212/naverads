@@ -142,7 +142,9 @@
 
 **Workers Builds** (GitHub check-runs)
 - main 커밋(`6343e25`, `1da19d1`)은 두 Worker 모두 성공했다.
-- 이 브랜치 커밋 `2e249fc`, `487de37`, `8704424`, `a239b7a`, `eabb70f`는 **모두 두 Worker 실패**했다(시작 1분 안에 끝남). 빌드 로그 API는 11/02 밤 다시 시도해도 Forbidden.
+- 이 브랜치 커밋 `2e249fc`, `487de37`, `8704424`, `a239b7a`, `eabb70f`, `1b4220f`는 **모두 두 Worker 실패**했다(시작 1분 안에 끝남). 빌드 로그 API는 11/02 밤 다시 시도해도 Forbidden.
+- 운영 빌드(main 커밋)와 비운영 브랜치 검사는 다르다: main `6c47934` = 성공 후 운영 배포, 보안 브랜치 = 실패(버전 만들지 않음).
+- 배포되지 않은 변경: `origin/main..origin/feat/web-approval-security` 커밋 6개, 파일 34개(+2510/−365). 운영에 웹 승인·쿠키 로그인·잠금이 아직 없다.
   - **운영 영향 없음(확인)**: 실패한 빌드는 버전을 만들지 않았고, 운영 배포 목록은 11/01 버전 그대로다.
   - 빌드 로그는 이 PC의 wrangler 토큰 권한으로 읽을 수 없었다(Forbidden).
   - 로컬에서는 같은 코드로 두 Worker 모두 번들링(dry-run)에 성공했다.
@@ -162,7 +164,7 @@
 
 **운영 D1** (`wrangler d1 migrations list naverads --remote`)
 - 적용 대기: `0016_web_approval_locks.sql` **하나**(0015까지 적용됨).
-- Time Travel bookmark(11/02 밤 확인): `000006c0-00000000-00005117-f4be1dcf11fbfbff52fa6d3ccaf2b3ff`(앞서 `000006be-…`, `000006b8-…`). 마이그레이션 직전에 다시 받는다.
+- Time Travel bookmark(11/02 밤 최종 확인): `000006c2-00000000-00005117-83f00ea42bb287640fd03ff37deae1f6`(앞서 `000006c0-…`, `000006be-…`, `000006b8-…`). 마이그레이션 직전에 다시 받는다.
   - 마이그레이션 직전에 다시 받아 그 값을 쓴다.
   - 무료 플랜은 7일, 유료는 30일까지 되돌릴 수 있다(공식 문서 https://developers.cloudflare.com/d1/reference/time-travel/).
 
@@ -207,6 +209,26 @@
   - **그 시점 이후 모든 데이터가 사라진다**(회원·작업 이력·승인 기록 포함). 복구 명령이 돌려주는 bookmark로 되돌릴 수는 있다.
   - 실행하기 전에 사용자 승인을 받는다. 이번 작업에서는 실행하지 않았다.
   - 0016만 빼려면 복구 대신 `DROP TABLE account_locks; DROP INDEX ix_users_google_sub; DROP INDEX ix_approval_requests_job_id;` 후 `ALTER TABLE … DROP COLUMN …`(approval_requests: kind·ad_account_id·job_id·web_required·summary, users: google_sub)과 `DELETE FROM d1_migrations WHERE name='0016_web_approval_locks.sql'`. 보통은 필요 없다.
+
+## 7-1. 로컬 격리 환경 확인 기록 (2026-11-02 밤)
+
+운영에는 보안 코드가 없고, Cloudflare 미리보기는 운영 D1·시크릿을 공유한다. 그래서 운영과 미리보기에서는 쓰기 확인을 하지 않았다. 대신 로컬에서 확인했다.
+- **환경:** 실제 HTTP 서버(uvicorn `127.0.0.1:8765`, 브랜치 `1b4220f`)
+  - 저장소 밖 임시 SQLite, Mock 네이버, 크론 없음, 운영 시크릿 없음(임시 값)
+  - 끝난 뒤 서버를 끄고 임시 파일을 지웠다.
+- **결과(16개 모두 통과)**
+  - 로그인 본문에 토큰 없음, 쿠키 `HttpOnly; Secure; SameSite=strict; Path=/; Max-Age=43200`, Domain 없음(host-only)
+  - 쿠키만으로 `/auth/me` 유지(새로고침)
+  - CSRF 헤더 없는 쓰기 403, 다른 출처 쓰기 403
+  - CORS는 웹 출처만 허용(credentials true), 다른 출처는 허용 헤더 없음
+  - Mock 캠페인 끄기는 승인 없이 바로 됐다. 켜기 요청은 **켜지지 않고** 승인 요청(PENDING)이 생겼다.
+  - 승인 화면 요약: 대상·지금 OFF → ON·계정명·변경 후 하루예산 합계(80,000원)·과금 안내
+  - 거절 → REJECTED, 캠페인 계속 OFF. 거절한 요청 승인 409, CSRF 없는 승인 403
+  - 로그아웃 → 쿠키 삭제, 그 토큰은 서버에서 401
+- **확인하지 못한 것**
+  - 실제 브라우저(Chrome 등)에서 `naverads.djkim0509.workers.dev` → `naverads-api.djkim0509.workers.dev`로 SameSite=Strict 쿠키가 실리는지. 이 PC에서 쓸 수 있는 브라우저 도구가 없었고, 운영에 아직 배포되지 않았다.
+  - 화면(Next.js) 동작. 위 확인은 API 단위다. 화면은 빌드·타입 검사·lint만 통과했다.
+  - 배포 뒤 7절 10~14로 확인한다.
 
 ## 8. 남은 위험
 
