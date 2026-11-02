@@ -15,39 +15,54 @@ from workers import WorkerEntrypoint, asgi  # noqa: E402
 
 from app import db as app_db  # noqa: E402
 from app.bulk import rotate_credentials, run_all_auto_bids, run_all_goals, run_scheduled_jobs  # noqa: E402
+from app.access import SESSION_COOKIE, WEB_ORIGINS  # noqa: E402
 from app.main import app, master_file_source  # noqa: E402
 
 # 마스터 보고서 파일은 FastAPI를 거치지 않고 JS fetch로 받아 그대로 넘긴다(파이썬이 본문을 다루면 CPU 한도 초과)
 MASTER_FILE = re.compile(r"/workspaces/(\d+)/ad-accounts/(\d+)/master-reports/([^/]+)/file$")
-CORS = {"Access-Control-Allow-Origin": "*"}  # Bearer 토큰 인증이라 모든 출처 허용(app.main과 같음)
+def _cors(request) -> dict:
+    """로그인 쿠키를 쓰므로 웹 주소에만 응답을 열어 준다(app.main의 CORS와 같음)."""
+    origin = request.headers.get("Origin") if request else None
+    return {"Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true", "Vary": "Origin"} if origin in WEB_ORIGINS else {}
 
 
-def _response(body, status=200, content_type="application/json"):
-    init = {"status": status, "headers": {**CORS, "Content-Type": content_type}}
+def _response(body, status=200, content_type="application/json", request=None):
+    init = {"status": status, "headers": {**_cors(request), "Content-Type": content_type}}
     return js.Response.new(body, to_js(init, dict_converter=js.Object.fromEntries))
+
+
+def _token(request) -> str:
+    """Authorization 헤더, 없으면 로그인 쿠키(HttpOnly)."""
+    if auth := request.headers.get("Authorization"):
+        return auth
+    for part in (request.headers.get("Cookie") or "").split(";"):
+        k, _, v = part.strip().partition("=")
+        if k == SESSION_COOKIE:
+            return f"Bearer {v}"
+    return ""
 
 
 async def _master_file(request, ws_id, account_id, job_id):
     db = app_db.SessionLocal()
     try:
-        src = master_file_source(db, request.headers.get("Authorization") or "", int(ws_id), int(account_id), job_id)
+        src = master_file_source(db, _token(request), int(ws_id), int(account_id), job_id)
     except HTTPException as e:
-        return _response(json.dumps({"detail": e.detail}, ensure_ascii=False), e.status_code)
+        return _response(json.dumps({"detail": e.detail}, ensure_ascii=False), e.status_code, request=request)
     finally:
         db.close()
     tsv = "text/tab-separated-values; charset=utf-8"
     if "text" in src:  # Mock
-        return _response(src["text"], content_type=tsv)
+        return _response(src["text"], content_type=tsv, request=request)
     r = await js.fetch(src["url"], to_js({"headers": src["headers"]}, dict_converter=js.Object.fromEntries))
     if not r.ok:
-        return _response(json.dumps({"detail": f"보고서 다운로드 실패: {r.status}"}, ensure_ascii=False), 400)
-    return _response(await r.arrayBuffer(), content_type=tsv)
+        return _response(json.dumps({"detail": f"보고서 다운로드 실패: {r.status}"}, ensure_ascii=False), 400, request=request)
+    return _response(await r.arrayBuffer(), content_type=tsv, request=request)
 
 
 class Default(WorkerEntrypoint):
     def _bind(self):
         os.environ.setdefault("APP_SECRET", self.env.APP_SECRET)  # Workers는 os.environ을 채우지 않는다
-        # 설정 전엔 없다 → Google 로그인만 "설정 전" 안내, CRED_KEY가 없으면 비밀키는 APP_SECRET 열쇠로(security.py)
+        # 설정 전엔 없다 → Google 로그인만 "설정 전" 안내, CRED_KEY가 없으면 새 비밀키 저장을 거부한다(security.encrypt)
         for k in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "CRED_KEY", "CRED_KEY_OLD"):
             if v := getattr(self.env, k, None):
                 os.environ.setdefault(k, str(v))

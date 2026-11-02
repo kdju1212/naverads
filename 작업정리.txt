@@ -1,4 +1,4 @@
-네이버 광고 통합 관리 — 작업 정리 (2026-11-01 기준, 요약본)
+네이버 광고 통합 관리 — 작업 정리 (2026-11-02 기준, 요약본)
 ================================================================
 사이트:  https://naverads.djkim0509.workers.dev
 API:     https://naverads-api.djkim0509.workers.dev/docs
@@ -7,8 +7,17 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
 ※ 10/27 이전의 자세한 기록(날짜별 확인 내용·작업 번호)은 git 이력의 이전 작업정리.txt에 있음 (git log -p -- 작업정리.txt)
 
 
-■ ★ 다음에 이어서 할 것 (11/01 기준) ★
+■ ★ 다음에 이어서 할 것 (11/02 기준) ★
 ----------------------------------------------------------------
+[11/02에 한 것] 브랜치 feat/web-approval-security — 아직 main 병합·배포 안 함(사용자 지시 전까지 하지 말 것). 자세한 건 아래 14-18
+  - 웹 승인(사용자 결정 11/02): 계정 하루예산 합계가 늘 수 있는 변경(캠페인 예산 올리기·캠페인/광고그룹 켜기·ADVoost 켜기)만
+    웹 /approvals에서 로그인한 사람이 승인해야 실행. Claude는 요청만, 결과는 get_approval. 나머지는 지금처럼 Claude 허용 버튼
+  - 안전장치 보완: 입찰가 올리기도 합계 검사, 켤 때 실제 입찰가(그룹 상속), ADVoost는 캠페인 예산 있을 때만, 계정별 실행 잠금(account_locks)
+  - 로그인: HttpOnly 쿠키 + CSRF 헤더·출처 검사, CORS 웹 주소만, 예전 토큰 자동 전환, Google sub로 식별·설정에서 연결, CRED_KEY 없으면 저장 거부
+  - 마이그레이션 0016(로컬 테스트만), 테스트 102개 통과, 문서 docs/AD_SAFETY_AND_APPROVALS.md 갱신·docs/SECURITY_OPERATIONS.md 신규
+  - [배포 전에 할 것] docs/SECURITY_OPERATIONS.md 5절 체크리스트(0016 먼저 적용 → 예약 대기 작업 확인 → push → 쿠키 로그인·승인 확인)
+  - [직접] GitHub main 보호·필수 검사 설정(SECURITY_OPERATIONS.md 4절) — 실제 설정 확인 못 함, .github/workflows/test.yml은 아직 한 번도 안 돎
+
 [11/01에 한 것] 모두 배포, 자세한 건 아래 14-13~14-17
   - 14-13 쇼핑 상품소재: 등록은 isList=true 배열, 소재 입찰가는 fields=adAttr+재조회 확인(실계정 검증 남음)
   - 14-14 보안 점검(security-audit 스킬) 6건 수정: 자동입찰 계정 확인, 로그인 실패 선계산, CSV 수식, SEO 주소·리다이렉트, 공유 계정 성과 조직별(0014)
@@ -18,7 +27,7 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
   - 14-17 로그아웃 때 서버에서 이 기기 토큰 폐기(운영 확인)
 
 [지금 상태]
-  - 승인 방식(사용자 결정 11/01, A): Claude가 바뀔 내용을 표로 보여 주고 Claude 화면 "허용" 버튼이 승인. 웹 승인 화면·관리자 결재는 안 만듦.
+  - 승인 방식(사용자 결정 11/01 A → 11/02 일부 변경): Claude 표 + "허용" 버튼이 승인. 단 계정 하루예산 합계가 늘 수 있는 변경은 웹 /approvals 승인(14-18, 브랜치·배포 전). 관리자 결재는 안 만듦.
     서버는 대량 작업 미리보기(저장된 행만 실행)·플레이스 계획(같은 사람·같은 내용 해시·15분·1회)과 광고비 안전장치로 막는다
   - 주의: Claude 화면에서 변경 도구를 "항상 허용"으로 두면 묻지 않고 반영됨(안전장치 검사는 그대로 적용)
   - 참고: wrangler 4.156은 migrations apply에 -y 옵션 없음(! 로 실행하면 확인 질문 없이 진행)
@@ -29,7 +38,7 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
 
 [그 뒤 남은 출시 차단 항목]
   - 약관·개인정보처리방침 법률 검토(14-1)
-  - (보안 Medium) 로그인 토큰 localStorage → HttpOnly 쿠키는 프론트·API 같은 도메인부터 필요(설계만)
+  - (보안 Medium) 로그인 토큰 localStorage → HttpOnly 쿠키: 11/02 브랜치에서 구현(14-18). 웹·API가 workers.dev 아래 같은 사이트라 도메인 이전 없이 됨, 배포 전
   - 광고주별 지출·입찰 상한 → 11/01 해결(14-16), 로그아웃 시 서버 토큰 폐기 → 11/01 해결(14-17)
 
 [주의]
@@ -43,7 +52,7 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
 - 배포: main에 push하면 Cloudflare Workers Builds가 프론트(naverads)·백엔드(naverads-api) 자동 배포
   GitHub 커밋의 Workers Builds 두 개가 성공한 뒤 확인 (프론트가 먼저 뜨면 잠깐 "Not Found" → 새로고침)
 - DB 변경은 자동 배포 안 됨 → push 전에 backend 폴더에서: npx wrangler d1 migrations apply naverads --remote
-  (0015까지 적용 완료, 11/01)
+  (0015까지 적용 완료, 11/01. 0016은 11/02 브랜치 — 배포 때 push 전에 적용)
 - 디버깅: npx wrangler tail naverads-api --format json / DB 읽기: npx wrangler d1 execute naverads --remote --command "SELECT ..."
 - 무료 플랜만 사용: 요청 1번에 외부 호출+D1 쿼리 50번, CPU 10ms → 대량 작업은 5행씩 나눠 실행, 크론도 조금씩 나눠 진행
 - 광고 데이터(캠페인~확장소재)는 서버 DB에 없음: 브라우저(IndexedDB)가 네이버 마스터 보고서로 받아 보관(7일, 화면 "새로고침")
@@ -297,6 +306,27 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
     - 이 기기만: 다른 기기·Claude 연결은 그대로(전부 끊기는 기존 '모든 기기에서 로그아웃'). 화면 로그아웃이 먼저 서버를 부름(실패해도 브라우저에선 지움)
     - 한계: 토큰에 무작위 값이 없어 같은 사용자가 같은 초에 두 번 로그인하면 같은 토큰 → 하나 로그아웃하면 둘 다 끊김
     - 테스트 1개 추가, 백엔드 92개 통과, 프론트 테스트·빌드 통과
+14-18. 11/02 웹 승인·안전장치 보완·로그인 보안 → 브랜치 feat/web-approval-security(마이그레이션 0016), main 병합·배포 안 함
+    - 요청: 공개 배포 전 보안 문제 수정(붙여 넣은 작업 지시). 승인 범위는 사용자와 정함: 처음 제안 "캠페인 예산 바꿀 때만" → 꺼진 캠페인 켜기도
+      합계를 늘리므로 "계정 하루예산 합계가 늘 수 있는 변경만 웹 승인"으로 합의(11/01 결정 A를 이 부분만 바꿈)
+    - 웹 승인(approvals.py, 화면 /approvals): 대량 작업 실행·예약, 플레이스 계획에서 대상이면 실행 대신 승인 요청(approval_requests에
+      kind·job_id·ad_account_id·web_required·summary). 승인 = 같은 조직·요청자 또는 관리자·대상 계정 수정 권한, Claude 토큰 불가(401).
+      작업은 실행할 행 해시로 묶고(변조·재사용 차단), 30분(예약은 예약 시각까지) 만료, 승인하면 바로 실행(예약은 크론이 실행).
+      실행 직전 권한·변경 전 값(expect)·안전장치 재확인, 상태 PENDING/APPROVED/RUNNING/DONE/PARTIAL/FAILED/REJECTED/EXPIRED + 감사 로그
+    - 안전장치(safety.py): 입찰가는 네이버 지금 실제 입찰가보다 올릴 때 합계 검사(내리기는 상한만), 새 키워드·확장소재·제외검색어 삭제도 합계,
+      켤 때 실제 입찰가(키워드 그룹 상속·광고그룹 안 키워드/쇼핑 소재·캠페인의 켜진 그룹 10개까지) ≤ 최대 입찰가,
+      ADVoost는 캠페인 하루예산 있을 때만 켜고 '통제할 수 없음' 표시, 계정별 잠금(임대 90초, 못 얻으면 비용 행 FAILED)
+    - 경로 보완: 쇼핑 소재(입찰가 비우면 그룹 입찰가로 상한 검사), 확장소재 등록(합계·잠금), 목표 ROAS 저장(계정 상한), 플레이스 지출 문구
+      ('지출이 늘지 않아요'는 실제로 안 느는 변경에만), 예약 실행 시 승인 없으면 실패
+    - 고친 버그: 예약·승인 작업의 예산 변경 전 값 비교가 useDailyBudget 필드 없는 응답에서 건너뛰어지던 것(naver._check_expected)
+    - 로그인: HttpOnly·Secure·SameSite=Strict 쿠키(naverads_session), 쓰기 요청 X-Naverads-CSRF 헤더 + Origin 검사, CORS 웹 주소만,
+      로그인 본문·Google 리다이렉트에 토큰 없음, 로그아웃 쿠키 삭제+토큰 폐기, 예전 localStorage 토큰은 화면이 /auth/session으로 자동 전환
+    - Google: users.google_sub로 찾음, 같은 이메일 비밀번호 계정 자동 연결 안 함(설정 'Google 연결'로만), iss·aud·exp·sub 확인,
+      예전 Google 가입 계정(sub 없음)은 처음 로그인 때 sub 기록(전환 예외, SECURITY_OPERATIONS.md 2절)
+    - CRED_KEY: 운영에서 없으면 새 비밀키 저장 거부(503), APP_SECRET으로 새로 암호화하지 않음
+    - Claude: get_approval 도구, execute_job·schedule_job·place_ads_* 설명과 instructions에 웹 승인 안내
+    - 테스트: test_approvals.py 10개 추가, 기존 테스트를 새 규칙에 맞춤 → 백엔드 102개 통과. 프론트 tsc·lint·test·build 통과
+    - [미확인] 운영 D1 0016, 실제 브라우저 쿠키·CORS, GitHub 설정, 실계정 응답 필드(useGroupBidAmt·adAttr 등), ADVoost 실제 초과 과금
 15. 다음 달 예산 증액 — 개발 중, 광고주 승인 후 실행하는 흐름으로
 16. 보안 → 10/28 배포(56a8f60, 마이그레이션 0012): 요청 횟수 제한(IP당 1분 600번, Workers ratelimits — 무료 플랜 배포 성공),
     Claude 인가 코드 1회 사용·갱신 토큰 교체(60초 뒤 재사용은 탈취로 보고 Claude 연결 전부 끊기), 설정 'Claude 연결만 끊기', 회원 탈퇴

@@ -21,6 +21,11 @@ def user(email):
     return {"Authorization": f"Bearer {r.json()['token']}"}
 
 
+def session(r) -> str:
+    """로그인 응답이 심은 HttpOnly 쿠키의 토큰(응답 본문에는 토큰이 없다). 테스트는 헤더로 같은 토큰을 쓴다."""
+    return r.cookies["naverads_session"]
+
+
 def _safe(h, ws, acc, limit=100_000_000, max_bid=100_000):
     """광고비 안전장치를 넉넉하게 정해 둔다(기존 기능 테스트용). 안전장치 자체는 test_safety.py에서 검증."""
     r = c.put(f"/workspaces/{ws}/ad-accounts/{acc}/safety", headers=h, json={"daily_budget_limit": limit, "max_bid": max_bid, "confirmed": True})
@@ -1008,7 +1013,7 @@ def test_logout_revokes_only_this_token(monkeypatch):
     from app import security
 
     user("out@a.com")
-    login = lambda: {"Authorization": f"Bearer {c.post('/auth/login', json={'email': 'out@a.com', 'password': 'password1'}).json()['token']}"}  # noqa: E731
+    login = lambda: {"Authorization": f"Bearer {session(c.post('/auth/login', json={'email': 'out@a.com', 'password': 'password1'}))}"}  # noqa: E731
     pc = login()
     real = time.time
     monkeypatch.setattr(security.time, "time", lambda: real() + 5)  # 다른 기기는 다른 시각에 로그인(같은 초면 토큰이 같다)
@@ -1096,7 +1101,7 @@ def test_token_revocation():
 
     r = c.post("/auth/signup", json={"email": "revoke@a.com", "password": "password1", "name": "r"}).json()
     uid, t1 = r["id"], r["token"]
-    t2 = c.post("/auth/login", json={"email": "revoke@a.com", "password": "password1"}).json()["token"]
+    t2 = session(c.post("/auth/login", json={"email": "revoke@a.com", "password": "password1"}))
     # Claude 출입증은 /mcp에서만 쓴다(일반 API는 거부 — test_mcp_token_scope)
     ok = lambda t: c.post("/mcp", headers={"Authorization": f"Bearer {t}"}, json={"jsonrpc": "2.0", "id": 1, "method": "ping"}).status_code == 200  # noqa: E731
     refresh = lambda payload: c.post("/oauth/token", data={"grant_type": "refresh_token", "refresh_token": sign_payload(payload, 60)})  # noqa: E731
@@ -1109,26 +1114,28 @@ def test_token_revocation():
     assert c.post("/auth/logout-all", headers={"Authorization": f"Bearer {t1}"}).json() == {"ok": True}
     assert not ok(t1) and not ok(t2) and not ok(old)
     assert refresh({"t": "refresh", "u": uid}).status_code == 400 and refresh({"t": "refresh", "u": uid, "v": 0}).status_code == 400
-    t3 = c.post("/auth/login", json={"email": "revoke@a.com", "password": "password1"}).json()["token"]
+    t3 = session(c.post("/auth/login", json={"email": "revoke@a.com", "password": "password1"}))
     assert ok(t3) and refresh({"t": "refresh", "u": uid, "v": 1}).status_code == 200
 
     # 비밀번호 변경: 지금 기기는 새 토큰, 나머지는 끊김
     h = {"Authorization": f"Bearer {t3}"}
     assert c.post("/auth/password", headers=h, json={"current_password": "wrong", "new_password": "password2"}).status_code == 400
     assert c.post("/auth/password", headers=h, json={"current_password": "password1", "new_password": "short"}).status_code == 400
-    t4 = c.post("/auth/password", headers=h, json={"current_password": "password1", "new_password": "password2"}).json()["token"]
+    t4 = session(c.post("/auth/password", headers=h, json={"current_password": "password1", "new_password": "password2"}))
     assert ok(t4) and not ok(t3) and refresh({"t": "refresh", "u": uid, "v": 1}).status_code == 400
     assert c.post("/auth/login", json={"email": "revoke@a.com", "password": "password2"}).status_code == 200
 
 
 def test_google_login(monkeypatch):
     import base64
+    import time
     from urllib.parse import parse_qs, urlsplit
     from app.security import read_token, sign_payload
 
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "gid")
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "gsecret")
-    claims = {"aud": "gid", "email": "GLink@a.com", "email_verified": True, "name": "구글"}
+    claims = {"iss": "https://accounts.google.com", "aud": "gid", "sub": "g-111", "exp": int(time.time()) + 600,
+              "email": "GLink@a.com", "email_verified": True, "name": "구글"}
 
     class Tok:
         def json(self):
@@ -1137,33 +1144,62 @@ def test_google_login(monkeypatch):
     sent = {}
     monkeypatch.setattr("app.main.httpx.post", lambda url, data, **kw: sent.update(data) or Tok())
 
-    def login(**params):
-        r = c.get("/auth/google/start", params=params, follow_redirects=False)
-        assert r.status_code == 302 and r.headers["location"].startswith("https://accounts.google.com/")
+    def login(headers=None, **params):
+        r = c.get("/auth/google/start", params=params, headers=headers or {}, follow_redirects=False)
+        assert r.status_code == 302 and r.headers["location"].startswith("https://accounts.google.com/"), r.text
         state = parse_qs(urlsplit(r.headers["location"]).query)["state"][0]
         return c.get("/auth/google/callback", params={"state": state, "code": "c1"}, follow_redirects=False)
 
+    def uid_of(r):
+        return read_token(r.cookies["naverads_session"])[0]
+
     web = "http://localhost:3000/login"
-    assert c.get("/auth/google/start", params={"redirect": "https://evil.com/login"}).status_code == 400  # 토큰을 남의 사이트로 안 보냄
-    c.post("/auth/signup", json={"email": "glink@a.com", "password": "password1", "name": "기존"})
+    assert c.get("/auth/google/start", params={"redirect": "https://evil.com/login"}).status_code == 400  # 남의 사이트로 안 보냄
+    pw = c.post("/auth/signup", json={"email": "glink@a.com", "password": "password1", "name": "기존"}).json()
+    # 같은 이메일의 비밀번호 계정에 자동으로 붙이지 않는다
     r = login(redirect=web)
     assert sent["client_secret"] == "gsecret" and sent["redirect_uri"].endswith("/auth/google/callback")
-    loc = r.headers["location"]
-    assert loc.startswith(web + "#token=")
-    uid = read_token(parse_qs(urlsplit(loc).fragment)["token"][0])[0]
-    assert c.post("/auth/login", json={"email": "glink@a.com", "password": "password1"}).json()["id"] == uid  # 같은 이메일은 기존 계정
+    assert "#error=" in r.headers["location"] and "naverads_session" not in r.cookies
+    # 그 계정으로 로그인한 상태에서 설정 화면의 'Google 연결'로만 연결된다(소유 확인)
+    assert c.get("/auth/google/start", params={"redirect": web, "link": "true"}).status_code == 401  # 로그인 없이 연결 불가
+    r = login(headers={"Authorization": f"Bearer {pw['token']}"}, redirect=web, link="true")
+    assert r.headers["location"] == web + "#google=linked"
+    assert c.get("/auth/me", headers={"Authorization": f"Bearer {pw['token']}"}).json()["google_linked"] is True
+    r = login(redirect=web)  # 이제 sub로 찾는다. 토큰은 주소에 싣지 않고 HttpOnly 쿠키로
+    assert r.headers["location"] == web and "#token" not in r.headers["location"] and uid_of(r) == pw["id"]
+    assert "httponly" in r.headers["set-cookie"].lower() and "samesite=strict" in r.headers["set-cookie"].lower()
+    claims.update(email="changed@a.com")  # Google 쪽 이메일이 바뀌어도 같은 사람(sub)
+    assert uid_of(login(redirect=web)) == pw["id"]
+    # 이미 다른 계정에 연결된 Google 계정은 또 연결할 수 없다
+    other = c.post("/auth/signup", json={"email": "glink2@a.com", "password": "password1", "name": "다른"}).json()
+    assert "#error=" in login(headers={"Authorization": f"Bearer {other['token']}"}, redirect=web, link="true").headers["location"]
 
-    claims.update(email="new-g@a.com")  # 처음 보는 이메일은 가입, 비밀번호 로그인은 안 됨
-    loc = login(redirect=web).headers["location"]
-    assert "#token=" in loc
+    claims.update(sub="g-222", email="new-g@a.com")  # 처음 보는 Google 계정은 가입, 비밀번호 로그인은 안 됨
+    r = login(redirect=web)
+    gh = {"Authorization": f"Bearer {r.cookies['naverads_session']}"}
     assert c.post("/auth/login", json={"email": "new-g@a.com", "password": "google$"}).status_code == 401
-    gh = {"Authorization": f"Bearer {parse_qs(urlsplit(loc).fragment)['token'][0]}"}
     assert c.get("/auth/me", headers=gh).json()["has_password"] is False  # 화면이 비밀번호 변경을 숨긴다
     assert c.post("/auth/password", headers=gh, json={"current_password": "google$", "new_password": "password2"}).status_code == 400
-    assert c.get("/auth/me", headers={"Authorization": f"Bearer {c.post('/auth/login', json={'email': 'glink@a.com', 'password': 'password1'}).json()['token']}"}).json()["has_password"]
-    claims.update(email_verified=False)
+    # 예전에 Google로 가입해 sub 없이 저장된 계정(비밀번호 없음)은 처음 로그인 때 sub를 기록한다(전환)
+    from app.db import SessionLocal
+    from app.models import User
+    with SessionLocal() as db:
+        db.add(User(email="legacy-g@a.com", password_hash="google$", name="예전"))
+        db.commit()
+        legacy = db.query(User).filter(User.email == "legacy-g@a.com").one().id
+    claims.update(sub="g-333", email="legacy-g@a.com")
+    assert uid_of(login(redirect=web)) == legacy
+    claims.update(sub="g-444")  # 그 뒤 같은 이메일의 다른 Google 계정은 붙지 않는다
     assert "#error=" in login(redirect=web).headers["location"]
-    claims.update(email_verified=True)
+    claims.update(sub="g-222", email="new-g@a.com")
+
+    # 토큰 검증: 발급자·대상·만료·이메일 인증
+    for bad in ({"iss": "https://evil.com"}, {"aud": "other"}, {"exp": int(time.time()) - 10}, {"email_verified": False}, {"sub": ""}):
+        saved = dict(claims)
+        claims.update(bad)
+        assert "#error=" in login(redirect=web).headers["location"], bad
+        claims.clear()
+        claims.update(saved)
 
     # 다른 브라우저(쿠키 없음)에서 콜백을 열면 거절 — 로그인 CSRF
     r = c.get("/auth/google/start", params={"redirect": web}, follow_redirects=False)
@@ -1187,8 +1223,13 @@ def test_prod_rejects_mock_credential(monkeypatch):
     ws = c.post("/workspaces", json={"name": "대행사A"}, headers=owner).json()["id"]
     monkeypatch.setenv("APP_ENV", "prod")
     monkeypatch.setenv("APP_SECRET", "dev-only-secret")  # 운영은 APP_SECRET 필수, 위 토큰과 같은 값
+    monkeypatch.delenv("CRED_KEY", raising=False)
     body = {"label": "m", "api_key": "k", "secret_key": "s"}
     assert c.post(f"/workspaces/{ws}/credentials", json=body, headers=owner).status_code == 403
+    # 운영에 CRED_KEY가 없으면 APP_SECRET으로 새로 암호화하지 않고 거부한다
+    r = c.post(f"/workspaces/{ws}/credentials", json={**body, "is_mock": False}, headers=owner)
+    assert r.status_code == 503 and "CRED_KEY" in r.json()["detail"]
+    monkeypatch.setenv("CRED_KEY", "prod-cred-key")
     assert c.post(f"/workspaces/{ws}/credentials", json={**body, "is_mock": False}, headers=owner).status_code == 200
 
 

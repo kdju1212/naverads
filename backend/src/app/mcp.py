@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
-from . import bulk, main as api, place, shopping_ads
+from . import approvals, bulk, main as api, place, shopping_ads
 from .access import membership_of, user_from_header
 from .db import SessionLocal
 from .models import OAuthUsed, User, now
@@ -308,11 +308,14 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["workspace_id", "changes"], "properties": {
          **WS, "changes": {"type": "array", "items": CHANGE, "minItems": 1}}}},
     {"name": "execute_job", "description": "미리보기 작업을 네이버에 실제 반영한다. preview_changes 결과를 채팅에 표로 보여 준 뒤 호출(허용 버튼이 승인). "
-     "한 번에 몇 행씩 실행하므로 status가 RUNNING이면 같은 job_id로 다시 호출한다.",
+     "한 번에 몇 행씩 실행하므로 status가 RUNNING이면 같은 job_id로 다시 호출한다. "
+     "계정 하루예산 합계가 늘 수 있는 변경(캠페인 하루예산 올리기·캠페인/광고그룹 켜기)이 있으면 실행하지 않고 approval(웹 승인 요청)을 돌려준다: "
+     "이때는 '실행됨'이라고 말하지 말고 approval.message의 웹 승인 주소를 사장님께 알려 준다. Claude는 승인할 수 없다. 결과는 get_approval로 확인.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "job_id"], "properties": {**WS, "job_id": {"type": "integer"}}},
      "annotations": {"destructiveHint": True}},
     {"name": "schedule_job", "description": "미리보기 작업을 정한 시각에 실행하도록 예약한다(예: 11월 12일 0시에 ON). 10분마다 도는 크론이 실행해 최대 10분 늦을 수 있다. "
-     "preview_changes 결과와 예약 시각을 채팅에 표로 보여 준 뒤 호출(허용 버튼이 승인). scheduled_at을 null로 주면 예약 취소.",
+     "preview_changes 결과와 예약 시각을 채팅에 표로 보여 준 뒤 호출(허용 버튼이 승인). scheduled_at을 null로 주면 예약 취소. "
+     "계정 하루예산 합계가 늘 수 있는 변경이면 approval이 함께 오고, 사장님이 예약 시각 전에 웹에서 승인해야 실행된다(승인 없으면 실행 안 함).",
      "inputSchema": {"type": "object", "required": ["workspace_id", "job_id", "scheduled_at"], "properties": {
          **WS, "job_id": {"type": "integer"},
          "scheduled_at": {"type": ["string", "null"], "description": "시간대 포함 ISO 시각, 한국 시간이면 +09:00 (예: 2026-11-12T00:00:00+09:00)"}}},
@@ -326,6 +329,10 @@ TOOLS = [
      "문제(공유예산·무제한 예산·기준 초과)와 필요한 조치. 광고 켜기·예산 증액·입찰가 변경 전에 확인한다. 하루예산 설정액은 실제 과금의 절대 상한이 아니다"
      "(네이버가 광고를 멈추는 데 시간이 걸려 더 과금될 수 있음). 설정은 관리자가 웹 설정 화면에서 직접 한다. 읽기만 한다.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id"], "properties": {**WS, "ad_account_id": {"type": "integer"}}}},
+    {"name": "get_approval", "description": "웹 승인 요청의 상태와 실제 결과: PENDING(사장님 승인 대기)·APPROVED(예약 시각 대기)·RUNNING·"
+     "DONE(성공)·PARTIAL(일부 성공)·FAILED(실패, 이유 포함)·REJECTED(거절)·EXPIRED(만료). 읽기만 한다.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "approval_id"], "properties": {**WS, "approval_id": {"type": "integer"}}},
+     "annotations": {"readOnlyHint": True}},
     {"name": "stop_ad", "description": "광고를 바로 끈다(긴급 중지, 승인 절차 없이 즉시). 캠페인·광고그룹·키워드·소재·확장소재 하나. "
      "'광고 멈춰', '돈 그만 나가게 해' 같은 요청에 쓴다. 끈 기록이 남는다. 검색 결과에서 빠지기까지 조금 걸릴 수 있다고 함께 알린다.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "entity_type", "naver_id"], "properties": {
@@ -369,6 +376,8 @@ async def _call(db, user: User, name: str, a: dict):
         return await api.keyword_ranks(api.AutoBidKeysIn(keywords=a["keywords"]), m=m, db=db)
     if name == "list_auto_bids":
         return await api.list_auto_bids(m=m, db=db)
+    if name == "get_approval":
+        return await approvals.get_approval(int(a["approval_id"]), m=m, db=db)
     if name == "get_ad_safety":
         return await api.get_safety(int(a["ad_account_id"]), m=m, db=db)
     if name == "stop_ad":
@@ -444,7 +453,9 @@ async def mcp(request: Request):
                                       "변경 도구(execute_job, schedule_job, create_ad, create_shopping_ad, create_ad_extension, set_auto_bid, delete_auto_bid, run_auto_bids)를 "
                                       "부르기 직전에 바뀔 내용(계정·광고그룹·대상·지금 값 → 바뀔 값, 문구와 글자 수, 입찰가, 예약 시각, preview_changes의 VALID/INVALID 행)을 "
                                       "채팅에 표로 보여 준 다음 그 도구를 부른다. 사용자는 표를 보고 Claude 화면의 허용 버튼으로 승인한다(채팅 답을 따로 기다리지 않는다). "
-                                      "표 없이 변경 도구를 부르지 않는다."}
+                                      "표 없이 변경 도구를 부르지 않는다. 계정 하루예산 합계가 늘 수 있는 변경(캠페인 하루예산 올리기·캠페인/광고그룹 켜기·"
+                                      "ADVoost 켜기)은 도구가 실행하지 않고 웹 승인 요청(approval)을 돌려준다. 그때는 실행됐다고 말하지 말고 승인 주소를 알려 주며, "
+                                      "결과는 get_approval로 확인해 성공·실패·대기를 구분해서 전한다. 하루예산 설정액은 실제 과금의 절대 상한이 아니다."}
         elif method == "ping":
             result = {}
         elif method == "tools/list":

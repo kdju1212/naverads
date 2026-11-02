@@ -4,6 +4,7 @@
 광고 데이터 사본은 서버에 없다: 화면(브라우저 보관본)이 변경마다 광고주 계정·이전 값·유형을 같이 보낸다.
 서버는 그 계정의 수정 권한만 믿을 근거로 삼고, 실제 대상은 그 계정 API(X-Customer)로만 바꾸므로
 다른 광고주의 ID를 섞어 보내도 네이버가 거부한다."""
+import hashlib
 import io
 import json
 import os
@@ -15,7 +16,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from .access import accessible_account_ids
-from .models import KST, AccountGoal, AdAccount, AuditLog, AutoBidRule, BulkJob, BulkJobRow, Membership, NaverApiCredential, WorkspaceAdAccount, now, today_kst
+from .models import KST, AccountGoal, AdAccount, ApprovalRequest, AuditLog, AutoBidRule, BulkJob, BulkJobRow, Membership, NaverApiCredential, WorkspaceAdAccount, now, today_kst
 from . import safety
 from .naver import NaverApiError, ad_row, client_for, extension_row
 from .security import decrypt, rotated
@@ -176,23 +177,107 @@ CUT_OFF = "실행 중 연결이 끊겼습니다. 네이버에서 반영됐는지
 EXECUTE_CHUNK = 5
 
 
+class ApprovalRequired(Exception):
+    """웹 승인이 필요한데 아직 승인되지 않은 작업. 엔드포인트가 승인 요청을 만들고 승인 화면 주소를 돌려준다."""
+
+
+def job_hash(rows: list[BulkJobRow]) -> str:
+    """승인에 묶는 작업 내용(실행할 행의 계정·대상·항목·전후 값). 승인 뒤 행이 바뀌면 값이 달라져 승인이 무효가 된다."""
+    body = json.dumps([[r.id, r.ad_account_id, r.entity_type, r.naver_id, r.field, r.before, r.after] for r in rows],
+                      ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(body.encode()).hexdigest()
+
+
+def job_approval(db: Session, job: BulkJob, statuses=("APPROVED", "RUNNING")) -> ApprovalRequest | None:
+    return db.scalar(select(ApprovalRequest).where(ApprovalRequest.kind == "job", ApprovalRequest.job_id == job.id,
+                                                   ApprovalRequest.status.in_(statuses)).order_by(ApprovalRequest.id.desc()).limit(1))
+
+
+def needs_web_approval(db: Session, workspace_id: int, rows: list[BulkJobRow], clients: dict) -> bool:
+    """계정 하루예산 설정액 합계를 늘릴 수 있는 행(캠페인 예산 증액·캠페인/광고그룹 켜기)이 있으면 웹 승인이 필요하다(safety.web_approval_needed)."""
+    by_account: dict[int, list] = {}
+    for r in rows:
+        by_account.setdefault(r.ad_account_id, []).extend(safety.ops_of_row(r.entity_type, r.field, r.naver_id, r.after or ""))
+    for acc, ops in by_account.items():
+        def client(acc=acc):
+            if acc not in clients:
+                clients[acc] = _client(db, workspace_id, acc)
+            return clients[acc]
+        if ops and safety.web_approval_needed(ops, client):
+            return True
+    return False
+
+
+def _finish_approval(db: Session, m: Membership, job: BulkJob):
+    ar = job_approval(db, job, ("RUNNING",))
+    if ar:
+        ar.status = {"DONE": "DONE", "PARTIAL": "PARTIAL"}.get(job.status, "FAILED")
+        ar.result = json.dumps({"job_id": job.id, "job_status": job.status}, ensure_ascii=False)
+        db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=ar.ad_account_id, job_id=job.id,
+                        action=f"APPROVAL_{ar.status}", entity_type="approval", naver_id=str(ar.id), field="job"))
+
+
 def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = None) -> BulkJob:
     """VALID 행을 최대 limit개 실행. 남은 행이 있으면 RUNNING으로 두고 반환하니 다시 호출하면 이어서 실행한다
-    (중간에 요청이 끊긴 RUNNING 작업도 같은 방법으로 이어 간다)."""
+    (중간에 요청이 끊긴 RUNNING 작업도 같은 방법으로 이어 간다).
+    처음 실행(PREVIEW) 때 웹 승인이 필요한 작업이면 웹에서 승인된 요청(APPROVED/RUNNING)이 있어야 하고, 없으면 ApprovalRequired.
+    비용이 늘 수 있는 행은 계정 잠금(safety.account_lock)을 쥔 상태에서만 검사·실행한다."""
     if job.status not in ("PREVIEW", "RUNNING"):
         raise HTTPException(409, "이미 실행된 작업입니다")
+    clients = {}
+    ar = job_approval(db, job)
+    if job.status == "PREVIEW":
+        valid = db.scalars(select(BulkJobRow).where(BulkJobRow.job_id == job.id, BulkJobRow.status == "VALID")).all()
+        if not valid:
+            raise HTTPException(400, "실행할 수 있는 행이 없습니다")
+        if ar is None and needs_web_approval(db, m.workspace_id, valid, clients):
+            raise ApprovalRequired()
+        if ar is not None:
+            if job_hash(valid) != ar.payload_hash:  # 승인한 뒤 행이 바뀜(방어적 확인: 행은 수정 경로가 없다)
+                raise HTTPException(409, "승인한 내용과 실행할 내용이 달라요. 다시 승인받아 주세요")
+            ar.status = "RUNNING"
     q = select(BulkJobRow).where(BulkJobRow.job_id == job.id, BulkJobRow.status == "VALID").order_by(BulkJobRow.id)
     rows = db.scalars(q.limit(limit) if limit else q).all()
-    if not rows and job.status == "PREVIEW":
-        raise HTTPException(400, "실행할 수 있는 행이 없습니다")
     job.status = "RUNNING"
     db.commit()
     allowed = accessible_account_ids(db, m, edit=True)  # 미리보기 이후 권한이 바뀌었을 수 있다
-    clients = {}
-    blocked = safety_blocks(db, m.workspace_id, [r for r in rows if r.ad_account_id in allowed], clients)
+    # 승인·예약 작업은 승인(예약) 때 보여 준 변경 전 값과 네이버 지금 값이 다르면 실행하지 않는다(다시 승인받아야 함)
+    expect_before = bool(job.scheduled_at or ar)
+    cost = {r.id for r in rows if r.ad_account_id in allowed and safety.ops_of_row(r.entity_type, r.field, r.naver_id, r.after or "")}
+    held = {}
+    try:
+        for acc in sorted({r.ad_account_id for r in rows if r.id in cost}):
+            if h := safety.take_lock(db, acc):
+                held[acc] = h
+        blocked = safety_blocks(db, m.workspace_id, [r for r in rows if r.ad_account_id in allowed and (r.id not in cost or r.ad_account_id in held)],
+                                clients)
+        _run_rows(db, m, job, rows, allowed, cost, held, blocked, clients, expect_before)
+    finally:
+        for acc, h in held.items():
+            safety.release_lock(db, acc, h)
+    db.commit()
+    results = set(db.scalars(select(BulkJobRow.status).where(BulkJobRow.job_id == job.id, BulkJobRow.status != "INVALID")))
+    if "VALID" in results:
+        return job
+    if "RUNNING" in results:  # 실행 중 요청이 끊긴 행: 네이버 반영 여부를 알 수 없어 다시 실행하지 않는다
+        db.execute(update(BulkJobRow).where(BulkJobRow.job_id == job.id, BulkJobRow.status == "RUNNING")
+                   .values(status="FAILED", error=CUT_OFF))
+        results = (results - {"RUNNING"}) | {"FAILED"}
+    job.status = "DONE" if results == {"SUCCESS"} else "FAILED" if "SUCCESS" not in results else "PARTIAL"
+    job.executed_at = now()
+    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, job_id=job.id, action=f"JOB_{job.status}", entity_type="job"))
+    _finish_approval(db, m, job)
+    db.commit()
+    return job
+
+
+def _run_rows(db: Session, m: Membership, job: BulkJob, rows, allowed, cost, held, blocked, clients, expect_before: bool):
     for row in rows:
         if row.ad_account_id not in allowed:
             row.status, row.error = "FAILED", "실행 시점에 수정 권한이 없습니다"
+            continue
+        if row.id in cost and row.ad_account_id not in held:
+            row.status, row.error = "FAILED", safety.BUSY
             continue
         if row.id in blocked:
             row.status, row.error = "FAILED", blocked[row.id][:300]
@@ -225,8 +310,8 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
                 client.delete_container(row.entity_type, row.naver_id)
             elif row.field == "delete":
                 (client.delete_keyword if row.entity_type == "keyword" else client.delete_ad)(row.naver_id)
-            else:  # 예약 작업은 미리보기와 실행 사이가 길어 그 사이 바뀐 값을 덮어쓰지 않는다
-                client.update(row.entity_type, row.naver_id, row.field, row.after, expect=row.before if job.scheduled_at else None)
+            else:  # 예약·승인 작업은 미리보기와 실행 사이 바뀐 값을 덮어쓰지 않는다
+                client.update(row.entity_type, row.naver_id, row.field, row.after, expect=row.before if expect_before else None)
         except NaverApiError as e:
             row.status, row.error = "FAILED", str(e)[:300]
             continue
@@ -249,24 +334,12 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
         db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=row.ad_account_id, job_id=job.id,
                         entity_type=row.entity_type, **audit))
         db.commit()  # 행 단위 커밋: 중간에 죽어도 성공한 변경과 감사 로그는 남는다
-    db.commit()
-    results = set(db.scalars(select(BulkJobRow.status).where(BulkJobRow.job_id == job.id, BulkJobRow.status != "INVALID")))
-    if "VALID" in results:
-        return job
-    if "RUNNING" in results:  # 실행 중 요청이 끊긴 행: 네이버 반영 여부를 알 수 없어 다시 실행하지 않는다
-        db.execute(update(BulkJobRow).where(BulkJobRow.job_id == job.id, BulkJobRow.status == "RUNNING")
-                   .values(status="FAILED", error=CUT_OFF))
-        results = (results - {"RUNNING"}) | {"FAILED"}
-    job.status = "DONE" if results == {"SUCCESS"} else "FAILED" if "SUCCESS" not in results else "PARTIAL"
-    job.executed_at = now()
-    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, job_id=job.id, action=f"JOB_{job.status}", entity_type="job"))
-    db.commit()
-    return job
 
 
 def safety_blocks(db: Session, workspace_id: int, rows: list[BulkJobRow], clients: dict) -> dict[int, str]:
-    """실행 직전 광고비 안전장치 검사. 막을 행 id → 이유. 입찰가 상한은 행마다, 하루예산 합계는 계정마다(그 계정의 켜기·증액 행을 모두
-    반영한 뒤) 네이버를 다시 읽어 검사한다. 웹·Claude·예약·자동입찰·목표 ROAS가 모두 execute_job을 거치므로 여기 한 곳이다."""
+    """실행 직전 광고비 안전장치 검사. 막을 행 id → 이유. 입찰가 상한은 행마다, 실제 입찰가·하루예산 합계는 계정마다(그 계정의 켜기·증액·
+    입찰가 올리기 행을 모두 반영한 뒤) 네이버를 다시 읽어 검사한다. 웹·Claude·예약·자동입찰·목표 ROAS가 모두 execute_job을 거치므로 여기 한 곳이다.
+    shortcut: 계정 단위로 함께 검사해 한 행이 걸리면 같은 계정의 나머지 비용 행(입찰가 내리기 포함)도 막힌다, 섞어 쓰는 일이 잦으면 행별로 다시 검사"""
     blocked, by_account = {}, {}
     for r in rows:
         ops = safety.ops_of_row(r.entity_type, r.field, r.naver_id, r.after or "")
@@ -281,7 +354,7 @@ def safety_blocks(db: Session, workspace_id: int, rows: list[BulkJobRow], client
                 rest.append((r, ops))
             except safety.SafetyError as e:
                 blocked[r.id] = str(e)
-        starts = [(r, ops) for r, ops in rest if any(o[0] != "bid" for o in ops)]
+        starts = rest
         if not starts:
             continue
 
@@ -466,8 +539,13 @@ def _check_edit(db: Session, m: Membership, account_id: int):
 def create_extension(db: Session, m: Membership, account_id: int, adgroup_naver_id: str, ext_type: str, content) -> dict:
     """확장소재 생성은 행 단위 미리보기 없이 바로 실행하되, 권한 확인과 감사 로그는 같은 규칙을 따른다. 화면 보관본용 행을 돌려준다."""
     _check_edit(db, m, account_id)
-    try:
-        e = _client(db, m.workspace_id, account_id).create_ad_extension(adgroup_naver_id, ext_type, content)
+    client = _client(db, m.workspace_id, account_id)
+    try:  # 확장소재는 켜진 상태로 생겨 광고가 더 눈에 띌 수 있다 → 계정 합계가 관리 기준 안일 때만(잠금 안에서 검사·등록)
+        with safety.account_lock(db, account_id):
+            safety.check(db, m.workspace_id, account_id, [("on", "ad_extension", None)], lambda: client)
+            e = client.create_ad_extension(adgroup_naver_id, ext_type, content)
+    except safety.SafetyError as err:
+        raise HTTPException(400, str(err))
     except NaverApiError as err:
         raise HTTPException(400, f"네이버 확장소재 생성 실패: {err}")
     row = extension_row(account_id, {"type": ext_type, **e})
@@ -603,11 +681,14 @@ def run_scheduled_jobs(db: Session):
         if m is None:
             raise HTTPException(403, "작업을 만든 사람이 조직에 없습니다")
         execute_job(db, m, job, EXECUTE_CHUNK)
-    except Exception as e:  # noqa: BLE001 — 권한·행 없음·예상 못 한 오류 모두 끝내야 매 크론 같은 작업에 막히지 않는다
+    except Exception as e:  # noqa: BLE001 — 권한·행 없음·승인 없음·예상 못 한 오류 모두 끝내야 매 크론 같은 작업에 막히지 않는다
         db.rollback()
+        reason = "웹 승인이 없어 실행하지 않음" if isinstance(e, ApprovalRequired) else str(getattr(e, "detail", e))
         job.status, job.executed_at = "FAILED", now()
-        db.add(AuditLog(workspace_id=job.workspace_id, user_id=job.created_by, job_id=job.id, action="JOB_SCHEDULE_FAIL",
-                        after=str(getattr(e, "detail", e))[:50]))
+        db.execute(update(BulkJobRow).where(BulkJobRow.job_id == job.id, BulkJobRow.status == "VALID").values(status="FAILED", error=reason[:300]))
+        for ar in db.scalars(select(ApprovalRequest).where(ApprovalRequest.job_id == job.id, ApprovalRequest.status.in_(("PENDING", "APPROVED")))):
+            ar.status = "EXPIRED"
+        db.add(AuditLog(workspace_id=job.workspace_id, user_id=job.created_by, job_id=job.id, action="JOB_SCHEDULE_FAIL", after=reason[:50]))
         db.commit()
 
 

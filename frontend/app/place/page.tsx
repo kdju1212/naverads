@@ -10,7 +10,7 @@ import { useFetch } from "@/lib/useFetch";
 type Change = { ad_account_id: number; action: string; params: Record<string, unknown> };
 type Summary = { label: string; target: string; before: string; after: string; spend_text: string; notes: string[];
   safety?: { total_after?: number; daily_budget_limit?: number | null; max_bid?: number | null } };
-type Plan = { approval_id: number; expires_in_minutes: number; summary: Summary };
+type Plan = { approval_id: number; expires_in_minutes: number; summary: Summary & { web_required?: boolean } };
 type Result = { status: "SUCCESS" | "PARTIAL" | "FAILED"; steps: { step: string; ok: boolean; error?: string }[]; error: string | null; notice: string | null };
 type Ad = { id: string; type: string; linked: boolean; on: boolean; review: string; text: string };
 type Group = { id: string; name: string; on: boolean; advoost: boolean; bid: number | null; serving: string | null; ads: Ad[] | null;
@@ -164,7 +164,10 @@ function Approve({ change, onClose, onDone }: { change: Change; onClose: () => v
     if (!ws || !plan) return;
     setBusy(true);
     try {
-      setResult(await api<Result>(`/workspaces/${ws.id}/place/apply`, { body: { approval_id: plan.approval_id, change } }));
+      // 계정 하루예산 합계가 늘 수 있는 변경은 웹 승인으로만 실행된다(이 카드가 승인 화면: 대상·전후·지출·안내를 보여 줌)
+      setResult(plan.summary.web_required
+        ? (await api<{ place: Result }>(`/workspaces/${ws.id}/approvals/${plan.approval_id}/approve`, { method: "POST" })).place
+        : await api<Result>(`/workspaces/${ws.id}/place/apply`, { body: { approval_id: plan.approval_id, change } }));
       onDone();
     } catch (e) { setError((e as Error).message); }
     setBusy(false);

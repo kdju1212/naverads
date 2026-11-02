@@ -12,7 +12,7 @@ export interface Account {
   safety: { daily_budget_limit: number; max_bid: number } | null; // 광고비 안전장치(없으면 광고 켜기·증액·입찰가 변경 막힘)
 }
 /** 실행 전 안전장치 검사 결과(계정별). 서버: backend/src/app/safety.py */
-export interface SafetyCheck { ad_account_id: number; ok: boolean; reason?: string; total_after?: number; daily_budget_limit?: number; max_bid?: number; note: string }
+export interface SafetyCheck { ad_account_id: number; ok: boolean; reason?: string; total_after?: number; daily_budget_limit?: number; max_bid?: number; uncontrolled?: string[]; note: string }
 export interface Change {
   entity_type: string; naver_id: string; field: string; value: string;
   // 서버에 광고 데이터 사본이 없어 화면이 같이 보낸다(lib/changes.ts)
@@ -28,6 +28,7 @@ export interface Job {
   counts: Record<"VALID" | "INVALID" | "SUCCESS" | "FAILED", number>;
   accounts: { ad_account_id: number | null; name: string | null; rows: JobRow[] }[] | null;
   safety?: SafetyCheck[]; // 미리보기일 때: 계정별 변경 후 하루예산 설정액 합계·최대 입찰가(네이버 지금 값 기준)
+  approval?: { approval_id: number; status: string; message: string }; // 실행·예약했는데 웹 승인이 필요하면(실행 안 됨)
 }
 
 /** 작업 완료 알림(components/ui Toaster가 보여준다) */
@@ -35,30 +36,51 @@ export function toast(msg: string) {
   window.dispatchEvent(new CustomEvent("app-toast", { detail: msg }));
 }
 
-export function getToken(): string | null {
-  try { return localStorage.getItem("token"); } catch { return null; }
+// 로그인 토큰은 서버가 심는 HttpOnly 쿠키에만 있다(JS가 읽을 수 없음). 브라우저에는 '로그인했음' 표시(무작위 값, 비밀 아님)만 둔다:
+// 로그인 화면으로 보낼지, 화면 캐시를 사용자별로 나눌지 정하는 데만 쓴다
+const SESSION_MARK = "session";
+/** 쿠키 로그인의 쓰기 요청에 붙이는 CSRF 헤더(서버 access.CSRF_HEADER). 다른 사이트의 폼·링크는 이 헤더를 붙일 수 없다 */
+const CSRF = { "X-Naverads-CSRF": "1" };
+
+export function getSession(): string | null {
+  try { return localStorage.getItem(SESSION_MARK); } catch { return null; }
 }
 
 /** 로그인·로그아웃 모두 브라우저에 보관한 광고 데이터를 지운다(이전 사용자 것이 남지 않게) */
-export async function setToken(t: string | null) {
+export async function setSession(on: boolean) {
   await clearLocal();
-  try { if (t) localStorage.setItem("token", t); else localStorage.removeItem("token"); } catch { /* 저장 불가 환경 */ }
+  try {
+    if (on) localStorage.setItem(SESSION_MARK, crypto.randomUUID());
+    else localStorage.removeItem(SESSION_MARK);
+    localStorage.removeItem("token"); // 예전 버전이 보관하던 토큰
+  } catch { /* 저장 불가 환경 */ }
+}
+
+/** 예전 버전(localStorage 토큰)으로 로그인해 있던 브라우저: 그 토큰으로 한 번 쿠키 로그인으로 옮기고 토큰은 지운다(서버가 예전 토큰을 무효로 함) */
+export async function migrateLegacyToken() {
+  let t: string | null = null;
+  try { t = localStorage.getItem("token"); } catch { return; }
+  if (!t) return;
+  const r = await fetch(`${API_URL}/auth/session`, { method: "POST", credentials: "include", headers: { Authorization: `Bearer ${t}` } }).catch(() => null);
+  try {
+    localStorage.removeItem("token");
+    if (r?.ok) localStorage.setItem(SESSION_MARK, crypto.randomUUID());
+  } catch { /* 저장 불가 환경 */ }
 }
 
 /** 전체 새로고침으로 이동해 메모리에 남은 이전 사용자 데이터를 비운다 */
 export async function logout() {
-  // 서버에서도 이 토큰을 무효로(이 기기만). 실패해도(이미 만료·네트워크) 브라우저에서는 지운다
-  const t = getToken();
-  if (t) await fetch(`${API_URL}/auth/logout`, { method: "POST", headers: { Authorization: `Bearer ${t}` } }).catch(() => {});
-  await setToken(null);
+  // 서버에서 이 기기 토큰을 무효로 하고 쿠키를 지운다. 실패해도(이미 만료·네트워크) 브라우저에서는 로그아웃 표시를 지운다
+  await fetch(`${API_URL}/auth/logout`, { method: "POST", credentials: "include", headers: CSRF }).catch(() => {});
+  await setSession(false);
   // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- 상태 초기화를 위해 의도적으로 전체 새로고침
   location.href = "/login";
 }
 
 export async function api<T>(path: string, opts: { method?: string; body?: unknown; form?: FormData; raw?: boolean } = {}): Promise<T> {
-  const headers: Record<string, string> = {};
-  const token = getToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
+  const method = opts.method ?? (opts.body !== undefined || opts.form ? "POST" : "GET");
+  // 쓰기 요청에만 CSRF 헤더(GET에 붙이면 요청마다 CORS 사전 요청이 한 번 더 간다)
+  const headers: Record<string, string> = method === "GET" ? {} : { ...CSRF };
   let body: BodyInit | undefined;
   if (opts.form) body = opts.form;
   else if (opts.body !== undefined) {
@@ -67,7 +89,7 @@ export async function api<T>(path: string, opts: { method?: string; body?: unkno
   }
   let res: Response;
   try {
-    res = await fetch(API_URL + path, { method: opts.method ?? (body ? "POST" : "GET"), headers, body });
+    res = await fetch(API_URL + path, { method, headers, body, credentials: "include" });
   } catch {
     // Cloudflare가 CPU 한도로 끊으면 CORS 헤더 없는 503이 와서 네트워크 오류로 보인다
     throw new Error("서버 응답이 없습니다. 잠시 후 다시 시도하세요. (무료 플랜 일시 제한일 수 있음)");

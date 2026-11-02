@@ -52,7 +52,7 @@ def _check_expected(field, o, expect):
         return
     if field == "status":
         cur = "OFF" if o.get("userLock") else "ON"
-    elif field == "daily_budget" and o.get("useDailyBudget"):
+    elif field == "daily_budget" and o.get("useDailyBudget", True):  # 필드가 없으면 예산 사용으로 본다(safety._budget과 같게)
         cur = o.get("dailyBudget")
     elif field == "bid_amt":
         attrs = _json(o["adAttr"]) if "adAttr" in o else o

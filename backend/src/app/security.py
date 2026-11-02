@@ -59,8 +59,11 @@ def _sign(msg: str) -> str:
 
 
 def make_token(user_id: int, version: int = 0, mcp: int | None = None, ttl: int = TOKEN_TTL) -> str:
-    """mcp: Claude 연결 토큰이면 사용자의 mcp_version(Claude 연결만 끊기용)."""
-    msg = ".".join(map(str, [user_id, version, *([mcp] if mcp is not None else []), int(time.time()) + ttl]))
+    """mcp: Claude 연결 토큰이면 사용자의 mcp_version(Claude 연결만 끊기용).
+    웹 토큰은 만료를 0~10분 무작위로 당긴다: 같은 초에 받은 토큰이 같은 값이 되면 하나를 로그아웃(폐기)할 때 다른 것도 끊기기 때문.
+    shortcut: 형식을 안 바꾸려고 만료 시각에 무작위를 섞음(같은 초 두 번이면 1/600 확률로 여전히 같다), 기기별 세션이 필요해지면 jti·세션 표로"""
+    exp = int(time.time()) + ttl - (secrets.randbelow(600) if mcp is None and ttl > 600 else 0)
+    msg = ".".join(map(str, [user_id, version, *([mcp] if mcp is not None else []), exp]))
     return f"{msg}.{_sign(msg)}"
 
 
@@ -108,6 +111,10 @@ def _keys() -> MultiFernet:
 
 
 def encrypt(s: str) -> str:
+    """새 비밀키는 CRED_KEY로만 암호화한다. 운영(APP_ENV≠dev)에 CRED_KEY가 없으면 로그인 서명 열쇠(APP_SECRET)로 대신 암호화하지 않고 거부한다
+    (그러면 APP_SECRET 하나만 새도 비밀키가 풀린다). 예전에 APP_SECRET으로 암호화된 값은 decrypt가 읽고 rotated가 CRED_KEY로 옮긴다."""
+    if not os.getenv("CRED_KEY") and os.getenv("APP_ENV", "dev") != "dev":
+        raise RuntimeError("CRED_KEY must be set outside dev")
     return _keys().encrypt(s.encode()).decode()
 
 
