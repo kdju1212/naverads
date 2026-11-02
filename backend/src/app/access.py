@@ -1,5 +1,6 @@
 """인증과 광고 계정 단위 접근 검증. 모든 조회·쓰기는 여기를 거친다."""
 import hashlib
+import os
 
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy import select
@@ -13,7 +14,8 @@ ADMIN_ROLES = {"OWNER", "ADMIN"}
 # 웹 로그인은 HttpOnly 쿠키(브라우저 JS가 토큰을 읽을 수 없음). Bearer 헤더는 Claude(/mcp)와 테스트·API 문서용으로 남긴다.
 SESSION_COOKIE = "naverads_session"
 CSRF_HEADER = "x-naverads-csrf"  # 쿠키로 로그인한 쓰기 요청은 이 헤더가 있어야 한다(다른 사이트 폼·링크는 이 헤더를 못 붙인다)
-WEB_ORIGINS = {"https://naverads.djkim0509.workers.dev", "http://localhost:3000"}  # 로그인 쿠키를 쓰는 웹 주소(CORS·출처 검사)
+# 로그인 쿠키를 쓰는 웹 주소(CORS·출처 검사·로그인 후 돌려보낼 주소). 로컬 화면 주소는 로컬(APP_ENV=dev)에서만
+WEB_ORIGINS = {"https://naverads.djkim0509.workers.dev"} | ({"http://localhost:3000"} if os.getenv("APP_ENV", "dev") == "dev" else set())
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 

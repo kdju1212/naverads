@@ -365,3 +365,43 @@ def test_cookie_session_csrf_cors_logout(monkeypatch):
     r = s3.post("/auth/session", headers={"Authorization": f"Bearer {t0}"})
     assert r.status_code == 200 and s3.get("/auth/me").status_code == 200
     assert c.get("/auth/me", headers={"Authorization": f"Bearer {t0}"}).status_code == 401
+
+
+def test_budget_increase_after_first_chunk_needs_web_approval():
+    """처음 실행 때는 '줄이기'였던 예산 행이, 앞 묶음 실행 뒤 다른 작업으로 예산이 더 낮아져 '올리기'가 되면 웹 승인 없이 실행되지 않는다."""
+    owner, ws, acc = _account("ap-chunk@a.com", "7410")
+    MockNaverClient("7410")
+    st = _MOCK_STORE["7410"]
+    fillers = [ch(acc, "keyword", f"kwd-7410-{g}{k}", "status", "OFF") for g in (1, 2) for k in (1, 2, 3)][:5]
+    job = _job(owner, ws, fillers + [ch(acc, "campaign", "cmp-7410-pl", "daily_budget", "40000")])  # 지금 5만 → 4만(줄이기)
+    first = _run(owner, ws, job["id"])  # 앞 5행만 실행, 승인 요청 없음
+    assert first["status"] == "RUNNING" and "approval" not in first
+    assert _run(owner, ws, _job(owner, ws, [ch(acc, "campaign", "cmp-7410-pl", "daily_budget", "20000")])["id"])["status"] == "DONE"
+    out = _run(owner, ws, job["id"])  # 이제 2만 → 4만은 올리기
+    assert st["campaigns"]["cmp-7410-pl"]["dailyBudget"] == 20_000 and "웹 승인" in _rows(out)["cmp-7410-pl"]["error"]
+
+
+def test_missing_before_filled_for_web_approval_and_checked():
+    """Claude가 before를 안 넣어도 승인 화면에 네이버 지금 값을 보여 주고, 승인 뒤 그 값이 바뀌면 실행하지 않는다."""
+    owner, ws, acc = _account("ap-before@a.com", "7411")
+    MockNaverClient("7411")
+    _off("7411", "cmp-7411-pl")
+    _, ap = _request(owner, ws, [ch(acc, "campaign", "cmp-7411-pl", "status", "ON"), ch(acc, "campaign", "cmp-7411-sh", "daily_budget", "40000")])
+    shown = {r["naver_id"]: r["before"] for r in ap["summary"]["rows"]}
+    assert shown == {"cmp-7411-pl": "OFF", "cmp-7411-sh": "30000"}
+    _MOCK_STORE["7411"]["campaigns"]["cmp-7411-sh"]["dailyBudget"] = 35_000  # 승인 전에 광고주센터에서 바꿈
+    r = _approve(owner, ws, ap["approval_id"]).json()
+    assert "바뀌어" in _rows(r["job"])["cmp-7411-sh"]["error"] and _MOCK_STORE["7411"]["campaigns"]["cmp-7411-sh"]["dailyBudget"] == 35_000
+
+
+def test_deleted_account_forgets_google_sub():
+    from app.db import SessionLocal as S
+    from app.models import User
+    h = user("ap-del@a.com")
+    with S() as db:
+        u = db.query(User).filter(User.email == "ap-del@a.com").one()
+        u.google_sub = "g-del"
+        db.commit()
+    assert c.post("/auth/delete-account", headers=h, json={"password": "password1"}).json()["ok"]
+    with S() as db:
+        assert db.query(User).filter(User.google_sub == "g-del").first() is None

@@ -255,6 +255,7 @@ async def delete_account(body: DeleteMeIn, request: Request, user: User = Depend
             db.execute(delete(AccountAccess).where(AccountAccess.membership_id == m.id))
             db.delete(m)
     user.email, user.name, user.password_hash = f"deleted-{user.id}@deleted.invalid", "탈퇴한 사용자", "deleted$"
+    user.google_sub = None  # Google 고유 ID도 지운다(개인 식별자 보관 안 함, 같은 Google로 다시 가입하면 새 계정)
     user.token_version, user.mcp_version = user.token_version + 1, user.mcp_version + 1
     db.commit()
     return {"ok": True}

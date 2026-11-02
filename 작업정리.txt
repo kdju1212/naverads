@@ -327,6 +327,9 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
     - Claude: get_approval 도구, execute_job·schedule_job·place_ads_* 설명과 instructions에 웹 승인 안내
     - 테스트: test_approvals.py 10개 추가, 기존 테스트를 새 규칙에 맞춤 → 백엔드 102개 통과. 프론트 tsc·lint·test·build 통과
     - [미확인] 운영 D1 0016, 실제 브라우저 쿠키·CORS, GitHub 설정, 실계정 응답 필드(useGroupBidAmt·adAttr 등), ADVoost 실제 초과 과금
+    - 11/02 security-audit 스킬 재점검(코드 읽기 위주, 보고서 파일 없음): ① 예산 행이 묶음 사이에 '올리기'로 바뀌면 웹 승인 우회(재현 후 수정: 묶음마다 잠금 안에서 재판단)
+      ② 웹 승인 행의 변경 전 값이 비면 실행 때 비교 안 함(승인 요청 때 네이버 값으로 채움) ③ 탈퇴해도 Google sub가 남음(지움)
+      ④ 운영 CORS 허용 목록의 localhost(쿠키가 안 실려 영향 없음, 로컬에서만 허용으로 정리). 테스트 3개 추가 → 105개 통과
 15. 다음 달 예산 증액 — 개발 중, 광고주 승인 후 실행하는 흐름으로
 16. 보안 → 10/28 배포(56a8f60, 마이그레이션 0012): 요청 횟수 제한(IP당 1분 600번, Workers ratelimits — 무료 플랜 배포 성공),
     Claude 인가 코드 1회 사용·갱신 토큰 교체(60초 뒤 재사용은 탈취로 보고 Claude 연결 전부 끊기), 설정 'Claude 연결만 끊기', 회원 탈퇴

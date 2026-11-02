@@ -16,7 +16,7 @@
 | 로그인 | `POST /auth/login`, Google 콜백 → 쿠키만 심고 본문·주소에 토큰을 싣지 않는다. 가입(`/auth/signup`)은 로컬·테스트 전용이라 토큰도 돌려준다(운영 403) |
 | 같은 사이트 | 웹 `naverads.djkim0509.workers.dev`와 API `naverads-api.djkim0509.workers.dev`는 같은 사이트(`workers.dev`가 공개 접미사 목록에 있어 사이트 = `djkim0509.workers.dev`)다. 그래서 `SameSite=Strict` 쿠키가 화면의 `fetch(credentials: "include")`에 실린다. 도메인을 바꾸면 이 조건을 다시 확인해야 한다 |
 | CSRF | ① SameSite=Strict ② 쿠키로 인증한 GET 외 요청은 `X-Naverads-CSRF: 1` 헤더가 필수다(다른 사이트의 폼·이미지·링크는 못 붙이고, 스크립트는 CORS 사전 요청에서 막힌다) ③ `Origin`이 있으면 웹 주소여야 한다(`access.check_csrf`) |
-| CORS | `allow_origins` = `access.WEB_ORIGINS`(운영 웹, `http://localhost:3000`), `allow_credentials=True`, 허용 헤더 `authorization, content-type, x-naverads-csrf`. Workers 진입점의 마스터 보고서 파일 응답도 같은 출처만 허용한다(`src/main.py`) |
+| CORS | `allow_origins` = `access.WEB_ORIGINS`(운영 웹, 로컬 `APP_ENV=dev`일 때만 `http://localhost:3000`), `allow_credentials=True`, 허용 헤더 `authorization, content-type, x-naverads-csrf`. Workers 진입점의 마스터 보고서 파일 응답도 같은 출처만 허용한다(`src/main.py`) |
 | 로그아웃 | `POST /auth/logout`: 지금 토큰의 해시를 만료 시각까지 `oauth_used`에 저장해 거부하고, 쿠키를 지운다. 모든 기기 로그아웃은 `token_version` 올리기 |
 | 세션 만료 | 토큰 안의 만료 시각(12시간)이 지나면 401이다. 화면은 401이면 로그인 화면으로 간다. 갱신 토큰은 없다(하루 업무 단위) |
 | Claude(MCP) | 그대로 `Authorization: Bearer`(/mcp 전용, 1시간 + 갱신 토큰)다. Claude 토큰은 쿠키·헤더 어느 쪽으로 와도 일반 API에서 거부한다 |

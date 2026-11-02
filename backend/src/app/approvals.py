@@ -58,9 +58,32 @@ def _job_summary(db: Session, m: Membership, job: BulkJob, rows: list[BulkJobRow
             "safety": api._job_safety(db, m, job), "note": safety.OVERSPEND_NOTE}
 
 
+def _fill_before(db: Session, ws_id: int, rows: list[BulkJobRow]):
+    """비어 있는 변경 전 값(Claude가 before를 안 넣은 캠페인·광고그룹 상태·예산)을 네이버 지금 값으로 채운다.
+    승인 화면에 '지금' 값을 보여 주고, 실행 때 그 값과 다르면 실행하지 않게(bulk.execute_job의 expect). 못 읽으면 비워 두고 실행 때 안전장치가 다시 본다."""
+    want: dict[int, list[BulkJobRow]] = {}
+    for r in rows:
+        if r.before is None and r.entity_type in ("campaign", "adgroup") and r.field in ("status", "daily_budget"):
+            want.setdefault(r.ad_account_id, []).append(r)
+    for acc, rs in want.items():
+        try:
+            c = bulk._client(db, ws_id, acc)
+            objs = {x["nccCampaignId"]: x for x in c.list_campaigns()} if any(r.entity_type == "campaign" for r in rs) else {}
+            if gids := [r.naver_id for r in rs if r.entity_type == "adgroup"]:
+                objs |= {x["nccAdgroupId"]: x for x in c.get_many("adgroups", gids)}
+        except bulk.NaverApiError:
+            continue
+        for r in rs:
+            if o := objs.get(r.naver_id):
+                r.before = ("OFF" if o.get("userLock") else "ON") if r.field == "status" else (
+                    str(safety._budget(o)) if safety._budget(o) is not None else None)
+    db.flush()
+
+
 def request_for_job(db: Session, m: Membership, job: BulkJob) -> ApprovalRequest:
     """이 작업의 승인 요청(대기 중인 것이 있으면 그것, 없으면 새로). 실행할 행이 그대로인지 해시로 묶는다."""
     rows = db.scalars(select(BulkJobRow).where(BulkJobRow.job_id == job.id, BulkJobRow.status == "VALID").order_by(BulkJobRow.id)).all()
+    _fill_before(db, m.workspace_id, rows)
     h = bulk.job_hash(rows)
     for ar in db.scalars(select(ApprovalRequest).where(ApprovalRequest.job_id == job.id, ApprovalRequest.status == "PENDING")):
         if _aware(ar.expires_at) >= now() and ar.payload_hash == h:

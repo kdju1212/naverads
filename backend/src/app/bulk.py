@@ -208,6 +208,16 @@ def needs_web_approval(db: Session, workspace_id: int, rows: list[BulkJobRow], c
     return False
 
 
+WEB_NEEDED = ("처음 확인한 뒤 네이버 값이 바뀌어 이 행은 계정 하루예산 합계를 늘리는 변경이 됐어요. 웹 승인이 필요해 실행하지 않았어요. "
+              "새로 미리보기를 만들어 승인받아 주세요")
+
+
+def _fail_web_rows(db: Session, workspace_id: int, rows: list[BulkJobRow], clients: dict):
+    for r in rows:
+        if r.status == "VALID" and needs_web_approval(db, workspace_id, [r], clients):
+            r.status, r.error = "FAILED", WEB_NEEDED
+
+
 def _finish_approval(db: Session, m: Membership, job: BulkJob):
     ar = job_approval(db, job, ("RUNNING",))
     if ar:
@@ -249,6 +259,8 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
         for acc in sorted({r.ad_account_id for r in rows if r.id in cost}):
             if h := safety.take_lock(db, acc):
                 held[acc] = h
+        if ar is None:  # 승인 없는 작업: 처음 판단 뒤 네이버 값이 바뀌어 '올리기'가 된 행은 잠금 안에서 다시 보고 막는다(묶음 사이 우회 방지)
+            _fail_web_rows(db, m.workspace_id, [r for r in rows if r.id in cost and r.ad_account_id in held], clients)
         blocked = safety_blocks(db, m.workspace_id, [r for r in rows if r.ad_account_id in allowed and (r.id not in cost or r.ad_account_id in held)],
                                 clients)
         _run_rows(db, m, job, rows, allowed, cost, held, blocked, clients, expect_before)
