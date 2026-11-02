@@ -518,3 +518,51 @@ def test_auto_bid_rechecks_permission_at_run():
         bulk.run_all_auto_bids(db)
     assert _MOCK_STORE["7418"]["keywords"]["kwd-7418-11"]["bidAmt"] == 300
     assert "권한" in c.get(url, headers=owner).json()[0]["last_result"]
+
+
+def test_place_lock_renewed_and_lost_lock_stops(monkeypatch):
+    """플레이스 실행 중 네이버 호출이 길어 잠금 임대가 끝나고 다른 작업이 잠금을 가져가면, 남은 단계(광고그룹·소재 만들기)는 하지 않는다."""
+    from test_place import _apply, _plan
+    owner, ws, acc = _account("ap-plock@a.com", "7419")
+    MockNaverClient("7419")
+    st = _MOCK_STORE["7419"]
+    params = {"business_id": "bsn-7419-place", "daily_budget": 10000, "use_advoost": True}
+    aid = _plan(owner, ws, acc, "create", **params).json()["approval_id"]
+    real_now, real_create = safety.now, MockNaverClient.create_campaign
+    shift = {"s": 0}
+    safety.now = lambda: real_now() + timedelta(seconds=shift["s"])
+
+    def slow_create(self, *a, **kw):  # 캠페인 만들기가 오래 걸려 임대가 끝나고, 그사이 다른 작업이 잠금을 가져감
+        out = real_create(self, *a, **kw)
+        shift["s"] += 100
+        with SessionLocal() as db2:
+            assert safety.take_lock(db2, acc)
+        return out
+    monkeypatch.setattr(MockNaverClient, "create_campaign", slow_create)
+    try:
+        out = _apply(owner, ws, aid, acc, "create", **params).json()
+    finally:
+        safety.now = real_now
+    groups = [g for g in st["adgroups"].values() if g.get("adgroupType") == "LOCAL_AD"]
+    assert out["status"] == "PARTIAL" and not groups and safety.LOCK_LOST in out["steps"][-1]["error"]
+
+
+def test_place_network_error_not_retried(monkeypatch):
+    """플레이스 만들기 중 응답을 못 받으면(반영됐을 수 있음) '알 수 없음'으로 끝내고, 같은 승인으로 다시 실행해 중복 생성하지 않는다."""
+    from test_place import _apply, _plan
+    owner, ws, acc = _account("ap-pnet@a.com", "7420")
+    MockNaverClient("7420")
+    st = _MOCK_STORE["7420"]
+    params = {"business_id": "bsn-7420-place", "daily_budget": 10000, "use_advoost": True}
+    aid = _plan(owner, ws, acc, "create", **params).json()["approval_id"]
+    real = MockNaverClient.create_campaign
+
+    def written_but_no_reply(self, *a, **kw):
+        real(self, *a, **kw)
+        raise bulk.NaverApiError("네트워크 오류: timed out")
+    monkeypatch.setattr(MockNaverClient, "create_campaign", written_but_no_reply)
+    out = _apply(owner, ws, aid, acc, "create", **params).json()
+    assert out["status"] == "FAILED" and "알 수 없어요" in out["steps"][0]["error"]
+    monkeypatch.setattr(MockNaverClient, "create_campaign", real)
+    assert _apply(owner, ws, aid, acc, "create", **params).status_code == 409  # 같은 승인으로 다시 실행 안 됨
+    assert sum(c["campaignTp"] == "PLACE" for c in st["campaigns"].values()) == 1

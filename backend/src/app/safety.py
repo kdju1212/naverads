@@ -356,7 +356,7 @@ def account_lock(db: Session, account_id: int):
     if holder is None:
         raise SafetyError(BUSY)
     try:
-        yield
+        yield holder  # 긴 실행은 단계마다 renew_lock(db, account_id, holder)로 임대를 연장한다
     finally:
         release_lock(db, account_id, holder)
 

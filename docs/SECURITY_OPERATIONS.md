@@ -131,20 +131,24 @@
 
 - 비밀값을 문서·로그·채팅에 쓰지 않는다. `wrangler secret put`은 값을 입력 창으로만 넣는다.
 
-## 6. Cloudflare 운영 상태 (2026-11-02 읽기 전용 확인)
+## 6. Cloudflare 운영 상태 (2026-11-02 읽기 전용 확인, 같은 날 저녁 다시 확인)
 
 **배포 버전** (`wrangler deployments list` / `versions list`)
-- API `naverads-api`: 현재 100% `45d01556-7275-40c7-bd6e-c6225a4cd66f`(2026-11-01 14:15 UTC, main의 로그아웃 토큰 폐기 커밋까지).
+- API `naverads-api`: 현재 100% `45d01556-7275-40c7-bd6e-c6225a4cd66f`(2026-11-01 14:15:43 UTC).
+  - main 최신 커밋 `6c47934`(14:13 커밋)의 Workers Builds가 14:15:52에 성공한 빌드다. 즉 **운영 = main `6c47934`**(보안 브랜치 코드 아님).
   - 직전 버전 `754f7a21-…`, `47f53613-…`
-- 프론트 `naverads`: 현재 100% `fd314ba9-1cac-4d09-ab44-9edf6143a765`(2026-11-01 14:17 UTC). 직전 `e8bd8973-…`
+- 프론트 `naverads`: 현재 100% `fd314ba9-1cac-4d09-ab44-9edf6143a765`(2026-11-01 14:17:07 UTC, 같은 `6c47934` 빌드). 직전 `e8bd8973-…`
 - 이 브랜치를 push한 뒤 **새 버전·미리보기 버전은 만들어지지 않았다**. 운영은 이 브랜치 코드가 아니다.
 
 **Workers Builds** (GitHub check-runs)
 - main 커밋(`6343e25`, `1da19d1`)은 두 Worker 모두 성공했다.
-- 이 브랜치 커밋 `2e249fc`, `487de37`은 **두 Worker 모두 실패**했다(시작 1분 안에 끝남).
+- 이 브랜치 커밋 `2e249fc`, `487de37`, `8704424`, `a239b7a`는 **모두 두 Worker 실패**했다(시작 1분 안에 끝남).
+  - **운영 영향 없음(확인)**: 실패한 빌드는 버전을 만들지 않았고, 운영 배포 목록은 11/01 버전 그대로다.
   - 빌드 로그는 이 PC의 wrangler 토큰 권한으로 읽을 수 없었다(Forbidden).
   - 로컬에서는 같은 코드로 두 Worker 모두 번들링(dry-run)에 성공했다.
-  - **원인 미확인**: 비운영 브랜치 빌드 설정(배포 명령·브랜치 제한) 문제일 가능성이 있다. 병합 전에 아래 대시보드에서 실패 로그를 확인한다.
+  - **원인 미확인**(추측하지 않음). 로컬에서는 같은 코드로 테스트·번들이 성공한다. 확인할 곳: 아래 대시보드 빌드 화면의 로그, 그리고 Workers > 각 Worker > Settings > Builds의
+    'Build command'·'Deploy command'·'Non-production branch deploy command'·'Builds for non-production branches'·Root directory 값.
+    main 병합 뒤 운영 빌드도 같은 이유로 실패하면 배포가 안 될 뿐 운영은 예전 버전 그대로다(그 경우 0016만 적용된 상태 — 예전 코드와 호환).
     - API: https://dash.cloudflare.com/7e4c8691da6c83db1b0a2180d768aafe/workers/services/view/naverads-api/production/builds/3223f7fe-28d3-43d4-a713-e16365ed86d6
     - 프론트: https://dash.cloudflare.com/7e4c8691da6c83db1b0a2180d768aafe/workers/services/view/naverads/production/builds/a2d8240c-ba39-4cf6-996b-0785316ac486
 - 운영 브랜치·자동 배포·비운영 브랜치 빌드 설정은 대시보드(Workers > 각 Worker > Settings > Builds)에만 있어 **확인하지 못했다**.
@@ -158,7 +162,7 @@
 
 **운영 D1** (`wrangler d1 migrations list naverads --remote`)
 - 적용 대기: `0016_web_approval_locks.sql` **하나**(0015까지 적용됨).
-- Time Travel bookmark(11/02 확인): `000006b8-00000000-00005117-7dd1d9e366389bb6003421932605f78b`
+- Time Travel bookmark(11/02 저녁 확인): `000006be-00000002-00005117-3c801698d47ae8d77b96c00f33a9888f`(낮 값 `000006b8-…`)
   - 마이그레이션 직전에 다시 받아 그 값을 쓴다.
   - 무료 플랜은 7일, 유료는 30일까지 되돌릴 수 있다(공식 문서 https://developers.cloudflare.com/d1/reference/time-travel/).
 

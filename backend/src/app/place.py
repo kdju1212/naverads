@@ -297,12 +297,16 @@ def _audit(db, m, account_id, action, naver_id, field, before=None, after=None, 
                     after=None if after is None else str(after)[:50]))
 
 
-def _run(db, m, client, account_id: int, action: str, p: dict) -> list[dict]:
-    """실제 변경. 단계별 결과를 돌려준다(앞 단계가 실패하면 뒤 단계는 하지 않음)."""
+def _run(db, m, client, account_id: int, action: str, p: dict, still_locked=lambda: True) -> list[dict]:
+    """실제 변경. 단계별 결과를 돌려준다(앞 단계가 실패하면 뒤 단계는 하지 않음).
+    still_locked: 단계마다 계정 잠금 임대를 연장하고, 잠금을 잃었으면(네이버 호출이 길어 만료 → 다른 작업이 가져감) 그 단계부터 하지 않는다."""
     steps = []
 
     def step(label, fn):
         if steps and not steps[-1]["ok"]:
+            return None
+        if not still_locked():
+            steps.append({"step": label, "ok": False, "error": safety.LOCK_LOST})
             return None
         try:
             out = fn()
@@ -439,13 +443,14 @@ def _execute(db: Session, m: Membership, ar: ApprovalRequest, change: PlaceChang
     try:  # 승인 뒤 권한·상태가 바뀌었을 수 있어 실행 직전에 다시 검사한다
         bulk._check_edit(db, m, change.ad_account_id)
         client = bulk._client(db, m.workspace_id, change.ad_account_id)
-        with safety.account_lock(db, change.ad_account_id):
+        with safety.account_lock(db, change.ad_account_id) as holder:
             fresh = _inspect(client, change.action, p, *_checks(db, m.workspace_id, change.ad_account_id, client))
             shown = json.loads(ar.summary).get("before") if ar.summary else fresh.get("before")
             if shown != fresh.get("before"):
                 return finish("FAILED", [], f"승인 때와 네이버의 지금 값이 달라 실행하지 않았어요(승인 때 {shown}, 지금 {fresh.get('before')}). "
                                             "계획부터 다시 만들어 주세요")
-            steps = _run(db, m, client, change.ad_account_id, change.action, p)
+            steps = _run(db, m, client, change.ad_account_id, change.action, p,
+                         lambda: safety.renew_lock(db, change.ad_account_id, holder))
     except safety.SafetyError as e:
         return finish("FAILED", [], str(e))
     except HTTPException as e:
