@@ -1180,17 +1180,27 @@ def test_google_login(monkeypatch):
     assert c.post("/auth/login", json={"email": "new-g@a.com", "password": "google$"}).status_code == 401
     assert c.get("/auth/me", headers=gh).json()["has_password"] is False  # 화면이 비밀번호 변경을 숨긴다
     assert c.post("/auth/password", headers=gh, json={"current_password": "google$", "new_password": "password2"}).status_code == 400
-    # 예전에 Google로 가입해 sub 없이 저장된 계정(비밀번호 없음)은 처음 로그인 때 sub를 기록한다(전환)
+    # 예전에 Google로 가입해 sub 없이 저장된 계정(비밀번호 없음): Google이 그 이메일의 주인일 때(Gmail, Workspace hd)만 처음 로그인 때 sub 기록
     from app.db import SessionLocal
     from app.models import User
     with SessionLocal() as db:
-        db.add(User(email="legacy-g@a.com", password_hash="google$", name="예전"))
+        for e in ("legacy-g@gmail.com", "boss@shop.co.kr", "me@own-domain.kr"):
+            db.add(User(email=e, password_hash="google$", name="예전"))
         db.commit()
-        legacy = db.query(User).filter(User.email == "legacy-g@a.com").one().id
-    claims.update(sub="g-333", email="legacy-g@a.com")
-    assert uid_of(login(redirect=web)) == legacy
+        ids = {u.email: u.id for u in db.query(User).filter(User.password_hash == "google$")}
+    claims.update(sub="g-333", email="legacy-g@gmail.com")
+    assert uid_of(login(redirect=web)) == ids["legacy-g@gmail.com"]
     claims.update(sub="g-444")  # 그 뒤 같은 이메일의 다른 Google 계정은 붙지 않는다
     assert "#error=" in login(redirect=web).headers["location"]
+    claims.update(sub="g-555", email="boss@shop.co.kr", hd="shop.co.kr")  # Workspace 조직 주소
+    assert uid_of(login(redirect=web)) == ids["boss@shop.co.kr"]
+    # Google 계정에 등록한 다른 회사 메일(hd 없음): 주소 주인이 바뀌었을 수 있어 자동 연결하지 않는다(운영자 본인 확인)
+    claims.pop("hd")
+    claims.update(sub="g-666", email="me@own-domain.kr")
+    loc = login(redirect=web).headers["location"]
+    assert "#error=" in loc and "%EB%B3%B8%EC%9D%B8" in loc  # '본인 확인'
+    with SessionLocal() as db:
+        assert db.get(User, ids["me@own-domain.kr"]).google_sub is None
     claims.update(sub="g-222", email="new-g@a.com")
 
     # 토큰 검증: 발급자·대상·만료·이메일 인증

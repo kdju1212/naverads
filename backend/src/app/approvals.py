@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
-from . import bulk, main as api, place, safety
+from . import bulk, main as api, naver as bulk_naver, place, safety
 from .access import ADMIN_ROLES, accessible_account_ids, membership
 from .db import get_db
 from .models import AdAccount, ApprovalRequest, AuditLog, BulkJob, BulkJobRow, Membership, now
@@ -48,42 +48,90 @@ def _audit(db, m, ar: ApprovalRequest, action: str, after: str | None = None):
                     entity_type="approval", naver_id=str(ar.id), field=ar.kind, after=after and after[:50]))
 
 
-def _job_summary(db: Session, m: Membership, job: BulkJob, rows: list[BulkJobRow]) -> dict:
+def _job_summary(db: Session, m: Membership, job: BulkJob, rows: list[BulkJobRow], claimed: dict[int, str | None]) -> dict:
     names = dict(db.execute(select(AdAccount.id, AdAccount.name).where(AdAccount.id.in_({r.ad_account_id for r in rows}))).all())
     return {"title": f"대량 작업 #{job.id} 실행" + (f" (예약 {job.scheduled_at:%Y-%m-%d %H:%M} UTC)" if job.scheduled_at else ""),
             "why": "계정의 하루예산 설정액 합계가 늘 수 있는 변경(캠페인 하루예산 올리기·캠페인/광고그룹 켜기)이 있어 웹 승인이 필요해요",
             "rows": [{"account": names.get(r.ad_account_id), "ad_account_id": r.ad_account_id, "entity_type": r.entity_type,
-                      "naver_id": r.naver_id, "what": LABEL.get(r.field, r.field), "before": r.before, "after": r.after} for r in rows[:SUMMARY_ROWS]],
+                      "naver_id": r.naver_id, "what": LABEL.get(r.field, r.field), "before": r.before, "after": r.after,
+                      # 화면·Claude가 '지금 값'이라고 보낸 값이 네이버와 다르면 함께 보여 준다(실행 기준은 before = 서버가 읽은 값)
+                      **({"claimed_before": claimed[r.id]} if claimed.get(r.id) not in (None, r.before) else {})}
+                     for r in rows[:SUMMARY_ROWS]],
             "more_rows": max(0, len(rows) - SUMMARY_ROWS),
             "safety": api._job_safety(db, m, job), "note": safety.OVERSPEND_NOTE}
 
 
-def _fill_before(db: Session, ws_id: int, rows: list[BulkJobRow]):
-    """비어 있는 변경 전 값(Claude가 before를 안 넣은 캠페인·광고그룹 상태·예산)을 네이버 지금 값으로 채운다.
-    승인 화면에 '지금' 값을 보여 주고, 실행 때 그 값과 다르면 실행하지 않게(bulk.execute_job의 expect). 못 읽으면 비워 두고 실행 때 안전장치가 다시 본다."""
+KIND_KEY = {"campaign": "nccCampaignId", "adgroup": "nccAdgroupId", "keyword": "nccKeywordId", "ad": "nccAdId", "ad_extension": "nccAdExtensionId"}
+KIND_PATH = {"adgroup": "adgroups", "keyword": "keywords", "ad": "ads", "ad_extension": "ad-extensions"}
+
+
+class BeforeUnknown(Exception):
+    """승인에 필요한 변경 전 값을 네이버에서 확인하지 못함 → 실행할 수 있는 승인 요청을 만들지 않는다."""
+
+
+def _now_value(r: BulkJobRow, o: dict, groups: dict) -> str:
+    """네이버 지금 값(승인 화면 '지금'·실행 때 비교 기준). 의미를 판단할 수 없으면 BeforeUnknown."""
+    label = f"{r.entity_type} {r.naver_id}"
+    if r.field == "status":
+        if not isinstance(o.get("userLock"), bool):
+            raise BeforeUnknown(f"{label}의 켜짐/꺼짐 상태를 확인할 수 없어요")
+        return "OFF" if o["userLock"] else "ON"
+    if r.field == "daily_budget":
+        b = safety._budget(o)
+        return str(b) if b is not None else bulk_naver.UNLIMITED
+    try:  # bid_amt: 실제로 쓰이는 입찰가(그룹 입찰가 상속 포함)
+        if r.entity_type == "ad":
+            own = safety._ad_bid(o)
+        elif r.entity_type == "keyword" and o.get("useGroupBidAmt"):
+            own = None
+        else:
+            own = safety._bid_of(o, label)
+        return str(own if own is not None else safety._bid_of(groups[o["nccAdgroupId"]], f"광고그룹 {o['nccAdgroupId']}"))
+    except (safety.SafetyError, KeyError) as e:
+        raise BeforeUnknown(f"{label}의 입찰가를 확인할 수 없어요") from e
+
+
+def _fill_before(db: Session, ws_id: int, rows: list[BulkJobRow]) -> dict[int, str | None]:
+    """변경 행(상태·입찰가·예산)의 변경 전 값을 네이버에서 직접 읽어 저장한다. 화면·Claude가 보낸 값은 참고값으로만 돌려준다(행 id → 보낸 값).
+    승인 화면에 '지금' 값을 보여 주고, 실행 때 그 값과 다르면 실행하지 않게 한다(bulk.execute_job의 expect).
+    하나라도 읽지 못하거나 의미를 판단할 수 없으면 BeforeUnknown(승인 요청을 만들지 않는다)."""
+    claimed: dict[int, str | None] = {}
     want: dict[int, list[BulkJobRow]] = {}
     for r in rows:
-        if r.before is None and r.entity_type in ("campaign", "adgroup") and r.field in ("status", "daily_budget"):
+        if r.field in ("status", "bid_amt", "daily_budget"):
             want.setdefault(r.ad_account_id, []).append(r)
     for acc, rs in want.items():
         try:
             c = bulk._client(db, ws_id, acc)
-            objs = {x["nccCampaignId"]: x for x in c.list_campaigns()} if any(r.entity_type == "campaign" for r in rs) else {}
-            if gids := [r.naver_id for r in rs if r.entity_type == "adgroup"]:
-                objs |= {x["nccAdgroupId"]: x for x in c.get_many("adgroups", gids)}
-        except bulk.NaverApiError:
-            continue
+            objs: dict[str, dict] = {}
+            if any(r.entity_type == "campaign" for r in rs):
+                objs |= {x["nccCampaignId"]: x for x in c.list_campaigns()}
+            for kind, path in KIND_PATH.items():
+                if ids := [r.naver_id for r in rs if r.entity_type == kind]:
+                    objs |= {x[KIND_KEY[kind]]: x for x in c.get_many(path, ids)}
+            gids = {o["nccAdgroupId"] for r in rs if r.field == "bid_amt" and r.entity_type in ("keyword", "ad")
+                    and (o := objs.get(r.naver_id)) and o.get("nccAdgroupId")}
+            groups = {g["nccAdgroupId"]: g for g in c.get_many("adgroups", list(gids))} if gids else {}
+        except bulk.NaverApiError as e:
+            raise BeforeUnknown(f"네이버에서 지금 값을 읽지 못했어요 ({str(e)[:100]})") from e
         for r in rs:
-            if o := objs.get(r.naver_id):
-                r.before = ("OFF" if o.get("userLock") else "ON") if r.field == "status" else (
-                    str(safety._budget(o)) if safety._budget(o) is not None else None)
+            o = objs.get(r.naver_id)
+            if o is None:
+                raise BeforeUnknown(f"{r.entity_type} {r.naver_id}을(를) 네이버에서 찾지 못했어요")
+            claimed[r.id] = r.before
+            r.before = _now_value(r, o, groups)
     db.flush()
+    return claimed
 
 
 def request_for_job(db: Session, m: Membership, job: BulkJob) -> ApprovalRequest:
     """이 작업의 승인 요청(대기 중인 것이 있으면 그것, 없으면 새로). 실행할 행이 그대로인지 해시로 묶는다."""
     rows = db.scalars(select(BulkJobRow).where(BulkJobRow.job_id == job.id, BulkJobRow.status == "VALID").order_by(BulkJobRow.id)).all()
-    _fill_before(db, m.workspace_id, rows)
+    try:
+        claimed = _fill_before(db, m.workspace_id, rows)
+    except BeforeUnknown as e:
+        db.rollback()
+        raise HTTPException(400, f"승인에 필요한 지금 값을 확인하지 못해 승인 요청을 만들지 않았어요: {e}. 잠시 뒤 다시 실행해 주세요")
     h = bulk.job_hash(rows)
     for ar in db.scalars(select(ApprovalRequest).where(ApprovalRequest.job_id == job.id, ApprovalRequest.status == "PENDING")):
         if _aware(ar.expires_at) >= now() and ar.payload_hash == h:
@@ -95,7 +143,7 @@ def request_for_job(db: Session, m: Membership, job: BulkJob) -> ApprovalRequest
     ar = ApprovalRequest(workspace_id=m.workspace_id, requested_by=m.user_id, tool="bulk_job", kind="job", job_id=job.id,
                          ad_account_id=next(iter(accs)) if len(accs) == 1 else None, web_required=True,
                          payload=json.dumps({"job_id": job.id}), payload_hash=h, status="PENDING", expires_at=expires,
-                         summary=json.dumps(_job_summary(db, m, job, rows), ensure_ascii=False, default=str))
+                         summary=json.dumps(_job_summary(db, m, job, rows, claimed), ensure_ascii=False, default=str))
     db.add(ar)
     db.flush()
     _audit(db, m, ar, "APPROVAL_PENDING")

@@ -358,16 +358,29 @@ async def google_callback(request: Request, state: str = "", code: str = "", db:
         return _google_done(st, error="Google 로그인 정보를 확인하지 못했습니다. 다시 시도하세요")
     if not info.get("email_verified") or not info.get("email"):
         return _google_done(st, error="인증된 Google 이메일이 아닙니다")
-    user, error = google_user(db, str(info["sub"]), info["email"].lower(), info.get("name"), st.get("l"))
+    user, error = google_user(db, str(info["sub"]), info["email"].lower(), info.get("name"), st.get("l"), info.get("hd"))
     return _google_done(st, user=user, error=error)
 
 
 GOOGLE_ISSUERS = {"https://accounts.google.com", "accounts.google.com"}
 
 
-def google_user(db: Session, sub: str, email: str, name: str | None, link_user_id: int | None) -> tuple[User | None, str]:
+def google_authoritative(email: str, hd: str | None) -> bool:
+    """Google이 이 이메일 주소의 주인인지: Gmail 주소이거나, Google Workspace 조직(hd)의 도메인 주소.
+    근거: Google OpenID Connect 문서(사용자 식별은 sub, 조직 판단은 이메일 도메인이 아니라 hd). Gmail 주소는 지워져도 다른 사람에게 다시 주지 않는다."""
+    domain = email.rpartition("@")[2]
+    return domain in ("gmail.com", "googlemail.com") or (bool(hd) and hd.lower() == domain)
+
+
+LEGACY_GOOGLE_BLOCKED = ("예전에 Google로 가입한 계정을 연결하려면 본인 확인이 필요합니다. 이 이메일은 Google이 주인임을 확인할 수 없는 주소라 "
+                         "자동으로 연결하지 않았어요. 관리자에게 문의해 주세요")
+
+
+def google_user(db: Session, sub: str, email: str, name: str | None, link_user_id: int | None, hd: str | None = None) -> tuple[User | None, str]:
     """Google 고유 식별자(sub)로 계정을 찾는다. 이메일만 같은 기존 계정에는 자동으로 붙이지 않는다(그 계정으로 로그인한 뒤 설정에서 연결).
-    예외(전환): 예전에 Google로 가입해 sub 없이 저장된 계정(비밀번호 없음)은 그때도 Google 인증 이메일로만 만들 수 있었으므로 처음 로그인 때 sub를 기록한다."""
+    전환 예외: 예전에 Google로 가입해 sub 없이 저장된 계정(비밀번호 없음)은 Google이 그 이메일의 주인일 때(google_authoritative)만
+    처음 로그인 때 sub를 기록한다. 그 밖(Google 계정에 등록한 다른 회사 메일 등)은 주인이 바뀌었을 수 있어 운영자가 본인 확인 후 연결한다
+    (docs/SECURITY_OPERATIONS.md 2절)."""
     owner = db.scalar(select(User).where(User.google_sub == sub))
     if link_user_id is not None:
         user = db.get(User, link_user_id)
@@ -382,6 +395,8 @@ def google_user(db: Session, sub: str, email: str, name: str | None, link_user_i
         return owner, ""
     user = user_by_email(db, email)
     if user and user.password_hash == GOOGLE_ONLY and not user.google_sub:
+        if not google_authoritative(email, hd):
+            return None, LEGACY_GOOGLE_BLOCKED
         user.google_sub = sub
         db.commit()
         return user, ""

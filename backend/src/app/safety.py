@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from datetime import timedelta
 
 from fastapi import HTTPException
-from sqlalchemy import bindparam, delete, select, text
+from sqlalchemy import bindparam, delete, select, text, update
 from sqlalchemy.orm import Session
 
 from .models import AccountLock, AccountSafety, AuditLog, Membership, now
@@ -142,9 +142,22 @@ def check_bids(s: AccountSafety | None, ops: list[tuple]):
 
 
 def _ad_bid(a: dict) -> int | None:
-    """쇼핑 상품소재의 자기 입찰가(그룹 입찰가를 쓰면 None)."""
+    """쇼핑 상품소재의 자기 입찰가(그룹 입찰가를 쓰면 None, 그 밖의 소재는 자기 입찰가가 없어 None).
+    쇼핑 상품소재인데 입찰가 정보를 읽을 수 없으면 0원으로 보지 않고 SafetyError."""
+    if a.get("type") != "SHOPPING_PRODUCT_AD":
+        return None
     attr = _json(a.get("adAttr"))
-    return attr.get("bidAmt") if isinstance(attr, dict) and not attr.get("useGroupBidAmt") and attr.get("bidAmt") else None
+    if not isinstance(attr, dict) or (not attr.get("useGroupBidAmt") and not isinstance(attr.get("bidAmt"), int)):
+        raise SafetyError(f"쇼핑 상품소재({a.get('nccAdId')})의 입찰가를 네이버 응답에서 확인할 수 없어 비용이 늘 수 있는 변경을 막았어요")
+    return None if attr.get("useGroupBidAmt") else attr["bidAmt"]
+
+
+def _bid_of(o: dict, label: str) -> int:
+    """입찰가 필드가 없거나 숫자가 아니면 0원으로 보지 않고 막는다(확인할 수 없는 값으로 통과시키지 않게)."""
+    v = o.get("bidAmt")
+    if not isinstance(v, int) or isinstance(v, bool):
+        raise SafetyError(f"{label}의 입찰가를 네이버 응답에서 확인할 수 없어 비용이 늘 수 있는 변경을 막았어요")
+    return v
 
 
 def _group_bids(snap: Snapshot, g: dict, max_bid: int, notes: list[str]):
@@ -158,11 +171,11 @@ def _group_bids(snap: Snapshot, g: dict, max_bid: int, notes: list[str]):
         if ADVOOST_NOTE not in notes:
             notes.append(ADVOOST_NOTE)
         return
-    if (g.get("bidAmt") or 0) > max_bid:
+    if _bid_of(g, f"광고그룹 '{name}'") > max_bid:
         raise SafetyError(f"광고그룹 '{name}'의 입찰가 {g['bidAmt']:,}원이 클릭당 최대 입찰가 {max_bid:,}원보다 높아 켤 수 없어요. 입찰가를 먼저 낮춰 주세요")
     c = snap.client
     over = [k for k in c.list_keywords(g["nccAdgroupId"])
-            if _on(k) and not k.get("useGroupBidAmt") and (k.get("bidAmt") or 0) > max_bid]
+            if _on(k) and not k.get("useGroupBidAmt") and _bid_of(k, f"키워드 '{k.get('keyword', '')}'") > max_bid]
     over += [a for a in c.list_ads(g["nccAdgroupId"]) if _on(a) and (_ad_bid(a) or 0) > max_bid]
     if over:
         raise SafetyError(f"광고그룹 '{name}' 안에 클릭당 최대 입찰가 {max_bid:,}원보다 높은 입찰가를 쓰는 키워드·소재가 {len(over)}개 있어 "
@@ -197,9 +210,9 @@ def _current_bid(snap: Snapshot, etype: str, nid: str) -> int:
     if not o:
         raise SafetyError(f"입찰가를 확인할 대상({nid})을 네이버에서 찾지 못해 실행하지 않았어요")
     if etype == "adgroup":
-        return o.get("bidAmt") or 0
-    own = (o.get("bidAmt") if not o.get("useGroupBidAmt") else None) if etype == "keyword" else _ad_bid(o)
-    return own if own is not None else (snap.group(o["nccAdgroupId"]).get("bidAmt") or 0)
+        return _bid_of(o, f"광고그룹({nid})")
+    own = (None if o.get("useGroupBidAmt") else _bid_of(o, f"키워드({nid})")) if etype == "keyword" else _ad_bid(o)
+    return own if own is not None else _bid_of(snap.group(o["nccAdgroupId"]), f"광고그룹({o['nccAdgroupId']})")
 
 
 def _effective_on(snap: Snapshot, etype: str, nid: str, max_bid: int, notes: list[str]):
@@ -318,6 +331,17 @@ def take_lock(db: Session, account_id: int) -> str | None:
     db.execute(_TAKE, {"a": account_id, "h": holder, "e": now() + LOCK_LEASE, "n": now()})
     db.commit()
     return holder if db.scalar(select(AccountLock.holder).where(AccountLock.ad_account_id == account_id)) == holder else None
+
+
+LOCK_LOST = "실행 중 계정 잠금 시간이 지나 다른 작업과 겹칠 수 있어 이 행은 실행하지 않았어요. 잠시 뒤 다시 실행해 주세요"
+
+
+def renew_lock(db: Session, account_id: int, holder: str) -> bool:
+    """내 잠금이면 임대를 다시 LOCK_LEASE만큼 늘린다. 이미 만료돼 남이 가져갔거나 풀렸으면 False(그 뒤 비용 변경은 하지 않는다)."""
+    ok = db.execute(update(AccountLock).where(AccountLock.ad_account_id == account_id, AccountLock.holder == holder,
+                                              AccountLock.expires_at >= now()).values(expires_at=now() + LOCK_LEASE)).rowcount == 1
+    db.commit()
+    return ok
 
 
 def release_lock(db: Session, account_id: int, holder: str):

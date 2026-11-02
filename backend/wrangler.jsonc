@@ -5,6 +5,8 @@
   "compatibility_date": "2026-10-18",
   "compatibility_flags": ["python_workers"],
   "observability": { "enabled": true },
+  // 미리보기 버전(브랜치 빌드)은 운영과 같은 D1·시크릿(실계정 네이버 키)을 쓴다 → 미리보기 주소로 열 수 없게 끈다(docs/SECURITY_OPERATIONS.md 6절)
+  "preview_urls": false,
   "triggers": { "crons": ["*/10 * * * *"] },
   // 요청 횟수 제한(src/main.py): IP당 1분 1500번. 광고 데이터 받기(계정마다 보고서 6개를 2초마다 확인)를
   // 사무실 한 IP에서 여러 직원이 동시에 해도 걸리지 않게 넉넉히. 초당 수십 번씩 두드리는 것만 막는다

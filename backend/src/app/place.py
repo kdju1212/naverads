@@ -82,6 +82,8 @@ class PlaceApply(BaseModel):
 
 
 def friendly(err: Exception | str) -> str:
+    if str(err).startswith("네트워크 오류"):  # 응답을 못 받으면 반영됐을 수 있다 → 다시 하기 전에 확인하게
+        return "네이버 응답을 받지 못해 반영됐는지 알 수 없어요. 다시 하기 전에 네이버 광고관리에서 먼저 확인해 주세요"
     m = re.search(r'"code"\s*:\s*(\d+)', str(err))
     code = int(m.group(1)) if m else None
     return f"{FRIENDLY[code]} (네이버 오류 {code})" if code in FRIENDLY else f"네이버가 요청을 받아들이지 않았어요: {str(err)[:200]}"

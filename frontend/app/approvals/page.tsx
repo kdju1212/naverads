@@ -4,13 +4,13 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import { Button, Card, ErrorText, PageTitle } from "@/components/ui";
-import { api, ENTITY_LABEL, fmt, Job, SafetyCheck, toast } from "@/lib/api";
+import { api, ENTITY_LABEL, FIELD_LABEL, fmt, Job, SafetyCheck, toast } from "@/lib/api";
 import { applyJob } from "@/lib/naverData";
 import { useApp } from "@/lib/store";
 import { useFetch } from "@/lib/useFetch";
 
 /** 서버: backend/src/app/approvals.py. 계정 하루예산 합계가 늘 수 있는 변경(예산 올리기·캠페인/광고그룹 켜기·ADVoost 켜기)만 여기서 승인한다 */
-interface JobRowSummary { account: string | null; entity_type: string; naver_id: string; what: string; before: string | null; after: string }
+interface JobRowSummary { account: string | null; entity_type: string; naver_id: string; what: string; before: string | null; after: string; claimed_before?: string | null }
 interface Approval {
   approval_id: number; kind: "job" | "place"; status: string; job_id: number | null; ad_account_id: number | null;
   created_at: string; expires_at: string; decided_at: string | null;
@@ -74,6 +74,18 @@ function ApprovalCard({ a, onChange }: { a: Approval; onChange: () => void }) {
   const s = a.summary ?? {};
   const safety = Array.isArray(s.safety) ? s.safety : s.safety ? [s.safety] : [];
   const pending = a.status === "PENDING";
+  // 100건이 넘는 작업은 전체 행을 펼쳐 본 뒤에만 승인할 수 있다(실행되는 행 = 이 작업의 행, 서버가 해시로 묶음)
+  const [allRows, setAllRows] = useState<JobRowSummary[] | null>(null);
+  const showAll = async () => {
+    if (!ws || !a.job_id) return;
+    try {
+      const j = await api<Job>(`/workspaces/${ws.id}/bulk-jobs/${a.job_id}`);
+      setAllRows((j.accounts ?? []).flatMap((acc) => acc.rows.filter((r) => r.status === "VALID" || !pending).map((r) => ({
+        account: acc.name, entity_type: r.entity_type, naver_id: r.naver_id, what: FIELD_LABEL[r.field] ?? r.field, before: r.before, after: r.after }))));
+    } catch (e) { setError((e as Error).message); }
+  };
+  const rows = allRows ?? s.rows;
+  const mustExpand = pending && !!s.more_rows && !allRows;
 
   const approve = async () => {
     if (!ws || !confirm("이 변경을 승인하고 바로 실행할까요? (예약 작업은 예약 시각에 실행돼요)")) return;
@@ -105,17 +117,22 @@ function ApprovalCard({ a, onChange }: { a: Approval; onChange: () => void }) {
       <p className={`mb-2 text-sm font-semibold ${STATUS[a.status]?.[1] ?? ""}`}>{STATUS[a.status]?.[0] ?? a.status}</p>
       {s.why && <p className="mb-2 text-sm">{s.why}</p>}
       {a.ad_account_id && <p className="mb-2 text-sm">광고 계정: <strong>{accountName(a.ad_account_id)}</strong></p>}
-      {s.rows && (
+      {rows && (
         <div className="mb-2 overflow-x-auto">
           <table className="w-full text-sm">
             <thead><tr className="text-left text-muted"><th className="pr-3">광고 계정</th><th className="pr-3">대상</th><th className="pr-3">항목</th><th className="pr-3">지금</th><th>바뀐 뒤</th></tr></thead>
-            <tbody>{s.rows.map((r) => (
-              <tr key={`${r.naver_id}-${r.what}`} className="border-t border-line">
+            <tbody>{rows.map((r, i) => (
+              <tr key={`${r.naver_id}-${r.what}-${i}`} className="border-t border-line">
                 <td className="pr-3">{r.account ?? "-"}</td><td className="pr-3">{ENTITY_LABEL[r.entity_type] ?? r.entity_type} {r.naver_id}</td>
-                <td className="pr-3">{r.what}</td><td className="pr-3">{money(r.what, r.before)}</td><td className="font-medium">{money(r.what, r.after)}</td>
+                <td className="pr-3">{r.what}</td>
+                <td className="pr-3">{money(r.what, r.before)}
+                  {r.claimed_before != null && <span className="block text-xs text-warning">요청에 적힌 값 {money(r.what, r.claimed_before)}와 달라요(네이버 기준으로 실행)</span>}</td>
+                <td className="font-medium">{money(r.what, r.after)}</td>
               </tr>))}</tbody>
           </table>
-          {!!s.more_rows && <p className="text-xs text-faint">외 {s.more_rows}건(작업 결과에서 전체 보기)</p>}
+          {!!s.more_rows && !allRows && (
+            <Button variant="secondary" className="mt-2" onClick={showAll}>전체 {(s.rows?.length ?? 0) + s.more_rows}건 펼쳐 보기</Button>
+          )}
         </div>
       )}
       {s.target && (
@@ -144,7 +161,8 @@ function ApprovalCard({ a, onChange }: { a: Approval; onChange: () => void }) {
       <ErrorText error={error} />
       {pending && (
         <div className="mt-3 flex gap-2">
-          <Button disabled={busy} onClick={approve}>{busy ? "실행 중…" : "승인하고 실행"}</Button>
+          <Button disabled={busy || mustExpand} onClick={approve} title={mustExpand ? "전체 항목을 펼쳐 본 뒤 승인할 수 있어요" : undefined}>
+            {busy ? "실행 중…" : "승인하고 실행"}</Button>
           <Button variant="secondary" disabled={busy} onClick={reject}>거절</Button>
         </div>
       )}

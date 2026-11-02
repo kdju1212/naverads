@@ -318,9 +318,12 @@ def test_emergency_stop_and_naver_failure(monkeypatch):
     r = _approve(owner, ws, ap["approval_id"]).json()
     assert r["status"] == "FAILED" and "읽지 못해" in _rows(r["job"])["cmp-7409-pl"]["error"]
     assert _MOCK_STORE["7409"]["campaigns"]["cmp-7409-pl"]["userLock"] is True
-    # 예산 증액인지 확인할 수 없으면(조회 실패) 웹 승인 대상으로 본다
-    _, ap = _request(owner, ws, [ch(acc, "campaign", "cmp-7409-sh", "daily_budget", "20000")])
-    assert ap and ap["status"] == "PENDING"
+    # 지금 값을 네이버에서 읽지 못하면 실행할 수 있는 승인 요청을 만들지 않고 이유를 알려 준다
+    job = _job(owner, ws, [ch(acc, "campaign", "cmp-7409-sh", "daily_budget", "40000")])
+    r = c.post(f"/workspaces/{ws}/bulk-jobs/{job['id']}/execute", headers=owner)
+    assert r.status_code == 400 and "승인 요청을 만들지 않았어요" in r.json()["detail"]
+    with SessionLocal() as db:
+        assert db.query(ApprovalRequest).filter(ApprovalRequest.job_id == job["id"]).count() == 0
 
 
 def test_cookie_session_csrf_cors_logout(monkeypatch):
@@ -405,3 +408,109 @@ def test_deleted_account_forgets_google_sub():
     assert c.post("/auth/delete-account", headers=h, json={"password": "password1"}).json()["ok"]
     with S() as db:
         assert db.query(User).filter(User.google_sub == "g-del").first() is None
+
+
+def test_claimed_before_is_reference_only_and_large_job_fully_viewable():
+    """승인 요청의 변경 전 값은 서버가 네이버에서 읽는다(보낸 값은 참고). 100건이 넘어도 실행 전에 전체 행을 볼 수 있다."""
+    owner, ws, acc = _account("ap-big@a.com", "7413")
+    MockNaverClient("7413")
+    _off("7413", "cmp-7413-pl")
+    fake = [ch(acc, "campaign", "cmp-7413-pl", "status", "ON"),  # 변경 전 값 없음 → 서버가 채움
+            ch(acc, "campaign", "cmp-7413-sh", "daily_budget", "40000", before="90000")]  # 허위: 지금은 3만(→ 올리기)
+    extra = [ch(acc, "keyword", f"kwd-7413-x{i}", "status", "OFF") for i in range(119)]  # 네이버에 없는 키워드 → 승인 요청을 만들 수 없음
+    job = _job(owner, ws, fake + extra)
+    r = c.post(f"/workspaces/{ws}/bulk-jobs/{job['id']}/execute", headers=owner)
+    assert r.status_code == 400 and "찾지 못했어요" in r.json()["detail"]
+    st = _MOCK_STORE["7413"]
+    for i in range(119):  # 실제로 있는 키워드로 채운다
+        st["keywords"][f"kwd-7413-x{i}"] = {"nccKeywordId": f"kwd-7413-x{i}", "nccAdgroupId": "grp-7413-pl1", "keyword": f"k{i}",
+                                            "userLock": False, "bidAmt": 100, "useGroupBidAmt": False}
+    _, ap = _request(owner, ws, fake + extra)
+    rows = {x["naver_id"]: x for x in ap["summary"]["rows"]}
+    assert rows["cmp-7413-pl"]["before"] == "OFF" and "claimed_before" not in rows["cmp-7413-pl"]
+    assert rows["cmp-7413-sh"]["before"] == "30000" and rows["cmp-7413-sh"]["claimed_before"] == "90000"
+    assert len(ap["summary"]["rows"]) == 100 and ap["summary"]["more_rows"] == 21
+    full = c.get(f"/workspaces/{ws}/bulk-jobs/{ap['job_id']}", headers=owner).json()  # 승인 화면의 '전체 보기'
+    assert sum(len(a["rows"]) for a in full["accounts"]) == 121
+    r = _approve(owner, ws, ap["approval_id"]).json()
+    assert r["status"] in ("RUNNING", "APPROVED") or r["job"]["status"] == "RUNNING"  # 5행씩 이어서 실행
+
+
+def test_missing_bid_fields_block_cost_increase():
+    owner, ws, acc = _account("ap-miss@a.com", "7415")
+    MockNaverClient("7415")
+    st = _MOCK_STORE["7415"]
+    st["keywords"]["kwd-7415-11"].update(userLock=True)
+    del st["keywords"]["kwd-7415-11"]["bidAmt"]  # 입찰가 필드 없음 → 0원으로 보지 않는다
+    out = _run(owner, ws, _job(owner, ws, [ch(acc, "keyword", "kwd-7415-11", "status", "ON")])["id"])
+    assert out["status"] == "FAILED" and "확인할 수 없어" in _rows(out)["kwd-7415-11"]["error"]
+    st["ads"]["ad-7415-sh1"].update(adAttr="??", userLock=True)  # 쇼핑 소재 입찰가 정보를 읽을 수 없음
+    out = _run(owner, ws, _job(owner, ws, [ch(acc, "ad", "ad-7415-sh1", "status", "ON")])["id"])
+    assert out["status"] == "FAILED" and "확인할 수 없어" in _rows(out)["ad-7415-sh1"]["error"]
+    del st["adgroups"]["grp-7415-pl2"]["bidAmt"]  # 그룹 입찰가 없음: 그룹 입찰가를 쓰는 키워드 입찰가 올리기도 판단 불가
+    st["keywords"]["kwd-7415-21"]["useGroupBidAmt"] = True
+    out = _run(owner, ws, _job(owner, ws, [ch(acc, "keyword", "kwd-7415-21", "bid_amt", "400", product="WEB_SITE")])["id"])
+    assert out["status"] == "FAILED" and st["keywords"]["kwd-7415-21"]["bidAmt"] == 300
+
+
+def test_lock_lease_renewed_and_lost_lock_stops(monkeypatch):
+    """긴 실행 중 잠금 임대가 끝나 다른 작업이 가져가면, 남은 비용 행은 실행하지 않는다. 정상이면 행마다 임대를 연장한다."""
+    owner, ws, acc = _account("ap-lease@a.com", "7416")
+    MockNaverClient("7416")
+    st = _MOCK_STORE["7416"]
+    real_now, real_update = safety.now, MockNaverClient.update
+    shift = {"s": 0}
+    safety.now = lambda: real_now() + timedelta(seconds=shift["s"])
+
+    def slow_update(self, *a, **kw):  # 네이버 호출 한 번에 60초 걸린다고 가정
+        real_update(self, *a, **kw)
+        shift["s"] += 60
+    monkeypatch.setattr(MockNaverClient, "update", slow_update)
+    try:
+        changes = [ch(acc, "keyword", f"kwd-7416-1{k}", "bid_amt", str(100 + k * 10), product="WEB_SITE") for k in (1, 2, 3)]
+        out = _run(owner, ws, _job(owner, ws, changes)["id"])  # 60초씩 3번 = 180초 > 임대 90초, 행마다 연장돼 모두 성공
+        assert out["status"] == "DONE"
+
+        def steal_after_first(self, *a, **kw):  # 첫 행 뒤 임대가 끝나고 다른 작업이 잠금을 가져감
+            real_update(self, *a, **kw)
+            shift["s"] += 100
+            with SessionLocal() as db2:
+                assert safety.take_lock(db2, acc)
+        monkeypatch.setattr(MockNaverClient, "update", steal_after_first)
+        changes = [ch(acc, "keyword", f"kwd-7416-2{k}", "bid_amt", str(100 + k * 10), product="WEB_SITE") for k in (1, 2)]
+        r = _rows(_run(owner, ws, _job(owner, ws, changes)["id"]))
+        assert r["kwd-7416-21"]["status"] == "SUCCESS" and r["kwd-7416-22"]["error"] == safety.LOCK_LOST
+        assert st["keywords"]["kwd-7416-22"]["bidAmt"] == 600
+    finally:
+        safety.now = real_now
+
+
+def test_network_error_marks_unknown_and_is_not_retried(monkeypatch):
+    owner, ws, acc = _account("ap-net@a.com", "7417")
+    MockNaverClient("7417")
+    real = MockNaverClient.create_keyword
+
+    def timeout_after_write(self, *a, **kw):  # 네이버엔 만들어졌지만 응답을 못 받음
+        real(self, *a, **kw)
+        raise bulk.NaverApiError("네트워크 오류: timed out")
+    monkeypatch.setattr(MockNaverClient, "create_keyword", timeout_after_write)
+    out = _run(owner, ws, _job(owner, ws, [ch(acc, "keyword", "grp-7417-pl1", "create", "새키워드|100", product="WEB_SITE")])["id"])
+    assert _rows(out)["grp-7417-pl1"]["error"] == bulk.UNKNOWN
+    monkeypatch.setattr(MockNaverClient, "create_keyword", real)
+    retry = c.post(f"/workspaces/{ws}/bulk-jobs/{out['id']}/retry-failed", headers=owner).json()
+    assert retry["counts"]["VALID"] == 0 and retry["counts"]["INVALID"] == 1  # 확인 없이 다시 만들지 않는다
+    assert sum(k["keyword"] == "새키워드" for k in _MOCK_STORE["7417"]["keywords"].values()) == 1
+
+
+def test_auto_bid_rechecks_permission_at_run():
+    owner, ws, acc = _account("ap-abr@a.com", "7418")
+    MockNaverClient("7418")
+    staff, mid = _staff(owner, ws, acc, "ap-abr-s@a.com")
+    url = f"/workspaces/{ws}/auto-bids"
+    k = {"ad_account_id": acc, "naver_id": "kwd-7418-11", "keyword": "원피스1"}
+    assert c.put(url, headers=staff, json={"keywords": [k], "device": "PC", "target_rank": 1, "max_bid": 1000, "ends_on": END}).status_code == 200
+    _revoke(mid)  # 규칙을 승인(저장)한 직원의 권한 회수 → 다음 실행부터 바꾸지 않는다
+    with SessionLocal() as db:
+        bulk.run_all_auto_bids(db)
+    assert _MOCK_STORE["7418"]["keywords"]["kwd-7418-11"]["bidAmt"] == 300
+    assert "권한" in c.get(url, headers=owner).json()[0]["last_result"]
