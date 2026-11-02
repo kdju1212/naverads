@@ -142,7 +142,7 @@
 
 **Workers Builds** (GitHub check-runs)
 - main 커밋(`6343e25`, `1da19d1`)은 두 Worker 모두 성공했다.
-- 이 브랜치 커밋 `2e249fc`, `487de37`, `8704424`, `a239b7a`, `eabb70f`, `1b4220f`는 **모두 두 Worker 실패**했다(시작 1분 안에 끝남). 빌드 로그 API는 11/02 밤 다시 시도해도 Forbidden.
+- 이 브랜치 커밋 `2e249fc`, `487de37`, `8704424`, `a239b7a`, `eabb70f`, `1b4220f`, `2979f79`는 **모두 두 Worker 실패**했다(시작 1분 안에 끝남). 빌드 로그 API는 11/02 밤 다시 시도해도 Forbidden.
 - 운영 빌드(main 커밋)와 비운영 브랜치 검사는 다르다: main `6c47934` = 성공 후 운영 배포, 보안 브랜치 = 실패(버전 만들지 않음).
 - 배포되지 않은 변경: `origin/main..origin/feat/web-approval-security` 커밋 6개, 파일 34개(+2510/−365). 운영에 웹 승인·쿠키 로그인·잠금이 아직 없다.
   - **운영 영향 없음(확인)**: 실패한 빌드는 버전을 만들지 않았고, 운영 배포 목록은 11/01 버전 그대로다.
@@ -155,6 +155,12 @@
     - 프론트: https://dash.cloudflare.com/7e4c8691da6c83db1b0a2180d768aafe/workers/services/view/naverads/production/builds/a2d8240c-ba39-4cf6-996b-0785316ac486
 - 운영 브랜치·자동 배포·비운영 브랜치 빌드 설정은 대시보드(Workers > 각 Worker > Settings > Builds)에만 있어 **확인하지 못했다**.
 
+**운영 Worker 바인딩** (`wrangler versions view <운영 버전> --name …`, 11/02 확인)
+- API `45d01556`: 핸들러 fetch·scheduled, D1 `DB`(f6603131-…), 요청 제한 `LIMITER`(1분 1500번), 시크릿 이름 `APP_SECRET`·`CRED_KEY`·`GOOGLE_CLIENT_ID`·`GOOGLE_CLIENT_SECRET`(값은 출력되지 않음)
+- 프론트 `fd314ba9`: 정적 자산만(바인딩·시크릿 없음)
+- 보안 브랜치는 바인딩·의존성을 바꾸지 않는다(`pyproject.toml`·`uv.lock`·`package*.json` 차이 없음). 로컬 dry-run 번들 크기는 API 압축 약 7.1MB로 지금 운영과 같은 조건이다.
+- 크론 트리거(`*/10 * * * *`)는 저장소 설정으로만 확인했다. 운영 대시보드 Triggers 화면은 확인하지 못했다.
+
 **미리보기와 운영의 분리**
 - Workers의 미리보기 버전은 **운영과 같은 바인딩**(같은 D1 `naverads`, 같은 시크릿 = 실계정 네이버 키 복호화 가능)을 쓴다.
 - 크론은 배포된 운영 버전에서만 돈다.
@@ -164,7 +170,7 @@
 
 **운영 D1** (`wrangler d1 migrations list naverads --remote`)
 - 적용 대기: `0016_web_approval_locks.sql` **하나**(0015까지 적용됨).
-- Time Travel bookmark(11/02 밤 최종 확인): `000006c2-00000000-00005117-83f00ea42bb287640fd03ff37deae1f6`(앞서 `000006c0-…`, `000006be-…`, `000006b8-…`). 마이그레이션 직전에 다시 받는다.
+- Time Travel bookmark(11/02 밤 최종 확인): `000006c3-00000002-00005117-1a48545dde4e5e928204d4da8631b785`(앞서 `000006c2-…` 등). 마이그레이션 직전에 다시 받는다.
   - 마이그레이션 직전에 다시 받아 그 값을 쓴다.
   - 무료 플랜은 7일, 유료는 30일까지 되돌릴 수 있다(공식 문서 https://developers.cloudflare.com/d1/reference/time-travel/).
 
@@ -209,6 +215,55 @@
   - **그 시점 이후 모든 데이터가 사라진다**(회원·작업 이력·승인 기록 포함). 복구 명령이 돌려주는 bookmark로 되돌릴 수는 있다.
   - 실행하기 전에 사용자 승인을 받는다. 이번 작업에서는 실행하지 않았다.
   - 0016만 빼려면 복구 대신 `DROP TABLE account_locks; DROP INDEX ix_users_google_sub; DROP INDEX ix_approval_requests_job_id;` 후 `ALTER TABLE … DROP COLUMN …`(approval_requests: kind·ad_account_id·job_id·web_required·summary, users: google_sub)과 `DELETE FROM d1_migrations WHERE name='0016_web_approval_locks.sql'`. 보통은 필요 없다.
+
+## 7-2. 제한적 배포 실행 순서 (승인 뒤에만, 11/02 준비)
+
+**프론트·API 호환성**
+| 조합 | 결과 |
+|---|---|
+| 새 프론트 + 새 API | 정상 |
+| 예전 프론트 + 새 API | 이미 로그인한 사람은 그대로 쓴다(새 API도 Bearer 헤더를 받는다). **새로 로그인은 실패한다**(새 API는 본문에 토큰을 주지 않음). 웹 승인 대상 작업은 승인 요청만 만들어지고, 예전 화면엔 승인 메뉴가 없다 |
+| 새 프론트 + 예전 API | **사이트를 쓸 수 없다**. 예전 API CORS가 `*`라 쿠키 포함 요청을 브라우저가 막고, 로그인도 쿠키를 주지 않는다 |
+
+그래서 **API가 먼저(또는 동시에) 새 버전**이어야 한다. main 병합 한 번에 Workers Builds가 두 Worker를 따로 빌드한다(지금까지 API 약 2분, 프론트 약 2~4분). 보통 API가 먼저 끝난다.
+
+**순서**
+1. (준비) GitHub에 PR을 연다 → Actions `backend`·`frontend` 통과 확인. main 보호 설정(4절)은 별도 승인 뒤.
+2. (준비) Cloudflare 대시보드에서 브랜치 빌드 실패 원인을 확인한다(6절 링크). 운영 빌드 설정(Build command·Deploy command·Root directory)이 이 브랜치에서도 맞는지 본다.
+3. 예약 대기 작업 확인(7절 4).
+4. 복구 지점 기록: `cd backend && npx wrangler d1 time-travel info naverads` → 나온 bookmark를 작업 기록에 붙여 둔다.
+5. `npx wrangler d1 migrations apply naverads --remote`(0016). 확인: `npx wrangler d1 migrations list naverads --remote`가 "No migrations to apply"이고, 7절 7의 SELECT가 두 줄.
+   - 이 상태로 두어도 지금 운영(예전 코드)은 그대로 동작한다. 여기서 멈춰도 된다.
+6. PR을 main에 병합한다(사용자 승인 뒤).
+7. GitHub의 병합 커밋 check-runs에서 `Workers Builds: naverads-api`·`naverads`가 둘 다 success인지 확인한다. 그다음 `npx wrangler deployments list --name naverads-api`/`--name naverads`의 100% 버전이 새 버전인지 본다.
+
+**한쪽만 실패했을 때**
+- **API 성공·프론트 실패**: 예전 프론트 + 새 API. 기존 로그인은 되고 새 로그인만 안 된다. 프론트 빌드를 대시보드에서 다시 시도(Retry build)하거나 원인을 고친다. 오래 걸리면 API를 `45d01556`으로 롤백한다(아래).
+- **API 실패·프론트 성공**: 새 프론트 + 예전 API라 **사이트를 못 쓴다**. 바로 프론트를 `fd314ba9`로 롤백한다: `npx wrangler rollback fd314ba9-1cac-4d09-ab44-9edf6143a765 --name naverads`. 그 뒤 API 빌드 원인을 고친다.
+- **둘 다 실패**: 운영은 예전 버전 그대로다(0016만 적용된 상태, 호환). 원인을 고친 뒤 다시 push한다.
+
+**배포 뒤 실제 브라우저 확인** (Chrome. 광고 켜기·예산·입찰가 변경 없음)
+1. 시크릿 창으로 `https://naverads.djkim0509.workers.dev/login` → 점검 전용 계정(`.test-account`)으로 로그인한다.
+2. 개발자도구(F12) > Application > Cookies > `https://naverads-api.djkim0509.workers.dev`에서 `naverads_session`이 HttpOnly ✓·Secure ✓·SameSite Strict인지 본다. Local Storage에 `token`이 없고 `session`(무작위 표시)만 있는지 본다.
+3. 새로고침해도 로그인이 유지되는지 본다. Network 탭의 `/workspaces` 요청 헤더에 `Authorization`이 없고 Cookie가 실렸는지 본다.
+4. Console에서 `fetch("https://naverads-api.djkim0509.workers.dev/workspaces",{method:"POST",credentials:"include",headers:{"content-type":"application/json"},body:"{}"})`를 실행한다 → 403(CSRF 헤더 없음)이어야 한다.
+5. 로그아웃 → 쿠키가 사라지고 `/login`으로 간다. 뒤로 가기 해도 데이터가 안 보여야 한다.
+6. 캠페인 ON 승인 요청 → **거절**(실계정 sdf 조직, 꺼진 캠페인이 있을 때만, 관리자 계정 필요)
+   - 캠페인 화면에서 꺼진 캠페인 하나를 골라 ON 미리보기를 만든다 → 실행 → `/approvals?id=…`로 이동해야 한다.
+   - 화면에 광고 계정·대상·지금 OFF → ON·변경 후 하루예산 합계·관리 기준·과금 안내가 보이는지 본다.
+   - **"거절"**을 누른다(승인 버튼은 누르지 않는다) → "거절함"이 보이는지 확인한다.
+   - 네이버 광고관리 또는 `list_campaigns`(Claude)로 그 캠페인이 계속 OFF인지 본다.
+   - 변경 이력에 '승인 요청'·'승인 거절'이 남았는지 본다.
+   - 꺼진 캠페인이 없으면 이 단계는 하지 않는다(켜진 캠페인을 끄고 다시 켜는 테스트는 하지 않는다).
+7. Claude에서 "꺼진 캠페인 켜 줘"라고 하면 실행 대신 승인 주소를 안내하는지 본다. 그 요청도 웹에서 거절한다.
+
+**롤백과 데이터 영향**
+| 롤백 | 명령 | 데이터 영향 |
+|---|---|---|
+| 코드(두 Worker 함께) | `npx wrangler rollback 45d01556-7275-40c7-bd6e-c6225a4cd66f --name naverads-api` 그리고 `npx wrangler rollback fd314ba9-1cac-4d09-ab44-9edf6143a765 --name naverads` | 없음. 0016 열·표는 남지만 예전 코드는 무시한다. 배포 뒤 만들어진 승인 요청·잠금 행은 남는다(쓰이지 않음). 쿠키로 로그인한 사람은 예전 화면에서 다시 로그인해야 한다 |
+| 그 뒤 main 되돌리기 | main에서 병합 커밋을 되돌리는 PR(revert) | 없음. 다음 push 때 새 코드가 다시 배포되지 않게 한다 |
+| DB(최후 수단) | `npx wrangler d1 time-travel restore naverads --bookmark=<4단계 값>` | **4단계 이후의 모든 쓰기(회원·작업 이력·감사 로그·승인·자동입찰 결과)가 사라진다.** 복구가 돌려주는 bookmark로 되돌릴 수는 있다. 사용자 승인 없이는 하지 않는다 |
+| 0016만 빼기(보통 불필요) | 7절의 DROP·ALTER SQL | 승인 요청 기록의 새 열 값과 Google 연결(sub)이 사라진다 |
 
 ## 7-1. 로컬 격리 환경 확인 기록 (2026-11-02 밤)
 
