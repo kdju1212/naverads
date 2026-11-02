@@ -38,6 +38,11 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
   9. 테스트: 백엔드 113개, 프론트 lint·test 10개·build, 로컬 격리 서버 E2E 16개(쿠키·CSRF·CORS·캠페인 ON 승인 요청·거절)
 
 [할 것 — 순서대로]
+  0. [먼저, 1분] PR #3(docs/summary-1102 → main) 병합: https://github.com/kdju1212/naverads/pull/3
+     - 11/02 밤 열어 두고 병합 안 한 채 종료(사용자). 이 정리(11/02 밤 기준)는 아직 이 브랜치에만 있고 main 작업정리는 그 전 버전
+     - 검사: backend·frontend 통과, Workers Builds 두 개 실패 = 늘 실패하는 브랜치 검사(운영 영향 없음) → 그대로 Merge
+     - 문서만 바뀜. 병합 뒤 운영 빌드가 실패해도 운영은 이전 버전 그대로라 영향 없음
+     - 이 PC 작업 폴더는 docs/summary-1102 브랜치에 체크아웃된 상태로 끝냄(병합 뒤 git checkout main && git pull)
   1. [직접, 먼저] 운영 브라우저 확인(SECURITY_OPERATIONS.md 7-2절 '배포 뒤 실제 브라우저 확인')
      - Chrome 시크릿 창으로 로그인 → 새로고침해도 유지 → F12 Cookies에서 naverads_session HttpOnly·Secure·SameSite Strict
      - 꺼진 캠페인 ON 미리보기 → 실행 → /approvals로 이동 → 대상·OFF→ON·하루예산 안내 확인 → '거절' → 네이버에서 계속 OFF
