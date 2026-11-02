@@ -566,3 +566,40 @@ def test_place_network_error_not_retried(monkeypatch):
     monkeypatch.setattr(MockNaverClient, "create_campaign", real)
     assert _apply(owner, ws, aid, acc, "create", **params).status_code == 409  # 같은 승인으로 다시 실행 안 됨
     assert sum(c["campaignTp"] == "PLACE" for c in st["campaigns"].values()) == 1
+
+
+def test_extension_lock_and_unknown_result(monkeypatch):
+    """확장소재 등록: 조회 중 잠금을 잃으면 등록 요청을 보내지 않고, 잠금이 유지되면 등록되며, 응답이 끊기면 다시 보내지 않고 확인을 안내한다."""
+    owner, ws, acc = _account("ap-ext@a.com", "7421")
+    MockNaverClient("7421")
+    st = _MOCK_STORE["7421"]
+    body = {"ad_account_id": acc, "adgroup_naver_id": "grp-7421-pl1", "ext_type": "HEADLINE", "heading": "무료배송"}
+    count = lambda: sum(e["ownerId"] == "grp-7421-pl1" for e in st["ad-extensions"].values())  # noqa: E731
+    before = count()
+    real_now, real_list, real_create = safety.now, MockNaverClient.list_campaigns, MockNaverClient.create_ad_extension
+    shift = {"s": 0}
+    safety.now = lambda: real_now() + timedelta(seconds=shift["s"])
+
+    def slow_lookup(self):  # 안전장치 조회가 오래 걸리고 그사이 다른 작업이 잠금을 가져감
+        shift["s"] += 100
+        with SessionLocal() as db2:
+            assert safety.take_lock(db2, acc)
+        return real_list(self)
+    monkeypatch.setattr(MockNaverClient, "list_campaigns", slow_lookup)
+    try:
+        r = c.post(f"/workspaces/{ws}/ad-extensions", headers=owner, json=body)
+    finally:
+        safety.now = real_now
+    assert r.status_code == 409 and r.json()["detail"] == safety.LOCK_LOST and count() == before  # 보내지 않음
+    monkeypatch.setattr(MockNaverClient, "list_campaigns", real_list)
+    with SessionLocal() as db:  # 가져간 작업이 끝난 상태
+        db.query(safety.AccountLock).delete()
+        db.commit()
+    assert c.post(f"/workspaces/{ws}/ad-extensions", headers=owner, json=body).status_code == 200 and count() == before + 1
+
+    def written_but_no_reply(self, *a, **kw):
+        real_create(self, *a, **kw)
+        raise bulk.NaverApiError("네트워크 오류: timed out")
+    monkeypatch.setattr(MockNaverClient, "create_ad_extension", written_but_no_reply)
+    r = c.post(f"/workspaces/{ws}/ad-extensions", headers=owner, json=body)
+    assert r.status_code == 400 and r.json()["detail"] == bulk.UNKNOWN and count() == before + 2  # 한 번만 보냄, 확인 안내

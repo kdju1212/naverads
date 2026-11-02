@@ -142,7 +142,7 @@
 
 **Workers Builds** (GitHub check-runs)
 - main 커밋(`6343e25`, `1da19d1`)은 두 Worker 모두 성공했다.
-- 이 브랜치 커밋 `2e249fc`, `487de37`, `8704424`, `a239b7a`는 **모두 두 Worker 실패**했다(시작 1분 안에 끝남).
+- 이 브랜치 커밋 `2e249fc`, `487de37`, `8704424`, `a239b7a`, `eabb70f`는 **모두 두 Worker 실패**했다(시작 1분 안에 끝남). 빌드 로그 API는 11/02 밤 다시 시도해도 Forbidden.
   - **운영 영향 없음(확인)**: 실패한 빌드는 버전을 만들지 않았고, 운영 배포 목록은 11/01 버전 그대로다.
   - 빌드 로그는 이 PC의 wrangler 토큰 권한으로 읽을 수 없었다(Forbidden).
   - 로컬에서는 같은 코드로 두 Worker 모두 번들링(dry-run)에 성공했다.
@@ -162,7 +162,7 @@
 
 **운영 D1** (`wrangler d1 migrations list naverads --remote`)
 - 적용 대기: `0016_web_approval_locks.sql` **하나**(0015까지 적용됨).
-- Time Travel bookmark(11/02 저녁 확인): `000006be-00000002-00005117-3c801698d47ae8d77b96c00f33a9888f`(낮 값 `000006b8-…`)
+- Time Travel bookmark(11/02 밤 확인): `000006c0-00000000-00005117-f4be1dcf11fbfbff52fa6d3ccaf2b3ff`(앞서 `000006be-…`, `000006b8-…`). 마이그레이션 직전에 다시 받는다.
   - 마이그레이션 직전에 다시 받아 그 값을 쓴다.
   - 무료 플랜은 7일, 유료는 30일까지 되돌릴 수 있다(공식 문서 https://developers.cloudflare.com/d1/reference/time-travel/).
 

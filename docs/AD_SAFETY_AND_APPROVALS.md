@@ -129,7 +129,7 @@
 - 같은 광고 계정(조직이 달라도 같은 네이버 계정)의 비용 변경은 한 번에 하나만 "검사 → 네이버 반영"을 한다. 두 작업이 같은 옛 합계를 보고 함께 통과하지 않게 하기 위해서다.
 - 얻기: `INSERT … ON CONFLICT DO UPDATE … WHERE expires_at < now` 한 문장. 쥔 열쇠(holder)가 내 것인지 다시 읽어 확인한다.
 - 장애 복구: 임대 90초(`LOCK_LEASE`). 요청이 죽어 풀지 못한 잠금은 90초 뒤 다른 요청이 가져간다. 풀기는 내 열쇠일 때만 한다.
-- 긴 실행: 비용 행을 네이버에 보내기 직전마다(플레이스는 단계마다: 캠페인→광고그룹→소재) 내 잠금의 임대를 다시 90초로 연장한다(`safety.renew_lock`, 플레이스 `place._run(still_locked)`). 그사이 임대가 끝나 다른 요청이 가져갔으면 남은 비용 행은 실행하지 않는다(`safety.LOCK_LOST`). 재현 테스트: `test_lock_lease_renewed_and_lost_lock_stops`, `test_place_lock_renewed_and_lost_lock_stops`(11/02 저녁: 플레이스는 잠금을 잃어도 남은 단계를 계속 실행하던 것을 재현 후 수정).
+- 긴 실행: 비용 행을 네이버에 보내기 직전마다(플레이스는 단계마다: 캠페인→광고그룹→소재, 확장소재는 등록 요청 직전) 내 잠금의 임대를 다시 90초로 연장한다(`safety.renew_lock`, 플레이스 `place._run(still_locked)`). 그사이 임대가 끝나 다른 요청이 가져갔으면 남은 비용 행은 실행하지 않는다(`safety.LOCK_LOST`). 재현 테스트: `test_lock_lease_renewed_and_lost_lock_stops`, `test_place_lock_renewed_and_lost_lock_stops`(11/02 저녁: 플레이스는 잠금을 잃어도 남은 단계를 계속 실행하던 것을 재현 후 수정), `test_extension_lock_and_unknown_result`(확장소재: 잠금을 잃으면 409로 보내지 않음, 응답 끊기면 `bulk.UNKNOWN` 안내·재시도 없음).
 - 응답을 못 받은 쓰기(네트워크 오류·시간 초과)는 네이버에 반영됐을 수 있다. 행은 `bulk.UNKNOWN`(반영 여부 모름)으로 실패하고, 실패 행 재실행에서도 다시 실행하지 않는다(등록이 두 번 되지 않게). 플레이스도 같은 안내를 보여 준다. 자동 재시도는 어디에도 없다.
 - 쓰는 곳
   - `bulk.execute_job`: 그 실행 묶음(최대 5행)에 비용 행이 있는 계정만 잠근다. 웹·Claude·예약·자동입찰·목표 ROAS가 모두 이곳을 지난다.

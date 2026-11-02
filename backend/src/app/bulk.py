@@ -558,13 +558,16 @@ def create_extension(db: Session, m: Membership, account_id: int, adgroup_naver_
     _check_edit(db, m, account_id)
     client = _client(db, m.workspace_id, account_id)
     try:  # 확장소재는 켜진 상태로 생겨 광고가 더 눈에 띌 수 있다 → 계정 합계가 관리 기준 안일 때만(잠금 안에서 검사·등록)
-        with safety.account_lock(db, account_id):
+        with safety.account_lock(db, account_id) as holder:
             safety.check(db, m.workspace_id, account_id, [("on", "ad_extension", None)], lambda: client)
+            # 위 조회가 길어 잠금 임대가 끝났으면 다른 작업과 겹칠 수 있다 → 보내기 직전에 내 잠금인지 확인·연장, 아니면 보내지 않는다
+            if not safety.renew_lock(db, account_id, holder):
+                raise HTTPException(409, safety.LOCK_LOST)
             e = client.create_ad_extension(adgroup_naver_id, ext_type, content)
     except safety.SafetyError as err:
         raise HTTPException(400, str(err))
-    except NaverApiError as err:
-        raise HTTPException(400, f"네이버 확장소재 생성 실패: {err}")
+    except NaverApiError as err:  # 응답을 못 받았으면 등록됐을 수 있다 → 다시 보내지 말고 네이버에서 확인하게
+        raise HTTPException(400, UNKNOWN if str(err).startswith("네트워크 오류") else f"네이버 확장소재 생성 실패: {err}")
     row = extension_row(account_id, {"type": ext_type, **e})
     if not e.get("adExtension"):
         row["payload"] = content
