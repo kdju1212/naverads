@@ -96,7 +96,7 @@
 **필수 테스트 워크플로**
 - `.github/workflows/test.yml`
   - `backend`: `uv run --python 3.13 --group local pytest -q`
-  - `frontend`: `npm ci` → `tsc --noEmit` → `lint` → `npm test` → `build`
+  - `frontend`: `npm ci` → `lint` → `npm test` → `build`(타입 검사 포함)
 - 네이버는 Mock만 쓰고 비밀값은 필요 없다. PR을 열면 처음 돈다.
 
 **설정할 것** (Settings > Rules > Rulesets > New branch ruleset)

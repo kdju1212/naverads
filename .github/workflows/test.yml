@@ -29,7 +29,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
-      - run: npx tsc --noEmit
+      # 타입 검사는 next build가 한다(따로 tsc를 먼저 돌리면 빌드가 만드는 .next 타입(LayoutProps 등)이 없어 실패)
       - run: npm run lint
       - run: npm test
       - run: npm run build
