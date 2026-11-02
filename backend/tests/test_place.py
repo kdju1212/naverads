@@ -17,8 +17,13 @@ def _apply(h, ws, approval_id, acc, action, **params):
 
 
 def _do(h, ws, acc, action, **params):
+    """계획 → 적용. 계정 하루예산 합계가 늘 수 있는 변경(web_required)은 웹 승인 화면의 승인으로 실행한다."""
     r = _plan(h, ws, acc, action, **params)
     assert r.status_code == 200, r.json()
+    if r.json()["summary"]["web_required"]:
+        out = c.post(f"/workspaces/{ws}/approvals/{r.json()['approval_id']}/approve", headers=h)
+        assert out.status_code == 200, out.json()
+        return out.json()["place"]
     out = _apply(h, ws, r.json()["approval_id"], acc, action, **params)
     assert out.status_code == 200, out.json()
     return out.json()
@@ -130,26 +135,47 @@ def test_caps_enforced():
 
 
 def test_approval_tamper_reuse_expiry_and_owner():
+    from app import approvals
     owner, ws, acc = _account("pl-apr@a.com", "8105")
     _, camp, _ = _new_place(owner, ws, acc, "8105")
     cid = camp["nccCampaignId"]
-    aid = _plan(owner, ws, acc, "set_budget", campaign_id=cid, daily_budget=20000).json()["approval_id"]
-    r = _apply(owner, ws, aid, acc, "set_budget", campaign_id=cid, daily_budget=90000)  # 승인 뒤 금액 바꿔치기
-    assert r.status_code == 409 and _MOCK_STORE["8105"]["campaigns"][cid]["dailyBudget"] == 10000
+    # 예산 올리기 = 웹 승인 대상: 같은 내용이어도 적용(Claude·화면 apply)으로는 실행되지 않는다
+    r = _plan(owner, ws, acc, "set_budget", campaign_id=cid, daily_budget=20000).json()
+    aid = r["approval_id"]
+    assert r["web_required"] and "/approvals?id=" in r["approve_url"]
+    assert _apply(owner, ws, aid, acc, "set_budget", campaign_id=cid, daily_budget=90000).status_code == 409  # 바꿔치기
+    assert _apply(owner, ws, aid, acc, "set_budget", campaign_id=cid, daily_budget=20000).status_code == 403  # 웹 승인 없이
+    assert _MOCK_STORE["8105"]["campaigns"][cid]["dailyBudget"] == 10000
     other = _viewer(owner, ws, acc, "pl-apr-v@a.com")
-    assert _apply(other, ws, aid, acc, "set_budget", campaign_id=cid, daily_budget=20000).status_code == 404  # 남의 승인 요청
-    # 모르는 값을 끼워 넣어도 실행 내용은 그대로(허용한 값만 해시) → 통과
-    assert _apply(owner, ws, aid, acc, "set_budget", campaign_id=cid, daily_budget=20000, extra="x").json()["status"] == "SUCCESS"
-    assert _apply(owner, ws, aid, acc, "set_budget", campaign_id=cid, daily_budget=20000).status_code == 409  # 재사용
+    assert c.post(f"/workspaces/{ws}/approvals/{aid}/approve", headers=other).status_code in (403, 404)  # 남의 승인 요청
+    outsider, ws_b, _ = _account("pl-apr-b@a.com", "8115")
+    assert c.post(f"/workspaces/{ws_b}/approvals/{aid}/approve", headers=outsider).status_code == 404  # 다른 조직
+    out = c.post(f"/workspaces/{ws}/approvals/{aid}/approve", headers=owner).json()
+    assert out["status"] == "DONE" and out["place"]["status"] == "SUCCESS" and _MOCK_STORE["8105"]["campaigns"][cid]["dailyBudget"] == 20000
+    assert c.post(f"/workspaces/{ws}/approvals/{aid}/approve", headers=owner).status_code == 409  # 재사용
 
     aid = _plan(owner, ws, acc, "set_budget", campaign_id=cid, daily_budget=30000).json()["approval_id"]
+    real_now = approvals.now
+    approvals.now = lambda: real_now() + timedelta(minutes=31)
+    try:
+        assert c.post(f"/workspaces/{ws}/approvals/{aid}/approve", headers=owner).status_code == 410
+    finally:
+        approvals.now = real_now
+    assert c.get(f"/workspaces/{ws}/approvals/{aid}", headers=owner).json()["status"] == "EXPIRED"
+    assert _MOCK_STORE["8105"]["campaigns"][cid]["dailyBudget"] == 20000
+
+    # 예산 줄이기는 웹 승인 없이 Claude 적용: 모르는 값을 끼워 넣어도 실행 내용은 그대로(허용한 값만 해시), 재사용·만료는 막힌다
+    aid = _plan(owner, ws, acc, "set_budget", campaign_id=cid, daily_budget=15000).json()["approval_id"]
+    assert _apply(owner, ws, aid, acc, "set_budget", campaign_id=cid, daily_budget=15000, extra="x").json()["status"] == "SUCCESS"
+    assert _apply(owner, ws, aid, acc, "set_budget", campaign_id=cid, daily_budget=15000).status_code == 409
+    aid = _plan(owner, ws, acc, "set_budget", campaign_id=cid, daily_budget=12000).json()["approval_id"]
     real_now = place.now
     place.now = lambda: real_now() + timedelta(minutes=16)
     try:
-        assert _apply(owner, ws, aid, acc, "set_budget", campaign_id=cid, daily_budget=30000).status_code == 410
+        assert _apply(owner, ws, aid, acc, "set_budget", campaign_id=cid, daily_budget=12000).status_code == 410
     finally:
         place.now = real_now
-    assert _MOCK_STORE["8105"]["campaigns"][cid]["dailyBudget"] == 20000
+    assert _MOCK_STORE["8105"]["campaigns"][cid]["dailyBudget"] == 15000
 
 
 def test_cross_account_and_role_blocks():
@@ -193,9 +219,11 @@ def test_powerlink_targets_rejected_and_naver_failure():
     aid = _plan(owner, ws, acc, "set_budget", campaign_id=cid, daily_budget=20000).json()["approval_id"]
     MOCK_FAIL_IDS.add(cid)
     try:
-        out = _apply(owner, ws, aid, acc, "set_budget", campaign_id=cid, daily_budget=20000).json()
+        r = c.post(f"/workspaces/{ws}/approvals/{aid}/approve", headers=owner).json()
+        out = r["place"]
     finally:
         MOCK_FAIL_IDS.discard(cid)
+    assert r["status"] == "FAILED"  # 승인 요청에도 실제 결과(실패)가 남는다
     assert out["status"] == "FAILED" and not out["steps"][0]["ok"] and "네이버가 요청을 받아들이지 않았어요" in out["steps"][0]["error"]
     assert out["notice"] is None  # 실패면 '검토 후 노출' 안내를 하지 않는다
 

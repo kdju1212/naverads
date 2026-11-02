@@ -30,6 +30,7 @@ BUDGET_MAX = int(os.getenv("PLACE_DAILY_BUDGET_MAX", "100000"))
 BID_MIN = 50  # shortcut: 플레이스 최소 입찰가는 공식 문서에서 확인 못 함(네이버 화면 기준 50원), 거부되면 이 값 조정
 BID_MAX = int(os.getenv("PLACE_BID_MAX", "5000"))
 APPROVAL_TTL = timedelta(minutes=15)
+WEB_APPROVAL_TTL = timedelta(minutes=30)  # 웹 승인은 사장님이 웹을 열어 볼 시간이 필요하다(approvals.APPROVAL_TTL과 같게)
 DETAIL_GROUPS = 15  # 상태 조회에서 소재·제외검색어까지 읽는 광고그룹 수(무료 플랜 요청당 외부 호출 50번 한도)
 
 NOTICE = ("광고가 바로 나가는 것은 아니에요. 새로 만든 광고는 꺼진 상태로 만들어지고, 네이버 검토를 통과한 뒤 켜야 노출돼요. "
@@ -81,6 +82,8 @@ class PlaceApply(BaseModel):
 
 
 def friendly(err: Exception | str) -> str:
+    if str(err).startswith("네트워크 오류"):  # 응답을 못 받으면 반영됐을 수 있다 → 다시 하기 전에 확인하게
+        return "네이버 응답을 받지 못해 반영됐는지 알 수 없어요. 다시 하기 전에 네이버 광고관리에서 먼저 확인해 주세요"
     m = re.search(r'"code"\s*:\s*(\d+)', str(err))
     code = int(m.group(1)) if m else None
     return f"{FRIENDLY[code]} (네이버 오류 {code})" if code in FRIENDLY else f"네이버가 요청을 받아들이지 않았어요: {str(err)[:200]}"
@@ -170,10 +173,12 @@ def _guard(db: Session, ws_id: int, account_id: int, client, ops: list[tuple]) -
     return {**out, "daily_budget_limit": sf and sf.daily_budget_limit, "max_bid": sf and sf.max_bid, "note": safety.OVERSPEND_NOTE}
 
 
-def _inspect(client, action: str, p: dict, guard) -> dict:
-    """현재 값을 네이버에서 읽어 규칙을 검사하고 사장님이 볼 요약(대상·전후·최대 지출·계정 안전장치)을 만든다. 막아야 하면 HTTPException."""
+def _inspect(client, action: str, p: dict, guard, check_caps) -> dict:
+    """현재 값을 네이버에서 읽어 규칙을 검사하고 사장님이 볼 요약(대상·전후·최대 지출·계정 안전장치·웹 승인 필요 여부)을 만든다.
+    막아야 하면 HTTPException. increases: 이 변경으로 지출이 늘 수 있는지(안내 문구를 정한다)."""
     s = {"action": action, "label": ACTION_LABEL[action], "notes": []}
     ops: list[tuple] = []
+    increases = False
     if action == "create":
         _check_budget(p["daily_budget"])
         ch = next((c for c in client.list_channels() if c["nccBusinessChannelId"] == p["business_id"]), None)
@@ -188,7 +193,7 @@ def _inspect(client, action: str, p: dict, guard) -> dict:
             if "bid" not in p:
                 raise HTTPException(400, "일반 플레이스광고는 입찰가(클릭 한 번에 낼 최대 금액)가 필요해요")
             _check_bid(p["bid"])
-            ops.append(("bid", p["bid"]))
+            check_caps(("bid", p["bid"], None, None))  # 꺼진 상태로 만들어지므로 합계는 켤 때 검사, 입찰가 상한만 지금
             if isinstance(client, RealNaverClient) and os.getenv("NAVER_ALLOW_REAL_WRITE") != "1":
                 raise HTTPException(400, "일반 플레이스광고 소재는 네이버 요청 형식이 확인되지 않아 아직 여기서 만들 수 없어요. "
                                          "ADVoost로 만들거나 네이버 광고관리에서 만들어 주세요")
@@ -205,6 +210,7 @@ def _inspect(client, action: str, p: dict, guard) -> dict:
         s.update(target=f"캠페인 '{c['name']}'", before=f"하루예산 {_won(_budget(c))}", after=f"하루예산 {_won(p['daily_budget'])}",
                  max_daily=p["daily_budget"])
         ops.append(("budget", c["nccCampaignId"], p["daily_budget"]))
+        increases = _budget(c) is not None and p["daily_budget"] > _budget(c)
     elif action == "set_bid":
         _check_bid(p["bid"])
         g = _place_group(client, p["adgroup_id"])
@@ -213,7 +219,10 @@ def _inspect(client, action: str, p: dict, guard) -> dict:
         camp = _place_campaign(client, g["nccCampaignId"])
         s.update(target=f"광고그룹 '{g['name']}'", before=f"입찰가 {_won(g.get('bidAmt'))}", after=f"입찰가 {_won(p['bid'])}",
                  max_daily=_budget(camp))
-        ops.append(("bid", p["bid"]))
+        ops.append(("bid", p["bid"], "adgroup", g["nccAdgroupId"]))
+        increases = p["bid"] > (g.get("bidAmt") or 0)
+        if increases:
+            s["notes"].append("입찰가를 올리면 클릭 한 번 비용이 늘고 같은 하루예산을 더 빨리 쓸 수 있어요.")
     elif action in ("turn_on", "turn_off"):
         on = action == "turn_on"
         tt, tid = p["target_type"], p["target_id"]
@@ -235,7 +244,7 @@ def _inspect(client, action: str, p: dict, guard) -> dict:
                  max_daily=_budget(camp) if on else None)
         if on:
             ops.append(("on", tt, tid))
-        if on:
+            increases = True
             s["notes"].append("켜도 네이버 검토 중이면 검토가 끝난 뒤에 노출돼요.")
     elif action == "set_advoost":
         g = _place_group(client, p["adgroup_id"])
@@ -243,7 +252,8 @@ def _inspect(client, action: str, p: dict, guard) -> dict:
         s.update(target=f"광고그룹 '{g['name']}'", before="ADVoost 켜짐" if advoost_on(g) else "ADVoost 꺼짐",
                  after="ADVoost 켜짐" if p["on"] else "ADVoost 꺼짐", max_daily=_budget(camp) if p["on"] else None)
         if p["on"]:
-            ops.append(("start",))
+            ops.append(("advoost", g["nccAdgroupId"]))
+            increases = True
         s["notes"].append("ADVoost를 켜면 네이버가 업체 정보로 광고를 자동으로 만들고 입찰가·검색어를 알아서 조절해요. "
                           "켜져 있는 동안은 입찰가 변경·제외검색어 등록·광고 직접 추가를 할 수 없어요." if p["on"] else
                           "ADVoost를 끄면 자동으로 만든 광고는 지워지지 않고 꺼져요. 입찰가를 직접 정해 주세요.")
@@ -258,12 +268,22 @@ def _inspect(client, action: str, p: dict, guard) -> dict:
                    if k.get("nccAdgroupRestrictKwdId") == p["keyword_id"]), None)
         if kw is None:
             raise HTTPException(404, "이 광고그룹에 그 제외검색어가 없어요")
-        s.update(target=f"광고그룹 '{g['name']}'", before=f"'{kw['keyword']}' 검색 제외", after="제외 해제", max_daily=None)
+        s.update(target=f"광고그룹 '{g['name']}'", before=f"'{kw['keyword']}' 검색 제외", after="제외 해제",
+                 max_daily=_budget(_place_campaign(client, g["nccCampaignId"])))
+        ops.append(("expose",))
+        increases = True
     s["safety"] = guard(ops)
+    s["web_required"] = safety.web_approval_needed(ops, lambda: client)
     s["max_daily_spend"] = s.pop("max_daily")
     s["max_monthly_spend"] = s["max_daily_spend"] * 31 if s["max_daily_spend"] else None
-    s["spend_text"] = (f"하루예산 설정액 {_won(s['max_daily_spend'])} (31일이면 {_won(s['max_monthly_spend'])})"
-                       if s["max_daily_spend"] else "이 변경으로 지출이 늘지 않아요")
+    if action == "create":
+        s["spend_text"] = f"꺼진 상태로 만들어 지금은 지출이 없어요. 켜면 캠페인 하루예산 설정액 {_won(p['daily_budget'])}까지 쓸 수 있어요"
+    elif not increases:
+        s["spend_text"] = "이 변경으로 지출이 늘지 않아요"
+    elif s["max_daily_spend"]:
+        s["spend_text"] = f"지출이 늘 수 있어요. 캠페인 하루예산 설정액 {_won(s['max_daily_spend'])} (31일이면 {_won(s['max_monthly_spend'])})"
+    else:  # 하루예산 설정액이 없으면 이 화면이 하루 최대 지출을 말할 수 없다
+        s["spend_text"] = "지출이 늘 수 있어요. 캠페인에 하루예산이 없어 하루 최대 지출을 정할 수 없어요"
     if s["safety"].get("total_after") is not None:
         s["spend_text"] += (f" · 변경 후 계정 하루예산 설정액 합계 {_won(s['safety']['total_after'])}"
                             f" (관리 기준 {_won(s['safety']['daily_budget_limit'])})")
@@ -277,12 +297,16 @@ def _audit(db, m, account_id, action, naver_id, field, before=None, after=None, 
                     after=None if after is None else str(after)[:50]))
 
 
-def _run(db, m, client, account_id: int, action: str, p: dict) -> list[dict]:
-    """실제 변경. 단계별 결과를 돌려준다(앞 단계가 실패하면 뒤 단계는 하지 않음)."""
+def _run(db, m, client, account_id: int, action: str, p: dict, still_locked=lambda: True) -> list[dict]:
+    """실제 변경. 단계별 결과를 돌려준다(앞 단계가 실패하면 뒤 단계는 하지 않음).
+    still_locked: 단계마다 계정 잠금 임대를 연장하고, 잠금을 잃었으면(네이버 호출이 길어 만료 → 다른 작업이 가져감) 그 단계부터 하지 않는다."""
     steps = []
 
     def step(label, fn):
         if steps and not steps[-1]["ok"]:
+            return None
+        if not still_locked():
+            steps.append({"step": label, "ok": False, "error": safety.LOCK_LOST})
             return None
         try:
             out = fn()
@@ -335,18 +359,39 @@ def plan(db: Session, m: Membership, change: PlaceChange) -> dict:
     p = _norm(change.action, change.params)
     client = bulk._client(db, m.workspace_id, change.ad_account_id)
     try:
-        summary = _inspect(client, change.action, p, lambda ops: _guard(db, m.workspace_id, change.ad_account_id, client, ops))
+        summary = _inspect(client, change.action, p, *_checks(db, m.workspace_id, change.ad_account_id, client))
     except NaverApiError as e:
         raise HTTPException(400, friendly(e))
     payload = _canonical(change.ad_account_id, change.action, p)
+    ttl = WEB_APPROVAL_TTL if summary["web_required"] else APPROVAL_TTL
     ar = ApprovalRequest(workspace_id=m.workspace_id, requested_by=m.user_id, tool=f"place:{change.action}"[:40], payload=payload,
-                         payload_hash=hashlib.sha256(payload.encode()).hexdigest(), status="PENDING", expires_at=now() + APPROVAL_TTL)
+                         payload_hash=hashlib.sha256(payload.encode()).hexdigest(), status="PENDING", expires_at=now() + ttl,
+                         kind="place", ad_account_id=change.ad_account_id, web_required=summary["web_required"],
+                         summary=json.dumps(summary, ensure_ascii=False, default=str))
     db.add(ar)
     db.flush()
     _audit_approval(db, m, ar, change.ad_account_id, "APPROVAL_PENDING")
     db.commit()
-    return {"approval_id": ar.id, "expires_in_minutes": int(APPROVAL_TTL.total_seconds() // 60), "summary": summary,
-            "how_to_apply": "이 내용을 사장님께 보여 주고 승인받은 뒤, 같은 change와 approval_id로 적용하세요."}
+    out = {"approval_id": ar.id, "expires_in_minutes": int(ttl.total_seconds() // 60), "summary": summary}
+    if summary["web_required"]:
+        from .approvals import url  # approvals가 이 모듈을 불러 쓰므로 여기서
+        return {**out, "web_required": True, "approve_url": url(ar),
+                "how_to_apply": f"계정 하루예산 합계가 늘 수 있는 변경이라 사장님이 웹에서 직접 승인해야 실행돼요: {url(ar)} "
+                                "(Claude는 승인·적용할 수 없어요). 승인하면 그 자리에서 실행되고 결과가 화면에 나와요."}
+    return {**out, "how_to_apply": "이 내용을 사장님께 보여 주고 승인받은 뒤, 같은 change와 approval_id로 적용하세요."}
+
+
+def _checks(db: Session, ws_id: int, account_id: int, client):
+    """_inspect에 넘기는 검사 두 개: 안전장치 전체(네이버 다시 읽음), 입찰가 상한만."""
+    return (lambda ops: _guard(db, ws_id, account_id, client, ops),
+            lambda *ops: _caps(db, ws_id, account_id, list(ops)))
+
+
+def _caps(db: Session, ws_id: int, account_id: int, ops: list[tuple]):
+    try:
+        safety.check_bids(safety.get(db, ws_id, account_id), ops)
+    except safety.SafetyError as e:
+        raise HTTPException(400, str(e))
 
 
 def _audit_approval(db, m, ar: ApprovalRequest, account_id: int | None, action: str, after: str | None = None):
@@ -366,6 +411,9 @@ def apply(db: Session, m: Membership, approval_id: int, change: PlaceChange) -> 
     payload = _canonical(change.ad_account_id, change.action, p)
     if hashlib.sha256(payload.encode()).hexdigest() != ar.payload_hash:
         raise HTTPException(409, "승인한 내용과 실행하려는 내용이 달라요. 계획부터 다시 만들어 주세요")
+    if ar.web_required:  # 계정 합계가 늘 수 있는 변경은 웹 승인 화면에서만 실행된다(Claude·이 경로로는 불가)
+        from .approvals import url
+        raise HTTPException(403, f"이 변경은 사장님이 웹 승인 화면에서 직접 승인해야 실행돼요: {url(ar)}")
     if ar.status == "PENDING" and _aware(ar.expires_at) < now():
         ar.status = "EXPIRED"
         _audit_approval(db, m, ar, change.ad_account_id, "APPROVAL_EXPIRED")
@@ -378,6 +426,13 @@ def apply(db: Session, m: Membership, approval_id: int, change: PlaceChange) -> 
     if claimed != 1:
         raise HTTPException(409, "이미 실행했거나 실행 중인 요청이에요. 다시 하려면 계획부터 새로 만들어 주세요")
     db.refresh(ar)
+    return _execute(db, m, ar, change)
+
+
+def _execute(db: Session, m: Membership, ar: ApprovalRequest, change: PlaceChange) -> dict:
+    """RUNNING으로 잡은 승인 요청을 실행한다(Claude 적용·웹 승인 공통). 계정 잠금 안에서 권한·네이버 지금 값·안전장치를 다시 검사하고,
+    승인 때 보여 준 변경 전 값과 지금 값이 다르면 실행하지 않는다."""
+    p = _norm(change.action, change.params)
 
     def finish(status, steps, error=None):
         ar.status, ar.result = {"SUCCESS": "DONE"}.get(status, status), json.dumps({"steps": steps, "error": error}, ensure_ascii=False)[:2000]
@@ -388,8 +443,16 @@ def apply(db: Session, m: Membership, approval_id: int, change: PlaceChange) -> 
     try:  # 승인 뒤 권한·상태가 바뀌었을 수 있어 실행 직전에 다시 검사한다
         bulk._check_edit(db, m, change.ad_account_id)
         client = bulk._client(db, m.workspace_id, change.ad_account_id)
-        _inspect(client, change.action, p, lambda ops: _guard(db, m.workspace_id, change.ad_account_id, client, ops))
-        steps = _run(db, m, client, change.ad_account_id, change.action, p)
+        with safety.account_lock(db, change.ad_account_id) as holder:
+            fresh = _inspect(client, change.action, p, *_checks(db, m.workspace_id, change.ad_account_id, client))
+            shown = json.loads(ar.summary).get("before") if ar.summary else fresh.get("before")
+            if shown != fresh.get("before"):
+                return finish("FAILED", [], f"승인 때와 네이버의 지금 값이 달라 실행하지 않았어요(승인 때 {shown}, 지금 {fresh.get('before')}). "
+                                            "계획부터 다시 만들어 주세요")
+            steps = _run(db, m, client, change.ad_account_id, change.action, p,
+                         lambda: safety.renew_lock(db, change.ad_account_id, holder))
+    except safety.SafetyError as e:
+        return finish("FAILED", [], str(e))
     except HTTPException as e:
         return finish("FAILED", [], e.detail)
     except NaverApiError as e:
@@ -501,7 +564,9 @@ TOOLS = [
      "ADVoost가 켜진 그룹은 입찰가 변경·제외검색어·광고 직접 추가가 막혀 있다(오류에 이유가 나온다).",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "action", "params"], "properties": {**_WS, **_CHANGE}}},
     {"name": "place_ads_apply", "description":
-     "place_ads_plan으로 만든 계획을 네이버에 실제로 적용한다. 계획과 똑같은 ad_account_id·action·params와 approval_id를 넣어야 하며 "
+     "place_ads_plan으로 만든 계획을 네이버에 실제로 적용한다. 계획 결과에 web_required가 true면(예산 올리기·캠페인 켜기·ADVoost 켜기) "
+     "이 도구로는 적용되지 않으니 approve_url을 사장님께 알려 웹에서 승인받게 하고 get_approval로 결과를 확인한다. "
+     "그 밖에는 계획과 똑같은 ad_account_id·action·params와 approval_id를 넣어야 하며 "
      "(하나라도 다르면 거부), 같은 계획은 한 번만, 15분 안에만 적용된다. 결과 status는 SUCCESS(모두 성공)·PARTIAL(일부만 성공)·FAILED. "
      "적용돼도 광고가 바로 노출된다고 말하지 말고 notice(검토·반영 지연)를 함께 전한다.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "approval_id", "ad_account_id", "action", "params"],

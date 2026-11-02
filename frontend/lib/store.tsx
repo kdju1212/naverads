@@ -2,7 +2,7 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { Account, api, getToken, Product, Workspace } from "./api";
+import { Account, api, getSession, migrateLegacyToken, Product, Workspace } from "./api";
 
 interface AppState {
   ready: boolean;
@@ -52,17 +52,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
   const reloadWorkspaces = useCallback(async () => applyWorkspaces(await api<Workspace[]>("/workspaces")), [applyWorkspaces]);
 
+  // 로그인 상태가 될 때 한 번만 조직 목록을 불러온다(페이지 이동마다 다시 부르지 않음). 예전 버전 토큰이 있으면 먼저 쿠키로 옮긴다
   useEffect(() => {
-    if (authed && !getToken()) router.replace("/login");
-  }, [authed, router]);
-
-  // 로그인 상태가 될 때 한 번만 조직 목록을 불러온다(페이지 이동마다 다시 부르지 않음)
-  useEffect(() => {
-    if (!authed || !getToken()) return;
+    if (!authed) return;
     let alive = true;
-    api<Workspace[]>("/workspaces").then((list) => alive && applyWorkspaces(list), () => {}).finally(() => alive && setLoaded(true));
+    void migrateLegacyToken().then(() => {
+      if (!alive) return;
+      if (!getSession()) return router.replace("/login");
+      api<Workspace[]>("/workspaces").then((list) => alive && applyWorkspaces(list), () => {}).finally(() => alive && setLoaded(true));
+    });
     return () => { alive = false; };
-  }, [authed, applyWorkspaces]);
+  }, [authed, applyWorkspaces, router]);
 
   const applyAccounts = useCallback((list: Account[]) => {
     setAccounts(list);

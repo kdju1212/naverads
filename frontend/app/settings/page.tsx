@@ -1,6 +1,7 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import Link from "next/link";
+import { Fragment, useEffect, useState } from "react";
 import { SafetyPanel } from "@/components/SafetyPanel";
 import { Badge, Button, Card, ErrorText, inputCls, PageTitle } from "@/components/ui";
 import { api, API_URL, fmt, logout } from "@/lib/api";
@@ -193,14 +194,23 @@ function Members() {
 }
 
 function MyAccount() {
-  const { data: me } = useFetch<{ email: string; has_password: boolean }>("/auth/me");
+  const { data: me } = useFetch<{ email: string; has_password: boolean; google_linked: boolean }>("/auth/me");
+  // Google 연결: 로그인한 상태에서만(서버가 지금 로그인한 계정에 Google 고유 ID를 붙인다). 이메일만 같다고 자동으로 붙이지 않는다
+  const [googleMsg, setGoogleMsg] = useState<string | null>(null);
+  useEffect(() => {
+    const h = new URLSearchParams(location.hash.slice(1));
+    if (!h.has("google") && !h.has("error")) return;
+    history.replaceState(null, "", location.pathname);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 주소 조각은 브라우저에서만 읽을 수 있다(정적 내보내기)
+    setGoogleMsg(h.has("google") ? "Google 계정을 연결했습니다. 다음부터 Google로 로그인할 수 있어요." : h.get("error"));
+  }, []);
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- API 서버(다른 주소)로 이동
+  const linkGoogle = () => { location.href = `${API_URL}/auth/google/start?link=true&redirect=${encodeURIComponent(location.origin + "/settings")}`; };
   const [pw, setPw] = useState({ current_password: "", new_password: "" });
   const [done, setDone] = useState(false);
   const { error, busy, run } = useAction();
   const change = () => run(async () => {
-    const r = await api<{ token: string }>("/auth/password", { method: "POST", body: pw });
-    // 같은 사용자라 setToken처럼 브라우저 보관 데이터를 지우지 않는다
-    try { localStorage.setItem("token", r.token); } catch { /* 저장 불가 환경 */ }
+    await api("/auth/password", { method: "POST", body: pw }); // 서버가 이 기기 로그인 쿠키를 새 것으로 바꾼다(다른 기기는 끊김)
     setPw({ current_password: "", new_password: "" });
     setDone(true);
   });
@@ -240,6 +250,7 @@ function MyAccount() {
         <ul className="mt-2 list-disc pl-5 text-sm">
           <li>Claude는 내가 속한 조직·담당 계정만 봅니다. 볼 수 있는 범위는 이 앱의 권한과 같습니다.</li>
           <li>입찰가·소재 등 변경은 Claude가 채팅에 미리보기 표를 먼저 보여 주고, Claude 화면의 &quot;허용&quot;을 눌러야 실행(또는 예약)됩니다.</li>
+          <li><strong>캠페인 하루예산 올리기, 캠페인 켜기, ADVoost 켜기</strong>는 Claude가 실행할 수 없고, 이 웹의 <Link href="/approvals" className="underline">승인</Link> 화면에서 직접 승인해야 실행됩니다.</li>
           <li><strong>Claude 화면에서 변경 도구(실행·예약·소재·확장소재·자동입찰)는 &quot;항상 허용&quot;으로 두지 마세요.</strong> 그러면 묻지 않고 바로 광고에 반영될 수 있습니다.</li>
           <li>Claude에게 &quot;내 광고 계정 보여줘&quot;, &quot;캠페인 목록 보여줘&quot;처럼 말하면 됩니다.</li>
           <li>연결은 7일 동안 쓰지 않으면 끊깁니다. 끊기면 Claude 커넥터 화면에서 &quot;연결&quot;을 다시 누르세요.</li>
@@ -251,6 +262,15 @@ function MyAccount() {
     </Card>
     <Card title="내 계정">
       {me && !me.has_password && <p className="mb-2 text-sm">Google로 로그인한 계정입니다 ({me.email}). 비밀번호는 Google에서 관리합니다.</p>}
+      {me?.has_password && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+          {me.google_linked ? <span>Google 계정이 연결돼 있습니다.</span> : <>
+            <span>Google로도 로그인하려면 지금 로그인한 상태에서 연결하세요.</span>
+            <Button type="button" variant="secondary" onClick={linkGoogle}>Google 연결</Button>
+          </>}
+        </div>
+      )}
+      {googleMsg && <p className="mb-2 text-sm text-info" role="status">{googleMsg}</p>}
       <form className="flex flex-wrap items-end gap-2" onSubmit={(e) => { e.preventDefault(); change(); }}>
         {me?.has_password && <>
         <label className="text-sm">현재 비밀번호

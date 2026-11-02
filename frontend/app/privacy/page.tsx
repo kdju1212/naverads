@@ -54,7 +54,7 @@ export default function PrivacyPage() {
 
       <Section title="5. 브라우저 보관과 쿠키">
         <ul>
-          <li>로그인 상태를 위해 브라우저 저장소(localStorage)에 로그인 토큰을, 화면 속도를 위해 광고 데이터를 브라우저(IndexedDB)에 보관합니다. 로그아웃하면 지웁니다.</li>
+          <li>로그인 상태를 위해 로그인 쿠키(브라우저 스크립트가 읽을 수 없는 HttpOnly 쿠키)를, 화면 속도를 위해 광고 데이터를 브라우저(IndexedDB)에 보관합니다. 로그아웃하면 지웁니다.</li>
           <li>Google 로그인 중 위조 방지를 위해 10분짜리 쿠키 하나를 씁니다. 광고·추적용 쿠키는 쓰지 않습니다.</li>
         </ul>
       </Section>

@@ -28,6 +28,8 @@ class User(Base):
     name: Mapped[str] = mapped_column(String(100))
     token_version: Mapped[int] = mapped_column(Integer, default=0)  # 올리면 이전 토큰이 모두 무효(비밀번호 변경·모든 기기 로그아웃)
     mcp_version: Mapped[int] = mapped_column(Integer, default=0)  # 올리면 Claude(MCP) 토큰만 무효
+    # Google 계정 고유 식별자(id_token의 sub). 이메일이 아니라 이 값으로 Google 로그인을 찾는다(0016)
+    google_sub: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
 
 
 class LoginFailure(Base):
@@ -47,8 +49,11 @@ class OAuthUsed(Base):
 
 
 class ApprovalRequest(Base):
-    """승인 후 실행하는 광고 변경. 지금은 플레이스광고(place.py)가 쓴다: tool='place:<action>', 계획을 만든 사람만 같은 내용(payload_hash)으로
-    expires_at 전에 한 번 실행(PENDING→RUNNING→DONE|PARTIAL|FAILED)."""
+    """승인 후 실행하는 광고 변경.
+    - kind='place': 플레이스 계획(place.py). tool='place:<action>', payload=정확한 변경 내용 JSON.
+    - kind='job': 대량 작업(bulk_jobs) 실행 승인. job_id에 묶이고 payload_hash는 그때의 실행할 행들로 계산한다.
+    web_required=True(계정 하루예산 합계를 늘릴 수 있는 변경)면 웹에 로그인한 사람이 /approvals에서 승인해야만 실행된다(Claude 토큰은 승인 불가).
+    상태: PENDING → (APPROVED: 예약 작업이 시각을 기다림) → RUNNING → DONE|PARTIAL|FAILED, 또는 REJECTED|EXPIRED."""
     __tablename__ = "approval_requests"
     id: Mapped[int] = mapped_column(primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
@@ -56,12 +61,26 @@ class ApprovalRequest(Base):
     tool: Mapped[str] = mapped_column(String(40))
     payload: Mapped[str] = mapped_column(String(8000))  # 도구 인자 JSON(SQLite·D1은 길이를 강제하지 않음)
     payload_hash: Mapped[str] = mapped_column(String(64))
-    status: Mapped[str] = mapped_column(String(10), default="PENDING")  # PENDING|RUNNING|DONE|FAILED|REJECTED
+    status: Mapped[str] = mapped_column(String(10), default="PENDING")
     result: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     decided_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    kind: Mapped[str] = mapped_column(String(10), default="place")  # place | job (0016)
+    ad_account_id: Mapped[int | None] = mapped_column(ForeignKey("ad_accounts.id"), nullable=True)
+    job_id: Mapped[int | None] = mapped_column(ForeignKey("bulk_jobs.id"), nullable=True, index=True)
+    web_required: Mapped[bool] = mapped_column(Boolean, default=False)
+    summary: Mapped[str | None] = mapped_column(String(8000), nullable=True)  # 승인 화면에 보여 준 내용 JSON(대상·전후 값·합계·안내)
+
+
+class AccountLock(Base):
+    """광고 계정별 실행 잠금(safety.account_lock). 같은 계정의 비용 변경이 동시에 검사를 통과하지 않게 한다.
+    expires_at이 지나면 죽은 요청의 잠금으로 보고 다른 요청이 가져간다(0016)."""
+    __tablename__ = "account_locks"
+    ad_account_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    holder: Mapped[str] = mapped_column(String(32))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class Workspace(Base):

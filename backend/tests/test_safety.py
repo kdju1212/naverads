@@ -19,6 +19,15 @@ def _run(h, ws, job_id):
     return c.post(f"/workspaces/{ws}/bulk-jobs/{job_id}/execute", headers=h).json()
 
 
+def _approve(h, ws, job_id):
+    """실행 → 웹 승인 요청이 나오면 웹 승인 화면에서 승인(그 자리에서 실행). 승인 응답의 작업 결과를 돌려준다."""
+    out = _run(h, ws, job_id)
+    assert out["approval"]["status"] == "PENDING" and out["status"] == "PREVIEW", out
+    r = c.post(f"/workspaces/{ws}/approvals/{out['approval']['approval_id']}/approve", headers=h)
+    assert r.status_code == 200, r.json()
+    return r.json()["job"]
+
+
 def _rows(job):
     return {r["naver_id"]: r for a in job["accounts"] for r in a["rows"]}
 
@@ -103,18 +112,26 @@ def test_budget_total_web_mcp_partial_and_naver_failure(monkeypatch):
     job = _job(owner, ws, [ch(acc, "campaign", "cmp-7306-pl", "daily_budget", "70000"),
                            ch(acc, "keyword", "kwd-7306-11", "status", "OFF")])
     assert job["safety"][0]["ok"] is False and "100,000원" in job["safety"][0]["reason"]
-    out = _run(owner, ws, job["id"])
+    out = _approve(owner, ws, job["id"])  # 예산 증액 = 웹 승인 대상. 승인해도 실행 직전 안전장치가 막는다
     r = _rows(out)
     assert out["status"] == "PARTIAL" and r["cmp-7306-pl"]["status"] == "FAILED" and "90,000원" in r["cmp-7306-pl"]["error"]
     assert _MOCK_STORE["7306"]["campaigns"]["cmp-7306-pl"]["dailyBudget"] == 50_000
-    # Claude(MCP): 같은 검사
+    # Claude(MCP): 실행 요청은 승인 요청만 만들고 아무것도 바꾸지 않는다. Claude 토큰으로는 승인 API를 부를 수 없다
     h = _mcp_headers(owner)
-    pv, _ = _mcp_call(h, "preview_changes", workspace_id=ws, changes=[ch(acc, "campaign", "cmp-7306-pl", "daily_budget", "70000")])
-    assert pv["safety"][0]["ok"] is False
-    out, _ = _mcp_call(h, "execute_job", workspace_id=ws, job_id=pv["id"])
-    assert out["status"] == "FAILED" and "관리 기준" in _rows(out)["cmp-7306-pl"]["error"]
-    # 기준 안이면 실행
-    assert _run(owner, ws, _job(owner, ws, [ch(acc, "campaign", "cmp-7306-pl", "daily_budget", "60000")])["id"])["status"] == "DONE"
+    pv, _ = _mcp_call(h, "preview_changes", workspace_id=ws, changes=[ch(acc, "campaign", "cmp-7306-pl", "daily_budget", "60000")])
+    out, err = _mcp_call(h, "execute_job", workspace_id=ws, job_id=pv["id"])
+    aid = out["approval"]["approval_id"]
+    assert not err and out["status"] == "PREVIEW" and out["approval"]["status"] == "PENDING" and "/approvals?id=" in out["approval"]["message"]
+    assert _MOCK_STORE["7306"]["campaigns"]["cmp-7306-pl"]["dailyBudget"] == 50_000
+    assert c.post(f"/workspaces/{ws}/approvals/{aid}/approve", headers=h).status_code == 401
+    st, _ = _mcp_call(h, "get_approval", workspace_id=ws, approval_id=aid)
+    assert st["status"] == "PENDING"
+    # 같은 작업을 다시 실행해도 승인 요청은 하나
+    assert _mcp_call(h, "execute_job", workspace_id=ws, job_id=pv["id"])[0]["approval"]["approval_id"] == aid
+    # 기준 안이면 웹 승인 뒤 실행되고, Claude에서 실제 결과를 볼 수 있다
+    r = c.post(f"/workspaces/{ws}/approvals/{aid}/approve", headers=owner).json()
+    assert r["status"] == "DONE" and r["job"]["status"] == "DONE" and _MOCK_STORE["7306"]["campaigns"]["cmp-7306-pl"]["dailyBudget"] == 60_000
+    assert _mcp_call(h, "get_approval", workspace_id=ws, approval_id=aid)[0]["status"] == "DONE"
     # 네이버 재조회 실패 → 실행하지 않음
     monkeypatch.setattr(MockNaverClient, "list_campaigns", lambda self: (_ for _ in ()).throw(bulk.NaverApiError("503 점검 중")))
     out = _run(owner, ws, _job(owner, ws, [ch(acc, "keyword", "kwd-7306-12", "status", "ON")])["id"])
@@ -133,7 +150,9 @@ def test_scheduled_checked_at_schedule_and_run():
     ok = _job(owner, ws, [ch(acc, "campaign", "cmp-7307-pl", "status", "ON")])  # 3만+5만 = 8만 > 6만 → 역시 막힘
     assert c.post(f"/workspaces/{ws}/bulk-jobs/{ok['id']}/schedule", headers=owner, json={"scheduled_at": at}).status_code == 400
     _safe(owner, ws, acc, limit=80_000, max_bid=10_000)
-    assert c.post(f"/workspaces/{ws}/bulk-jobs/{ok['id']}/schedule", headers=owner, json={"scheduled_at": at}).status_code == 200
+    r = c.post(f"/workspaces/{ws}/bulk-jobs/{ok['id']}/schedule", headers=owner, json={"scheduled_at": at}).json()
+    assert r["approval"]["status"] == "PENDING"  # 캠페인 켜기 예약 = 예약할 때 웹 승인
+    assert c.post(f"/workspaces/{ws}/approvals/{r['approval']['approval_id']}/approve", headers=owner).json()["status"] == "APPROVED"
     # 예약 뒤 네이버에서 쇼핑 예산을 올렸다(외부 변경) → 실행 시점 재조회에서 막고 실행하지 않는다
     _MOCK_STORE["7307"]["campaigns"]["cmp-7307-sh"]["dailyBudget"] = 50_000
     with SessionLocal() as db:
@@ -193,8 +212,9 @@ def test_place_approval_after_naver_change_and_audits():
     _, camp, _ = _new_place(owner, ws, acc, "7310")  # 꺼진 플레이스 캠페인 1만
     params = {"target_type": "campaign", "target_id": camp["nccCampaignId"]}
     aid = _plan(owner, ws, acc, "turn_on", **params).json()["approval_id"]  # 8만+1만 = 9만 ≤ 9.5만
-    _MOCK_STORE["7310"]["campaigns"]["cmp-7310-sh"]["dailyBudget"] = 40_000  # 승인 뒤 네이버에서 예산을 올림
-    out = _apply(owner, ws, aid, acc, "turn_on", **params).json()
+    _MOCK_STORE["7310"]["campaigns"]["cmp-7310-sh"]["dailyBudget"] = 40_000  # 승인 요청 뒤 네이버에서 예산을 올림(외부 변경)
+    assert _apply(owner, ws, aid, acc, "turn_on", **params).status_code == 403  # 캠페인 켜기는 웹 승인으로만
+    out = c.post(f"/workspaces/{ws}/approvals/{aid}/approve", headers=owner).json()["place"]
     assert out["status"] == "FAILED" and "100,000원" in out["error"] and _MOCK_STORE["7310"]["campaigns"][camp["nccCampaignId"]]["userLock"]
     aid2 = _plan(owner, ws, acc, "set_budget", campaign_id=camp["nccCampaignId"], daily_budget=5000).json()["approval_id"]
     assert c.post(f"/workspaces/{ws}/place/cancel", headers=owner, json={"approval_id": aid2}).json()["status"] == "REJECTED"

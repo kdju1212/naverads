@@ -46,13 +46,18 @@ def _set_ad_bid(o, v):
     o["adAttr"] = {**attrs, "bidAmt": int(v), "useGroupBidAmt": False}
 
 
+UNLIMITED = "무제한"  # 하루예산을 쓰지 않는 캠페인의 '변경 전 값'(승인 요청이 네이버에서 읽어 저장)
+
+
 def _check_expected(field, o, expect):
     """예약 실행: 지금 값이 미리보기 때(expect)와 다르면 실패. 비교 기준이 애매한 값(그룹 입찰가를 쓰는 키워드, 예산 미사용)은 건너뛴다."""
     if expect is None:
         return
     if field == "status":
         cur = "OFF" if o.get("userLock") else "ON"
-    elif field == "daily_budget" and o.get("useDailyBudget"):
+    elif field == "daily_budget" and str(expect) == UNLIMITED:  # 승인 때 무제한이었으면 지금도 무제한이어야 한다
+        cur = o.get("dailyBudget") if o.get("useDailyBudget", True) and o.get("dailyBudget") else UNLIMITED
+    elif field == "daily_budget" and o.get("useDailyBudget", True):  # 필드가 없으면 예산 사용으로 본다(safety._budget과 같게)
         cur = o.get("dailyBudget")
     elif field == "bid_amt":
         attrs = _json(o["adAttr"]) if "adAttr" in o else o

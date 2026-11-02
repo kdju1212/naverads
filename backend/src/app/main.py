@@ -10,24 +10,25 @@ from urllib.parse import urlencode, urlsplit
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import and_, bindparam, delete, false, func, or_, select, text, update
 from sqlalchemy.orm import Session
 
 from . import bulk, naver, safety, seo
-from .access import (ADMIN_ROLES, accessible_account_ids, admin_membership, current_user, membership, membership_of, resolve_account_ids,
-                     logged_out_key, user_from_header)
+from .access import (ADMIN_ROLES, CSRF_HEADER, SESSION_COOKIE, WEB_ORIGINS, accessible_account_ids, admin_membership, current_user, membership,
+                     membership_of, resolve_account_ids, logged_out_key, session_token, user_from_header)
 from .db import Base, engine, get_db
 from .models import (AccountAccess, AccountGoal, AccountSafety, AdAccount, ApprovalRequest, AuditLog, AutoBidRule, BulkJob, BulkJobRow, LoginFailure, Membership, NaverApiCredential, OAuthUsed,
                      PerformanceDaily, Plan, Subscription, SyncRun, User, Workspace, WorkspaceAdAccount, KST, now, today_kst)
 from .naver import NaverApiError, client_for
-from .security import decrypt, encrypt, hash_password, key_of, make_token, read_payload, sign_payload, verify_password
+from .security import TOKEN_TTL, decrypt, encrypt, hash_password, key_of, make_token, read_payload, read_token, sign_payload, verify_password
 from .sync import sync_account
 
 app = FastAPI(title="네이버 광고 통합 관리 API")
-# 인증은 쿠키가 아닌 Bearer 토큰이라 모든 출처 허용해도 다른 사이트가 토큰을 쓸 수 없다
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# 웹 로그인이 쿠키라 출처를 웹 주소로만 허용한다(다른 사이트의 스크립트는 쿠키를 실어 보내도 응답을 읽지 못한다). Claude(/mcp)는 서버끼리 호출
+app.add_middleware(CORSMiddleware, allow_origins=sorted(WEB_ORIGINS), allow_credentials=True, allow_methods=["*"],
+                   allow_headers=["authorization", "content-type", CSRF_HEADER])
 SECURITY_HEADERS = {"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
                     # Claude 연결 로그인 화면(HTML)을 다른 사이트가 틀 안에 넣어 클릭을 유도하지 못하게
                     "X-Frame-Options": "DENY", "Content-Security-Policy": "frame-ancestors 'none'"}
@@ -79,7 +80,26 @@ async def signup(body: SignupIn, db: Session = Depends(get_db)):
     user = User(email=body.email.lower(), password_hash=await hash_password(body.password), name=body.name)
     db.add(user)
     db.commit()
-    return {"id": user.id, "token": make_token(user.id, user.token_version)}
+    token = make_token(user.id, user.token_version)
+    return _with_session(JSONResponse({"id": user.id, "token": token}), token)  # 가입은 로컬·테스트 전용이라 토큰도 돌려준다
+
+
+def _with_session(res: Response, token: str) -> Response:
+    """웹 로그인 쿠키: HttpOnly(JS가 못 읽음)·Secure·SameSite=Strict(다른 사이트에서 시작한 요청에는 안 실림). 웹과 API는
+    같은 사이트(djkim0509.workers.dev, workers.dev는 공개 접미사)라 Strict여도 화면의 요청에 실린다. 로컬도 localhost는 Secure 쿠키를 받는다."""
+    res.set_cookie(SESSION_COOKIE, token, max_age=TOKEN_TTL, path="/", httponly=True, secure=True, samesite="strict")
+    return res
+
+
+def _revoke(db: Session, token: str):
+    """이 토큰을 만료 시각까지 서버에서 무효로 한다(로그아웃·쿠키로 옮긴 예전 토큰)."""
+    if not read_token(token):
+        return
+    key = logged_out_key(token)
+    db.execute(delete(OAuthUsed).where(OAuthUsed.expires_at < now()))  # 만료된 기록은 지워 표가 커지지 않게
+    if not db.get(OAuthUsed, key):
+        db.add(OAuthUsed(key=key, used_at=now(), expires_at=datetime.fromtimestamp(int(token.split(".")[-2]), timezone.utc)))
+    db.commit()
 
 
 def user_by_email(db: Session, email: str) -> User | None:
@@ -142,24 +162,35 @@ async def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     record_login(db, body.email, ip, ok)
     if not ok:
         raise HTTPException(401, "이메일 또는 비밀번호가 올바르지 않습니다")
-    return {"id": user.id, "token": make_token(user.id, user.token_version)}
+    return _with_session(JSONResponse({"id": user.id}), make_token(user.id, user.token_version))  # 토큰은 HttpOnly 쿠키로만
 
 
 @app.get("/auth/me")
 async def me(user: User = Depends(current_user)):
-    return {"id": user.id, "email": user.email, "name": user.name, "has_password": user.password_hash != GOOGLE_ONLY}
+    return {"id": user.id, "email": user.email, "name": user.name, "has_password": user.password_hash != GOOGLE_ONLY,
+            "google_linked": bool(user.google_sub)}
+
+
+@app.post("/auth/session")
+async def upgrade_session(authorization: str = Header(""), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """예전 웹(localStorage 토큰)에서 쿠키 로그인으로 옮기기: Bearer로 한 번 부르면 그 토큰은 무효로 하고 새 토큰을 HttpOnly 쿠키로 준다."""
+    if not authorization.strip():
+        raise HTTPException(400, "옮길 로그인 토큰이 없습니다")
+    old = authorization.removeprefix("Bearer ").strip()
+    _revoke(db, old)
+    new = make_token(user.id, user.token_version)
+    if new == old:  # 같은 초에 받은 토큰은 같은 값이라(무작위 값 없음) 만료를 1초 당겨 다른 토큰으로
+        new = make_token(user.id, user.token_version, ttl=TOKEN_TTL - 1)
+    return _with_session(JSONResponse({"ok": True}), new)
 
 
 @app.post("/auth/logout")
-async def logout(authorization: str = Header(""), user: User = Depends(current_user), db: Session = Depends(get_db)):
-    """이 기기만 로그아웃: 지금 토큰을 만료 시각까지 서버에서 무효로 한다(다른 기기·Claude 연결은 그대로)."""
-    token = authorization.removeprefix("Bearer ").strip()
-    key = logged_out_key(token)
-    db.execute(delete(OAuthUsed).where(OAuthUsed.expires_at < now()))  # 만료된 기록은 지워 표가 커지지 않게
-    if not db.get(OAuthUsed, key):
-        db.add(OAuthUsed(key=key, used_at=now(), expires_at=datetime.fromtimestamp(int(token.split(".")[-2]), timezone.utc)))
-    db.commit()
-    return {"ok": True}
+async def logout(request: Request, authorization: str = Header(""), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """이 기기만 로그아웃: 지금 토큰을 만료 시각까지 서버에서 무효로 하고 쿠키를 지운다(다른 기기·Claude 연결은 그대로)."""
+    _revoke(db, session_token(request, authorization)[0])
+    res = JSONResponse({"ok": True})
+    res.delete_cookie(SESSION_COOKIE, path="/", secure=True, httponly=True, samesite="strict")
+    return res
 
 
 @app.post("/auth/logout-all")
@@ -224,6 +255,7 @@ async def delete_account(body: DeleteMeIn, request: Request, user: User = Depend
             db.execute(delete(AccountAccess).where(AccountAccess.membership_id == m.id))
             db.delete(m)
     user.email, user.name, user.password_hash = f"deleted-{user.id}@deleted.invalid", "탈퇴한 사용자", "deleted$"
+    user.google_sub = None  # Google 고유 ID도 지운다(개인 식별자 보관 안 함, 같은 Google로 다시 가입하면 새 계정)
     user.token_version, user.mcp_version = user.token_version + 1, user.mcp_version + 1
     db.commit()
     return {"ok": True}
@@ -250,13 +282,12 @@ async def change_password(body: PasswordIn, request: Request, user: User = Depen
         raise HTTPException(400, "비밀번호는 8자 이상")
     user.password_hash, user.token_version = await hash_password(body.new_password), user.token_version + 1
     db.commit()
-    return {"token": make_token(user.id, user.token_version)}
+    return _with_session(JSONResponse({"ok": True}), make_token(user.id, user.token_version))  # 지금 기기는 새 쿠키로 계속
 
 
 # ---------- Google 로그인 (가입은 Google로만: 이메일 인증을 Google이 대신) ----------
 GOOGLE_AUTH, GOOGLE_TOKEN = "https://accounts.google.com/o/oauth2/v2/auth", "https://oauth2.googleapis.com/token"
-# 로그인 토큰을 붙여 돌려보내므로 이 웹 주소로만 보낸다
-WEB_ORIGINS = {"https://naverads.djkim0509.workers.dev", "http://localhost:3000"}
+# 로그인 뒤 돌려보내는 웹 주소는 WEB_ORIGINS(access.py)만
 GOOGLE_ONLY = "google$"  # 비밀번호 없는 계정: 어떤 비밀번호와도 맞지 않는다(verify_password)
 STATE_COOKIE = "g_state"
 
@@ -266,17 +297,21 @@ def _google_callback_url(request: Request) -> str:
 
 
 def _google_done(st: dict, user: User | None = None, error: str = ""):
-    """웹은 로그인 화면 #token=…(조각은 서버 로그·Referer에 안 남음), Claude 연결은 인가 코드로."""
+    """웹은 로그인 쿠키를 심고 웹으로(토큰을 주소에 싣지 않음), Claude 연결은 인가 코드로. 오류는 #error=…"""
     if "q" in st:
         res = mcp.code_redirect(st["q"], user.id) if user else mcp._login_page(st["q"], error, 400)
-    else:
-        res = RedirectResponse(st["r"] + "#" + urlencode({"token": make_token(user.id, user.token_version)} if user else {"error": error}), 302)
+    elif user and "l" not in st:
+        res = _with_session(RedirectResponse(st["r"], 302), make_token(user.id, user.token_version))
+    else:  # Google 연결(설정 화면)은 지금 로그인을 그대로 두고 결과만
+        res = RedirectResponse(st["r"] + "#" + urlencode({"google": "linked"} if user else {"error": error}), 302)
     res.delete_cookie(STATE_COOKIE, path="/auth/google")
     return res
 
 
 @app.get("/auth/google/start")
-async def google_start(request: Request, redirect: str = ""):
+async def google_start(request: Request, redirect: str = "", link: bool = False, db: Session = Depends(get_db)):
+    """link=true: 로그인한 사람이 설정 화면에서 자기 계정에 Google을 연결(기존 계정은 이메일만으로 연결하지 않는다).
+    화면에서 같은 사이트로 이동한 요청이라 로그인 쿠키가 실린다."""
     p = request.query_params
     if "client_id" in p:  # Claude 연결 로그인 화면에서 옴
         q, err = mcp._auth_params(p)
@@ -285,6 +320,8 @@ async def google_start(request: Request, redirect: str = ""):
         st = {"q": q}
     elif f"{(u := urlsplit(redirect)).scheme}://{u.netloc}" in WEB_ORIGINS:
         st = {"r": redirect}
+        if link:
+            st["l"] = user_from_header(db, f"Bearer {session_token(request, request.headers.get('authorization', ''))[0]}").id
     else:
         raise HTTPException(400, "허용되지 않은 주소입니다")
     if not os.getenv("GOOGLE_CLIENT_ID"):
@@ -311,19 +348,64 @@ async def google_callback(request: Request, state: str = "", code: str = "", db:
         r = httpx.post(GOOGLE_TOKEN, data={"code": code, "client_id": client_id, "client_secret": os.getenv("GOOGLE_CLIENT_SECRET", ""),
                                            "redirect_uri": _google_callback_url(request), "grant_type": "authorization_code"}, timeout=15)
         seg = r.json()["id_token"].split(".")[1]
-        # Google에서 HTTPS로 직접 받은 id_token이라 서명 검증 없이 내용만 읽는다(Google 문서가 허용하는 방식)
+        # Google 토큰 엔드포인트에서 HTTPS로 직접 받은 id_token이라 서명 검증 없이 내용만 읽는다(Google OpenID Connect 문서가 허용).
+        # 대신 iss·aud·exp·email_verified·sub를 확인한다
         info = json.loads(base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4)))
     except (httpx.HTTPError, KeyError, IndexError, ValueError):
         return _google_done(st, error="Google 로그인에 실패했습니다. 다시 시도하세요")
-    if info.get("aud") != client_id or not info.get("email_verified") or not info.get("email"):
+    if (info.get("iss") not in GOOGLE_ISSUERS or info.get("aud") != client_id or not isinstance(info.get("exp"), int)
+            or info["exp"] < datetime.now(timezone.utc).timestamp() or not info.get("sub")):
+        return _google_done(st, error="Google 로그인 정보를 확인하지 못했습니다. 다시 시도하세요")
+    if not info.get("email_verified") or not info.get("email"):
         return _google_done(st, error="인증된 Google 이메일이 아닙니다")
-    email = info["email"].lower()
-    user = user_by_email(db, email)  # 같은 이메일의 기존 계정이면 그 계정으로 로그인
-    if not user:
-        user = User(email=email, password_hash=GOOGLE_ONLY, name=(info.get("name") or email.split("@")[0])[:100])
-        db.add(user)
+    user, error = google_user(db, str(info["sub"]), info["email"].lower(), info.get("name"), st.get("l"), info.get("hd"))
+    return _google_done(st, user=user, error=error)
+
+
+GOOGLE_ISSUERS = {"https://accounts.google.com", "accounts.google.com"}
+
+
+def google_authoritative(email: str, hd: str | None) -> bool:
+    """Google이 이 이메일 주소의 주인인지: Gmail 주소이거나, Google Workspace 조직(hd)의 도메인 주소.
+    근거: Google OpenID Connect 문서(사용자 식별은 sub, 조직 판단은 이메일 도메인이 아니라 hd). Gmail 주소는 지워져도 다른 사람에게 다시 주지 않는다."""
+    domain = email.rpartition("@")[2]
+    return domain in ("gmail.com", "googlemail.com") or (bool(hd) and hd.lower() == domain)
+
+
+LEGACY_GOOGLE_BLOCKED = ("예전에 Google로 가입한 계정을 연결하려면 본인 확인이 필요합니다. 이 이메일은 Google이 주인임을 확인할 수 없는 주소라 "
+                         "자동으로 연결하지 않았어요. 관리자에게 문의해 주세요")
+
+
+def google_user(db: Session, sub: str, email: str, name: str | None, link_user_id: int | None, hd: str | None = None) -> tuple[User | None, str]:
+    """Google 고유 식별자(sub)로 계정을 찾는다. 이메일만 같은 기존 계정에는 자동으로 붙이지 않는다(그 계정으로 로그인한 뒤 설정에서 연결).
+    전환 예외: 예전에 Google로 가입해 sub 없이 저장된 계정(비밀번호 없음)은 Google이 그 이메일의 주인일 때(google_authoritative)만
+    처음 로그인 때 sub를 기록한다. 그 밖(Google 계정에 등록한 다른 회사 메일 등)은 주인이 바뀌었을 수 있어 운영자가 본인 확인 후 연결한다
+    (docs/SECURITY_OPERATIONS.md 2절)."""
+    owner = db.scalar(select(User).where(User.google_sub == sub))
+    if link_user_id is not None:
+        user = db.get(User, link_user_id)
+        if owner and owner.id != link_user_id:
+            return None, "이 Google 계정은 이미 다른 계정에 연결돼 있습니다"
+        if user.google_sub and user.google_sub != sub:
+            return None, "이미 다른 Google 계정이 연결돼 있습니다"
+        user.google_sub = sub
         db.commit()
-    return _google_done(st, user=user)
+        return user, ""
+    if owner:
+        return owner, ""
+    user = user_by_email(db, email)
+    if user and user.password_hash == GOOGLE_ONLY and not user.google_sub:
+        if not google_authoritative(email, hd):
+            return None, LEGACY_GOOGLE_BLOCKED
+        user.google_sub = sub
+        db.commit()
+        return user, ""
+    if user:
+        return None, "이미 비밀번호로 가입된 이메일입니다. 비밀번호로 로그인한 뒤 설정에서 Google 연결을 해 주세요"
+    user = User(email=email, password_hash=GOOGLE_ONLY, name=(name or email.split("@")[0])[:100], google_sub=sub)
+    db.add(user)
+    db.commit()
+    return user, ""
 
 
 # ---------- 조직·직원·권한 ----------
@@ -424,7 +506,7 @@ async def add_credential(body: CredentialIn, m: Membership = Depends(admin_membe
     if body.is_mock and os.getenv("APP_ENV", "dev") != "dev":  # Mock은 로컬 화면 확인·테스트용
         raise HTTPException(403, "운영에서는 Mock 자격증명을 등록할 수 없습니다")
     cred = NaverApiCredential(workspace_id=m.workspace_id, label=body.label, api_key=body.api_key,
-                              secret_key_enc=encrypt(body.secret_key), is_mock=body.is_mock)
+                              secret_key_enc=_encrypt(body.secret_key), is_mock=body.is_mock)
     db.add(cred)
     db.commit()
     return {"id": cred.id, "label": cred.label, "is_mock": cred.is_mock}  # 비밀키는 반환하지 않는다
@@ -449,7 +531,7 @@ async def replace_credential(cred_id: int, body: CredentialKeysIn, m: Membership
     cred = _credential(db, m, cred_id)
     if not body.api_key.strip() or not body.secret_key.strip():
         raise HTTPException(400, "API Key와 Secret Key를 입력하세요")
-    cred.api_key, cred.secret_key_enc = body.api_key.strip(), encrypt(body.secret_key.strip())
+    cred.api_key, cred.secret_key_enc = body.api_key.strip(), _encrypt(body.secret_key.strip())
     db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, action="CREDENTIAL_REPLACE", field="credential", naver_id=str(cred.id)))
     db.commit()
     return {"id": cred.id, "label": cred.label, "is_mock": cred.is_mock}  # 키는 반환하지 않는다
@@ -465,6 +547,13 @@ async def delete_credential(cred_id: int, m: Membership = Depends(admin_membersh
     db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, action="CREDENTIAL_DELETE", field="credential", naver_id=str(cred_id)))
     db.commit()
     return {"ok": True}
+
+
+def _encrypt(secret: str) -> str:
+    try:
+        return encrypt(secret)
+    except RuntimeError as e:  # 운영에 CRED_KEY가 없음 → 로그인 서명 열쇠(APP_SECRET)로 새로 암호화하지 않는다
+        raise HTTPException(503, f"서버 설정이 끝나지 않아 API 키를 저장할 수 없습니다(관리자 확인 필요): {e}")
 
 
 def _credential(db: Session, m: Membership, cred_id: int) -> NaverApiCredential:
@@ -677,16 +766,17 @@ async def delete_master_report(account_id: int, job_id: str, m: Membership = Dep
 
 
 def master_file_source(db: Session, authorization: str, ws_id: int, account_id: int, job_id: str) -> dict:
-    """{"url", "headers"} 또는 {"text"}(Mock). Workers 진입점(src/main.py)이 직접 불러 JS fetch로 본문을 넘긴다."""
+    """{"url", "headers"} 또는 {"text"}(Mock). Workers 진입점(src/main.py)이 직접 불러 JS fetch로 본문을 넘긴다.
+    authorization은 "Bearer 토큰"(헤더 또는 로그인 쿠키 값). 읽기(GET)라 CSRF 검사는 없다."""
     m = membership_of(db, ws_id, user_from_header(db, authorization))
     return _naver(db, m, account_id, lambda c: c.master_file(c.get_master_report(job_id)))
 
 
 @app.get("/workspaces/{ws_id}/ad-accounts/{account_id}/master-reports/{job_id}/file")
-async def master_report_file(ws_id: int, account_id: int, job_id: str, authorization: str = Header(default=""),
+async def master_report_file(ws_id: int, account_id: int, job_id: str, request: Request, authorization: str = Header(default=""),
                              db: Session = Depends(get_db)):
     """로컬·테스트용. Workers에서는 src/main.py가 이 경로를 먼저 가로챈다(큰 파일을 파이썬이 다루면 CPU 한도 초과)."""
-    src = master_file_source(db, authorization, ws_id, account_id, job_id)
+    src = master_file_source(db, f"Bearer {session_token(request, authorization)[0]}", ws_id, account_id, job_id)
     if "text" not in src:
         r = httpx.get(src["url"], headers=src["headers"], timeout=60)
         if r.status_code >= 400:
@@ -871,7 +961,10 @@ async def execute_bulk_job(job_id: int, m: Membership = Depends(membership), db:
     job = _job(db, m, job_id, edit=True)
     if job.scheduled_at is not None:  # 크론과 같이 실행돼 두 번 반영되지 않게
         raise HTTPException(409, "예약된 작업입니다. 예약을 취소한 뒤 실행하세요")
-    return _job_out(db, bulk.execute_job(db, m, job, bulk.EXECUTE_CHUNK))
+    try:
+        return _job_out(db, bulk.execute_job(db, m, job, bulk.EXECUTE_CHUNK))
+    except bulk.ApprovalRequired:  # 계정 하루예산 합계가 늘 수 있는 작업: 승인 요청만 만들고 실행하지 않는다(웹 /approvals에서 승인)
+        return {**_job_out(db, job), "approval": approvals.pending_reply(approvals.request_for_job(db, m, job))}
 
 
 class ScheduleIn(BaseModel):
@@ -898,11 +991,16 @@ async def schedule_bulk_job(body: ScheduleIn, job_id: int, m: Membership = Depen
         # 예약 시점에도 안전장치를 검사한다(실행 시점에 다시 검사해 그때 조건이 달라졌으면 실행하지 않는다)
         if blocked := bulk.safety_blocks(db, m.workspace_id, valid, {}):
             raise HTTPException(400, f"광고비 안전장치에 걸려 예약할 수 없어요: {next(iter(blocked.values()))}")
+    # 예약을 바꾸거나 취소하면 전에 받은 승인·승인 요청은 쓰지 않는다(새 시각으로 다시 승인)
+    for ar in db.scalars(select(ApprovalRequest).where(ApprovalRequest.job_id == job.id, ApprovalRequest.status.in_(("PENDING", "APPROVED")))):
+        ar.status = "EXPIRED"
     # SQLite·D1은 시간대를 버리고 저장하므로 다른 시각(now(), UTC)과 비교되게 UTC로 맞춘다
     job.scheduled_at = at and at.astimezone(timezone.utc)
     db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, job_id=job.id, action="JOB_SCHEDULE",
                     after=at.isoformat()[:50] if at else "취소"))
     db.commit()
+    if at is not None and bulk.needs_web_approval(db, m.workspace_id, valid, {}):  # 예약할 때 웹 승인(예약 시각까지), 실행 때 다시 확인
+        return {**_job_out(db, job), "approval": approvals.pending_reply(approvals.request_for_job(db, m, job))}
     return _job_out(db, job)
 
 
@@ -1080,6 +1178,12 @@ async def set_account_goal(body: AccountGoalIn, m: Membership = Depends(membersh
     if body.off_cost is not None and body.off_cost <= 0:
         raise HTTPException(400, "무전환 OFF 기준 비용은 1원 이상")
     g = _goal(db, m, body.ad_account_id)
+    if body.enabled:  # 목표 ROAS 자동 조정도 계정 클릭당 최대 입찰가를 넘을 수 없다
+        sf = safety.get(db, m.workspace_id, body.ad_account_id)
+        if sf is None:
+            raise HTTPException(400, safety.NOT_SET)
+        if body.max_bid > sf.max_bid:
+            raise HTTPException(400, f"최대 입찰가 {body.max_bid:,}원이 이 계정의 클릭당 최대 입찰가 {sf.max_bid:,}원보다 높아요")
     if g is None:
         g = AccountGoal(workspace_id=m.workspace_id, ad_account_id=body.ad_account_id)
         db.add(g)
@@ -1244,8 +1348,9 @@ async def subscription(m: Membership = Depends(admin_membership), db: Session = 
 
 
 # Claude 커넥터(MCP)는 위 엔드포인트 함수들을 불러 쓰므로 맨 아래에서 등록
-from . import mcp, place, shopping_ads  # noqa: E402
+from . import approvals, mcp, place, shopping_ads  # noqa: E402
 
+app.include_router(approvals.router)
 app.include_router(mcp.router)
 app.include_router(shopping_ads.router)
 app.include_router(place.router)

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Button, ErrorText, inputCls } from "@/components/ui";
-import { API_URL, api, setToken } from "@/lib/api";
+import { API_URL, api, setSession } from "@/lib/api";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -12,15 +12,15 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Google 로그인 후 서버가 #token=… 또는 #error=…로 돌려보낸다
+  // Google 로그인 후 서버가 로그인 쿠키를 심고 ?from=google로 돌려보낸다(실패면 #error=…). 토큰은 주소에 실리지 않는다
   useEffect(() => {
     const h = new URLSearchParams(location.hash.slice(1));
-    if (!h.has("token") && !h.has("error")) return;
+    const fromGoogle = new URLSearchParams(location.search).has("from");
+    if (!fromGoogle && !h.has("error")) return;
     history.replaceState(null, "", location.pathname);
-    const token = h.get("token");
-    if (token) void setToken(token).then(() => router.replace("/"));
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 주소 조각은 브라우저에서만 읽을 수 있다(정적 내보내기)
-    else setError(h.get("error"));
+    if (h.has("error")) setError(h.get("error"));
+    else void setSession(true).then(() => router.replace("/"));
   }, [router]);
 
   const submit = async (e: React.FormEvent) => {
@@ -28,8 +28,8 @@ export default function LoginPage() {
     setBusy(true);
     setError(null);
     try {
-      const r = await api<{ token: string }>("/auth/login", { body: form });
-      await setToken(r.token);
+      await api("/auth/login", { body: form }); // 서버가 HttpOnly 로그인 쿠키를 심는다
+      await setSession(true);
       router.replace("/");
     } catch (err) {
       setError((err as Error).message);
@@ -38,7 +38,7 @@ export default function LoginPage() {
   };
 
   // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- API 서버(다른 주소)로 이동
-  const google = () => { location.href = `${API_URL}/auth/google/start?redirect=${encodeURIComponent(location.origin + "/login")}`; };
+  const google = () => { location.href = `${API_URL}/auth/google/start?redirect=${encodeURIComponent(location.origin + "/login?from=google")}`; };
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [k]: e.target.value });
   return (
     <div className="flex min-h-screen items-center justify-center">

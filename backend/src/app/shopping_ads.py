@@ -41,16 +41,20 @@ def create_shopping_ad(db: Session, m: Membership, account_id: int, adgroup_nave
         raise HTTPException(400, "상품 ID는 네이버쇼핑 상품 ID(nvMid, 숫자)로 입력하세요. 스마트스토어 상품 번호와 다릅니다")
     if bid_amt is not None and (err := bulk._money(str(bid_amt), "입찰가", *bulk.BID_RANGE["SHOPPING"])):
         raise HTTPException(400, err)
-    if bid_amt:  # 계정 클릭당 최대 입찰가(광고비 안전장치)
-        try:
-            safety.check_bids(safety.get(db, m.workspace_id, account_id), [("bid", bid_amt)])
-        except safety.SafetyError as e:
-            raise HTTPException(400, str(e))
+    client = bulk._client(db, m.workspace_id, account_id)
+    try:  # 계정 클릭당 최대 입찰가(광고비 안전장치). 비우면 그룹 입찰가를 물려받으므로 네이버의 지금 그룹 입찰가로 검사한다
+        bid = bid_amt or ((client.get_many("adgroups", [adgroup_naver_id]) or [{}])[0].get("bidAmt"))
+        if bid is None:
+            raise HTTPException(400, "광고그룹을 네이버에서 찾지 못해 실제 입찰가를 확인할 수 없어 등록하지 않았어요")
+        safety.check_bids(safety.get(db, m.workspace_id, account_id), [("bid", bid, None, None)])
+    except safety.SafetyError as e:
+        raise HTTPException(400, str(e) + ("" if bid_amt else " (입찰가를 비워 광고그룹 입찰가를 쓰는 경우)"))
+    except NaverApiError as e:
+        raise HTTPException(400, f"네이버에서 광고그룹 입찰가를 읽지 못해 등록하지 않았어요: {e}")
     # referenceKey는 네이버쇼핑 상품 ID(nvMid); 실계정에서 연결 채널과 상품의 등록 가능 여부도 충족해야 한다.
     attr = {"bidAmt": bid_amt, "useGroupBidAmt": False} if bid_amt else {"useGroupBidAmt": True}
-    try:
-        a = bulk._client(db, m.workspace_id, account_id).create_ad(adgroup_naver_id, "SHOPPING_PRODUCT_AD", {}, None,
-                                                                   referenceKey=product_id, adAttr=attr)
+    try:  # 꺼진 상태로 만들어진다 → 켤 때 합계·실제 입찰가를 다시 검사(safety.check)
+        a = client.create_ad(adgroup_naver_id, "SHOPPING_PRODUCT_AD", {}, None, referenceKey=product_id, adAttr=attr)
     except NaverApiError as err:
         raise HTTPException(400, f"네이버 상품소재 등록 실패: {err}")
     row = ad_row(account_id, a)

@@ -68,7 +68,9 @@ function JobDetail({ id }: { id: string }) {
     setBusy(true);
     setError(null);
     try {
-      setJob(await api<Job>(`/workspaces/${ws.id}/bulk-jobs/${id}/schedule`, { method: "POST", body: { scheduled_at } }));
+      const j = await api<Job>(`/workspaces/${ws.id}/bulk-jobs/${id}/schedule`, { method: "POST", body: { scheduled_at } });
+      if (j.approval) return router.push(`/approvals?id=${j.approval.approval_id}`); // 예약 시각 전에 웹 승인이 있어야 실행된다
+      setJob(j);
     } catch (e) { setError((e as Error).message); }
     setBusy(false);
   };
@@ -79,6 +81,8 @@ function JobDetail({ id }: { id: string }) {
     setError(null);
     try {
       let j = await api<Job>(`/workspaces/${ws.id}/bulk-jobs/${id}/${path}`, { method: "POST" });
+      // 계정 하루예산 합계가 늘 수 있는 작업은 실행되지 않고 승인 요청이 온다 → 승인 화면에서 확인 후 승인
+      if (j.approval) return router.push(`/approvals?id=${j.approval.approval_id}`);
       // 실행은 서버가 몇 건씩 나눠 처리한다(무료 플랜 요청당 호출 한도). RUNNING이면 남은 건을 이어서 요청
       while (path === "execute" && j.status === "RUNNING") {
         setJob(j);
