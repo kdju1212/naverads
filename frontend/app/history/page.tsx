@@ -18,7 +18,7 @@ const ACTION: Record<string, string> = { UPDATE: "변경", CREATE: "생성", DEL
   JOB_PREVIEW: "미리보기 생성", JOB_SCHEDULE: "예약", JOB_SCHEDULE_FAIL: "예약 실행 실패", GOAL_SET: "목표 ROAS 설정", GOAL_DELETE: "목표 ROAS 해제",
   APPROVAL_PENDING: "승인 요청", APPROVAL_APPROVED: "웹 승인", APPROVAL_DONE: "승인 실행 완료", APPROVAL_PARTIAL: "승인 실행 일부 성공",
   APPROVAL_SUCCESS: "승인 실행 완료", APPROVAL_FAILED: "승인 실행 실패", APPROVAL_REJECTED: "승인 거절", APPROVAL_EXPIRED: "승인 만료",
-  EMERGENCY_STOP: "긴급 중지", SAFETY_SET: "안전장치 설정", CREDENTIAL_REPLACE: "API 키 교체", CREDENTIAL_DELETE: "API 키 삭제" };
+  EMERGENCY_STOP: "긴급 중지", SAFETY_SET: "안전장치 설정", CLAUDE_DIRECT_SET: "Claude 바로 실행 설정", CREDENTIAL_REPLACE: "API 키 교체", CREDENTIAL_DELETE: "API 키 삭제" };
 
 export default function HistoryPage() {
   const { ws, selected, accountName } = useApp();

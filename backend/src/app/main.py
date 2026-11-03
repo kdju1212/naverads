@@ -675,6 +675,18 @@ async def put_safety(body: SafetyIn, account_id: int, m: Membership = Depends(ad
     return safety.status(db, m.workspace_id, account_id, lambda: bulk._client(db, m.workspace_id, account_id))
 
 
+class DirectIn(BaseModel):
+    on: bool
+
+
+@app.put("/workspaces/{ws_id}/ad-accounts/{account_id}/safety/claude-direct")
+async def put_claude_direct(body: DirectIn, account_id: int, m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
+    """관리자만, 웹에서만(일반 API는 Claude 토큰을 받지 않는다). 켜면 이 계정의 웹 승인 대상도 Claude 허용 버튼으로 실행된다."""
+    resolve_account_ids(db, m, [account_id])
+    safety.set_direct(db, m, account_id, body.on)
+    return {"claude_direct": body.on}
+
+
 class StopIn(BaseModel):
     ad_account_id: int
     entity_type: Literal["campaign", "adgroup", "keyword", "ad", "ad_extension"]

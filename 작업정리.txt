@@ -46,6 +46,9 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
     · 고침(fix/audit-order-preview-label): 승인 기록을 상태 변경보다 먼저 저장(승인·거절·만료·실행 결과, 플레이스 포함), 409면 먼저 남긴 기록 지움
     · 함께: 변경 이력의 JOB_PREVIEW → '미리보기 생성', 계정 하나짜리 작업이면 광고주 표시(예전 기록은 그대로 '-')
 
+  - 계정별 'Claude에서 바로 실행'(feat/claude-direct, 0017): 관리자만 웹 설정 > 안전장치에서 켬. 켜면 캠페인 켜기·예산 증액·ADVoost 켜기도
+    웹 승인 없이 Claude 허용 버튼으로 실행(웹에서 실행해도 바로). 안전장치 검사는 그대로. ★ 병합 전에 0017 운영 적용 먼저
+
 [할 것 — 순서대로]
   0. [완료 11/03] PR #3(docs/summary-1102 → main) 병합: https://github.com/kdju1212/naverads/pull/3
      - 11/02 밤 열어 두고 병합 안 한 채 종료(사용자). 이 정리(11/02 밤 기준)는 아직 이 브랜치에만 있고 main 작업정리는 그 전 버전

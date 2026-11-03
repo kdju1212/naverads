@@ -362,6 +362,8 @@ def plan(db: Session, m: Membership, change: PlaceChange) -> dict:
         summary = _inspect(client, change.action, p, *_checks(db, m.workspace_id, change.ad_account_id, client))
     except NaverApiError as e:
         raise HTTPException(400, friendly(e))
+    if safety.direct(db, m.workspace_id, change.ad_account_id):  # 관리자가 켠 계정: 웹 승인 없이 Claude 허용 버튼으로 적용
+        summary["web_required"] = False
     payload = _canonical(change.ad_account_id, change.action, p)
     ttl = WEB_APPROVAL_TTL if summary["web_required"] else APPROVAL_TTL
     ar = ApprovalRequest(workspace_id=m.workspace_id, requested_by=m.user_id, tool=f"place:{change.action}"[:40], payload=payload,
