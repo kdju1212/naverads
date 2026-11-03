@@ -1226,6 +1226,12 @@ def test_google_login(monkeypatch):
 
     monkeypatch.setenv("APP_ENV", "prod")  # 운영은 비밀번호 가입 막힘
     assert c.post("/auth/signup", json={"email": "x@a.com", "password": "password1", "name": "x"}).status_code == 403
+    # 운영은 비밀번호 로그인도 막힘(웹·Claude 연결 화면 모두 Google로만, 11/03)
+    monkeypatch.setenv("APP_SECRET", "dev-only-secret")  # 운영은 APP_SECRET 필수(연결 요청 서명을 읽음), 테스트 기본값과 같게
+    assert c.post("/auth/login", json={"email": "x@a.com", "password": "password1"}).status_code == 403
+    page = c.get("/oauth/authorize", params=q).text
+    assert 'name="password"' not in page and "/auth/google/start?" in page
+    assert c.post("/oauth/authorize", data={**q, "email": "x@a.com", "password": "password1"}, follow_redirects=False).status_code == 403
 
 
 def test_prod_rejects_mock_credential(monkeypatch):

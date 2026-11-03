@@ -5,6 +5,7 @@ import base64
 import hashlib
 import html
 import json
+import os
 import secrets
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlencode, urlparse
@@ -84,11 +85,12 @@ def _login_page(q: dict | None, error: str = "", status: int = 200) -> HTMLRespo
     e = html.escape
     hidden = "".join(f'<input type="hidden" name="{k}" value="{e(v)}">' for k, v in (q or {}).items())
     target = e(urlparse(q["redirect_uri"]).hostname or "") if q else ""
-    form = "" if q is None else f"""
+    pw = "" if os.getenv("APP_ENV", "dev") != "dev" else f"""
 <form method="post">{hidden}
 <label>이메일<input name="email" type="email" autocomplete="username" required></label>
 <label>비밀번호<input name="password" type="password" autocomplete="current-password" required></label>
-<button>로그인하고 연결</button></form>
+<button>로그인하고 연결</button></form>"""  # 운영은 Google로만, 비밀번호는 로컬·테스트용
+    form = "" if q is None else f"""{pw}
 <a class="google" href="/auth/google/start?{e(urlencode(q))}">Google로 로그인하고 연결</a>
 <p class="sub">로그인하면 {target} 의 Claude가 내 권한 안에서 광고 계정을 조회·수정할 수 있습니다.
 <a href="{WEB}/terms">이용약관</a> · <a href="{WEB}/privacy">개인정보처리방침</a></p>"""
@@ -117,6 +119,8 @@ async def authorize(request: Request):
     q, err = _auth_params(form)
     if err:
         return _login_page(None, err, 400)
+    if os.getenv("APP_ENV", "dev") != "dev":
+        return _login_page(q, "Google로 로그인하고 연결해 주세요", 403)
     email, ip = str(form.get("email") or ""), request.headers.get("cf-connecting-ip")
     db = SessionLocal()
     try:  # 웹 로그인과 같은 실패 횟수 제한

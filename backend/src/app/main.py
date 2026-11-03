@@ -154,6 +154,8 @@ def record_login(db: Session, email: str, ip: str | None, ok: bool):
 
 @app.post("/auth/login")
 async def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
+    if os.getenv("APP_ENV", "dev") != "dev":  # 운영 로그인은 Google로만(11/03). 비밀번호 로그인은 로컬·테스트용
+        raise HTTPException(403, "Google로 계속하기로 로그인해 주세요")
     ip = request.headers.get("cf-connecting-ip")
     if login_blocked(db, body.email, ip):
         raise HTTPException(429, LOGIN_BLOCKED)
