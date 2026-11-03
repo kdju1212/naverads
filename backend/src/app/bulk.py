@@ -189,6 +189,12 @@ def job_hash(rows: list[BulkJobRow]) -> str:
     return hashlib.sha256(body.encode()).hexdigest()
 
 
+def job_account(db: Session, job_id: int) -> int | None:
+    """변경 이력의 광고주 칸: 작업 대상 계정이 하나면 그 계정, 여러 계정이 섞이면 None."""
+    accs = set(db.scalars(select(BulkJobRow.ad_account_id).where(BulkJobRow.job_id == job_id)))
+    return next(iter(accs)) if len(accs) == 1 else None
+
+
 def job_approval(db: Session, job: BulkJob, statuses=("APPROVED", "RUNNING")) -> ApprovalRequest | None:
     return db.scalar(select(ApprovalRequest).where(ApprovalRequest.kind == "job", ApprovalRequest.job_id == job.id,
                                                    ApprovalRequest.status.in_(statuses)).order_by(ApprovalRequest.id.desc()).limit(1))
@@ -280,7 +286,8 @@ def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = No
         results = (results - {"RUNNING"}) | {"FAILED"}
     job.status = "DONE" if results == {"SUCCESS"} else "FAILED" if "SUCCESS" not in results else "PARTIAL"
     job.executed_at = now()
-    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, job_id=job.id, action=f"JOB_{job.status}", entity_type="job"))
+    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, job_id=job.id, action=f"JOB_{job.status}", entity_type="job",
+                    ad_account_id=job_account(db, job.id)))
     _finish_approval(db, m, job)
     db.commit()
     return job

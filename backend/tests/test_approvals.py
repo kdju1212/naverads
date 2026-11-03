@@ -616,6 +616,9 @@ def test_reject_audit_once_and_preview_audit_has_account():
     logs = c.get(f"/workspaces/{ws}/audit-logs", headers=owner).json()
     assert [l["action"] for l in logs if l["job_id"] == job["id"]] == ["APPROVAL_REJECTED", "APPROVAL_PENDING", "JOB_PREVIEW"]
     assert all(l["ad_account_id"] == acc for l in logs if l["job_id"] == job["id"])
+    done = _run(owner, ws, _job(owner, ws, [ch(acc, "campaign", "cmp-7499-pl", "status", "OFF")])["id"])
+    assert any(l["action"] == "JOB_DONE" and l["ad_account_id"] == acc
+               for l in c.get(f"/workspaces/{ws}/audit-logs", headers=owner).json() if l["job_id"] == done["id"])
 
 
 def test_claude_direct_per_account_admin_only():

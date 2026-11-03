@@ -930,9 +930,8 @@ def _job_out(db: Session, job: BulkJob):
 @app.post("/workspaces/{ws_id}/bulk-jobs")
 async def create_bulk_job(body: BulkIn, m: Membership = Depends(membership), db: Session = Depends(get_db)):
     job = bulk.create_job(db, m, [c.model_dump() for c in body.changes], body.source)
-    accs = set(db.scalars(select(BulkJobRow.ad_account_id).where(BulkJobRow.job_id == job.id)))
     db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, job_id=job.id, action="JOB_PREVIEW", entity_type="job",
-                    ad_account_id=next(iter(accs)) if len(accs) == 1 else None))  # 여러 계정이 섞이면 비움
+                    ad_account_id=bulk.job_account(db, job.id)))
     db.commit()
     return {**_job_out(db, job), "safety": _job_safety(db, m, job)}
 
