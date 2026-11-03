@@ -48,6 +48,11 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
 
   - 계정별 'Claude에서 바로 실행'(feat/claude-direct, 0017): 관리자만 웹 설정 > 안전장치에서 켬. 켜면 캠페인 켜기·예산 증액·ADVoost 켜기도
     웹 승인 없이 Claude 허용 버튼으로 실행(웹에서 실행해도 바로). 안전장치 검사는 그대로. ★ 병합 전에 0017 운영 적용 먼저
+    · 0017 운영 적용(wrangler 재로그인 필요했음: 예전 토큰에 d1 권한 없어 7403) → PR #5 병합 → 운영 확인: 현지(4286027)만 켬,
+      Claude로 '파워링크 복습'(50원) 켜기 = 승인 주소 없이 실행 성공(작업 #82) → stop_ad로 다시 끔(OFF 확인)
+    · ★ 첫 실행은 Cloudflare 1102(Worker 자원 한도 초과)로 끊김(네이버 반영·기록 없음), 같은 작업 다시 실행하니 성공.
+      아침 '승인 거절 기록 빠짐'도 같은 원인으로 보임. 무료 플랜 CPU 한도 — 다시 생기면 실행 경로(안전장치 재조회·잠금·재확인) 처리 시간 측정·줄이기
+    · 남은 작은 것: 변경 이력의 JOB_DONE도 영어·광고주 '-'(JOB_PREVIEW와 같은 방법으로 고치면 됨)
 
 [할 것 — 순서대로]
   0. [완료 11/03] PR #3(docs/summary-1102 → main) 병합: https://github.com/kdju1212/naverads/pull/3
@@ -103,7 +108,7 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
       필수 검사 backend·frontend(Workers Builds 두 개는 넣지 말 것 — 브랜치에서 늘 실패해 병합이 막힘). 공개 저장소라 Actions의 외부 기여자 실행 승인도 켜기
     · 지금 해도 불편 없는 최소 설정(선택): Block force pushes + Restrict deletions
     · 자세한 절차: docs/SECURITY_OPERATIONS.md 4절
-  - 운영 브라우저 확인(14-25 미확인): 로그인·새로고침·로그아웃·쿠키 속성, 꺼진 캠페인 ON → /approvals → 거절 → 계속 OFF(SECURITY_OPERATIONS 7-2절)
+  - 운영 브라우저 확인 → 11/03 사용자 확인 통과(위 11/03 한 것)
   - 광고주별 지출·입찰 상한 → 11/01 해결(14-16), 로그아웃 시 서버 토큰 폐기 → 11/01 해결(14-17)
 
 [주의]
