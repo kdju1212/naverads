@@ -641,3 +641,15 @@ def test_claude_direct_per_account_admin_only():
     assert "approval" not in out and out["status"] == "DONE" and _MOCK_STORE["7498"]["campaigns"]["cmp-7498-pl"]["userLock"] is False
     logs = c.get(f"/workspaces/{ws}/audit-logs", headers=owner).json()
     assert any(l["action"] == "CLAUDE_DIRECT_SET" and l["after"] == "ON" for l in logs)
+
+
+def test_delete_account_with_approvals_and_locks():
+    # 운영 D1은 외래 키를 검사한다: 승인 요청·계정 잠금이 있는 조직도 탈퇴로 지워져야 한다(11/03 운영에서 bulk_jobs 삭제가 막혔던 것)
+    owner, ws, acc = _account("ap-del2@a.com", "7497")
+    MockNaverClient("7497")
+    _off("7497", "cmp-7497-pl")
+    _request(owner, ws, [ch(acc, "campaign", "cmp-7497-pl", "status", "ON", before="OFF")])
+    with SessionLocal() as db, safety.account_lock(db, acc):
+        pass
+    _run(owner, ws, _job(owner, ws, [ch(acc, "keyword", "kwd-7497-11", "status", "OFF")])["id"])
+    assert c.post("/auth/delete-account", headers=owner, json={"password": "password1"}).json() == {"ok": True}

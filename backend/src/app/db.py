@@ -1,6 +1,6 @@
 import os
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
@@ -15,6 +15,11 @@ engine = None if DATABASE_URL == "d1" else create_engine(
     connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
 )
 SessionLocal = sessionmaker(engine, expire_on_commit=False)
+
+if DATABASE_URL.startswith("sqlite"):  # D1처럼 외래 키를 검사해야 로컬·테스트에서 지우는 순서 잘못을 잡는다
+    @event.listens_for(engine, "connect")
+    def _fk_on(conn, _):
+        conn.execute("PRAGMA foreign_keys=ON")
 
 
 def bind_d1(binding):
