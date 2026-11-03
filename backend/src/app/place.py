@@ -394,9 +394,13 @@ def _caps(db: Session, ws_id: int, account_id: int, ops: list[tuple]):
         raise HTTPException(400, str(e))
 
 
-def _audit_approval(db, m, ar: ApprovalRequest, account_id: int | None, action: str, after: str | None = None):
-    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=account_id, action=action, entity_type="approval",
-                    naver_id=str(ar.id), field=ar.tool[6:26], after=after and after[:50]))
+def _audit_approval(db, m, ar: ApprovalRequest, account_id: int | None, action: str, after: str | None = None) -> AuditLog:
+    """기록을 먼저 바로 저장한다(approvals._audit와 같은 이유: D1은 문장마다 저장돼 상태만 바뀌고 기록이 빠질 수 있다)."""
+    log = AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=account_id, action=action, entity_type="approval",
+                   naver_id=str(ar.id), field=ar.tool[6:26], after=after and after[:50])
+    db.add(log)
+    db.flush()
+    return log
 
 
 def _aware(t: datetime) -> datetime:
@@ -415,8 +419,8 @@ def apply(db: Session, m: Membership, approval_id: int, change: PlaceChange) -> 
         from .approvals import url
         raise HTTPException(403, f"이 변경은 사장님이 웹 승인 화면에서 직접 승인해야 실행돼요: {url(ar)}")
     if ar.status == "PENDING" and _aware(ar.expires_at) < now():
-        ar.status = "EXPIRED"
         _audit_approval(db, m, ar, change.ad_account_id, "APPROVAL_EXPIRED")
+        ar.status = "EXPIRED"
         db.commit()
         raise HTTPException(410, "승인한 지 15분이 지났어요. 계획부터 다시 만들어 주세요")
     # 한 번만 실행: PENDING → RUNNING을 한 문장으로 바꿔 동시에 두 번 눌러도 하나만 지나간다
@@ -435,8 +439,8 @@ def _execute(db: Session, m: Membership, ar: ApprovalRequest, change: PlaceChang
     p = _norm(change.action, change.params)
 
     def finish(status, steps, error=None):
-        ar.status, ar.result = {"SUCCESS": "DONE"}.get(status, status), json.dumps({"steps": steps, "error": error}, ensure_ascii=False)[:2000]
         _audit_approval(db, m, ar, change.ad_account_id, f"APPROVAL_{status}", error)
+        ar.status, ar.result = {"SUCCESS": "DONE"}.get(status, status), json.dumps({"steps": steps, "error": error}, ensure_ascii=False)[:2000]
         db.commit()
         return {"status": status, "steps": steps, "error": error, "notice": NOTICE if status != "FAILED" else None}
 
@@ -466,10 +470,12 @@ def cancel(db: Session, m: Membership, approval_id: int) -> dict:
     ar = db.get(ApprovalRequest, approval_id)
     if ar is None or ar.workspace_id != m.workspace_id or ar.requested_by != m.user_id or not ar.tool.startswith("place:"):
         raise HTTPException(404, "승인 요청을 찾을 수 없어요")
+    log = _audit_approval(db, m, ar, json.loads(ar.payload)["ad_account_id"], "APPROVAL_REJECTED")
     if db.execute(update(ApprovalRequest).where(ApprovalRequest.id == ar.id, ApprovalRequest.status == "PENDING")
                   .values(status="REJECTED", decided_by=m.user_id, decided_at=now())).rowcount != 1:
+        db.delete(log)
+        db.commit()
         raise HTTPException(409, "이미 실행했거나 취소한 요청이에요")
-    _audit_approval(db, m, ar, json.loads(ar.payload)["ad_account_id"], "APPROVAL_REJECTED")
     db.commit()
     return {"status": "REJECTED"}
 

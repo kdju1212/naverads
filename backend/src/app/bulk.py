@@ -222,10 +222,12 @@ def _fail_web_rows(db: Session, workspace_id: int, rows: list[BulkJobRow], clien
 def _finish_approval(db: Session, m: Membership, job: BulkJob):
     ar = job_approval(db, job, ("RUNNING",))
     if ar:
-        ar.status = {"DONE": "DONE", "PARTIAL": "PARTIAL"}.get(job.status, "FAILED")
-        ar.result = json.dumps({"job_id": job.id, "job_status": job.status}, ensure_ascii=False)
+        status = {"DONE": "DONE", "PARTIAL": "PARTIAL"}.get(job.status, "FAILED")
         db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=ar.ad_account_id, job_id=job.id,
-                        action=f"APPROVAL_{ar.status}", entity_type="approval", naver_id=str(ar.id), field="job"))
+                        action=f"APPROVAL_{status}", entity_type="approval", naver_id=str(ar.id), field="job"))
+        db.flush()  # 기록 먼저(approvals._audit와 같은 이유)
+        ar.status = status
+        ar.result = json.dumps({"job_id": job.id, "job_status": job.status}, ensure_ascii=False)
 
 
 def execute_job(db: Session, m: Membership, job: BulkJob, limit: int | None = None) -> BulkJob:
