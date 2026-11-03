@@ -43,9 +43,13 @@ def out(ar: ApprovalRequest) -> dict:
             "approve_url": url(ar)}
 
 
-def _audit(db, m, ar: ApprovalRequest, action: str, after: str | None = None):
-    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=ar.ad_account_id, job_id=ar.job_id, action=action,
-                    entity_type="approval", naver_id=str(ar.id), field=ar.kind, after=after and after[:50]))
+def _audit(db, m, ar: ApprovalRequest, action: str, after: str | None = None) -> AuditLog:
+    """기록을 먼저 바로 저장한다. D1은 문장마다 바로 저장돼서, 상태를 먼저 바꾸고 요청이 끊기면 기록 없이 상태만 바뀐다."""
+    log = AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=ar.ad_account_id, job_id=ar.job_id, action=action,
+                   entity_type="approval", naver_id=str(ar.id), field=ar.kind, after=after and after[:50])
+    db.add(log)
+    db.flush()
+    return log
 
 
 def _job_summary(db: Session, m: Membership, job: BulkJob, rows: list[BulkJobRow], claimed: dict[int, str | None]) -> dict:
@@ -136,8 +140,8 @@ def request_for_job(db: Session, m: Membership, job: BulkJob) -> ApprovalRequest
     for ar in db.scalars(select(ApprovalRequest).where(ApprovalRequest.job_id == job.id, ApprovalRequest.status == "PENDING")):
         if _aware(ar.expires_at) >= now() and ar.payload_hash == h:
             return ar
-        ar.status = "EXPIRED"
         _audit(db, m, ar, "APPROVAL_EXPIRED")
+        ar.status = "EXPIRED"
     accs = {r.ad_account_id for r in rows}
     expires = (job.scheduled_at and _aware(job.scheduled_at)) or now() + APPROVAL_TTL
     ar = ApprovalRequest(workspace_id=m.workspace_id, requested_by=m.user_id, tool="bulk_job", kind="job", job_id=job.id,
@@ -175,8 +179,8 @@ def _visible(db: Session, m: Membership, ar: ApprovalRequest) -> bool:
 
 def _expire_if_due(db: Session, m: Membership, ar: ApprovalRequest) -> bool:
     if ar.status == "PENDING" and _aware(ar.expires_at) < now():
-        ar.status = "EXPIRED"
         _audit(db, m, ar, "APPROVAL_EXPIRED")
+        ar.status = "EXPIRED"
         db.commit()
     return ar.status == "EXPIRED"
 
@@ -201,11 +205,12 @@ def approve(db: Session, m: Membership, approval_id: int) -> dict:
         if job.status != "PREVIEW" or bulk.job_hash(rows) != ar.payload_hash:
             raise HTTPException(409, "승인 요청 뒤 작업 내용이 바뀌었어요. 다시 요청해 주세요")
     # 한 번만: PENDING에서 바꾼 요청만 지나간다. 작업은 APPROVED(실행이 RUNNING으로 바꿈), 플레이스는 바로 RUNNING
+    log = _audit(db, m, ar, "APPROVAL_APPROVED")
     if db.execute(update(ApprovalRequest).where(ApprovalRequest.id == ar.id, ApprovalRequest.status == "PENDING")
                   .values(status="RUNNING" if ar.kind == "place" else "APPROVED", decided_by=m.user_id, decided_at=now())).rowcount != 1:
-        db.rollback()
+        db.delete(log)  # 다른 요청이 먼저 바꿈: 먼저 남긴 기록을 지운다(D1은 rollback이 안 된다)
+        db.commit()
         raise HTTPException(409, "이미 승인·거절했거나 실행한 요청이에요")
-    _audit(db, m, ar, "APPROVAL_APPROVED")
     db.commit()
     db.refresh(ar)
     if ar.kind == "place":
@@ -217,8 +222,8 @@ def approve(db: Session, m: Membership, approval_id: int) -> dict:
     try:
         job = bulk.execute_job(db, m, job, bulk.EXECUTE_CHUNK)
     except HTTPException as e:
-        ar.status, ar.result = "FAILED", json.dumps({"error": e.detail}, ensure_ascii=False)
         _audit(db, m, ar, "APPROVAL_FAILED", str(e.detail))
+        ar.status, ar.result = "FAILED", json.dumps({"error": e.detail}, ensure_ascii=False)
         db.commit()
         raise
     db.refresh(ar)
@@ -229,14 +234,16 @@ def reject(db: Session, m: Membership, approval_id: int) -> dict:
     ar = _get(db, m, approval_id)
     if ar.requested_by != m.user_id and m.role not in ADMIN_ROLES:
         raise HTTPException(403, "요청한 본인이나 관리자만 거절할 수 있어요")
+    log = _audit(db, m, ar, "APPROVAL_REJECTED")
     if db.execute(update(ApprovalRequest).where(ApprovalRequest.id == ar.id, ApprovalRequest.status.in_(("PENDING", "APPROVED")))
                   .values(status="REJECTED", decided_by=m.user_id, decided_at=now())).rowcount != 1:
+        db.delete(log)
+        db.commit()
         raise HTTPException(409, "이미 실행했거나 끝난 요청이에요")
     if ar.kind == "job":  # 예약 작업이면 예약도 풀어 크론이 실행하지 않게
         job = db.get(BulkJob, ar.job_id)
         if job.status == "PREVIEW":
             job.scheduled_at = None
-    _audit(db, m, ar, "APPROVAL_REJECTED")
     db.commit()
     db.refresh(ar)
     return out(ar)

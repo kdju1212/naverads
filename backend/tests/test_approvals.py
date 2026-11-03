@@ -603,3 +603,16 @@ def test_extension_lock_and_unknown_result(monkeypatch):
     monkeypatch.setattr(MockNaverClient, "create_ad_extension", written_but_no_reply)
     r = c.post(f"/workspaces/{ws}/ad-extensions", headers=owner, json=body)
     assert r.status_code == 400 and r.json()["detail"] == bulk.UNKNOWN and count() == before + 2  # 한 번만 보냄, 확인 안내
+
+
+def test_reject_audit_once_and_preview_audit_has_account():
+    # D1은 문장마다 바로 저장돼 기록을 먼저 남긴다. 두 번째 거절(409)은 기록을 남기지 않는다
+    owner, ws, acc = _account("ap-audit@a.com", "7499")
+    MockNaverClient("7499")
+    _off("7499", "cmp-7499-pl")
+    job, ap = _request(owner, ws, [ch(acc, "campaign", "cmp-7499-pl", "status", "ON", before="OFF")])
+    url = f"/workspaces/{ws}/approvals/{ap['approval_id']}/reject"
+    assert c.post(url, headers=owner).status_code == 200 and c.post(url, headers=owner).status_code == 409
+    logs = c.get(f"/workspaces/{ws}/audit-logs", headers=owner).json()
+    assert [l["action"] for l in logs if l["job_id"] == job["id"]] == ["APPROVAL_REJECTED", "APPROVAL_PENDING", "JOB_PREVIEW"]
+    assert all(l["ad_account_id"] == acc for l in logs if l["job_id"] == job["id"])
