@@ -214,7 +214,7 @@ def _delete_workspace(db: Session, ws_id: int):
     acc_ids = list(db.scalars(select(WorkspaceAdAccount.ad_account_id).where(WorkspaceAdAccount.workspace_id == ws_id)))
     db.execute(delete(AuditLog).where(AuditLog.workspace_id == ws_id))
     db.execute(delete(BulkJobRow).where(BulkJobRow.job_id.in_(select(BulkJob.id).where(BulkJob.workspace_id == ws_id))))
-    for model in (BulkJob, AutoBidRule, AccountGoal, Subscription, ApprovalRequest, SyncRun, AccountSafety):
+    for model in (ApprovalRequest, BulkJob, AutoBidRule, AccountGoal, Subscription, SyncRun, AccountSafety):  # 승인 요청이 작업을 참조해 먼저
         db.execute(delete(model).where(model.workspace_id == ws_id))
     db.execute(delete(AccountAccess).where(AccountAccess.membership_id.in_(select(Membership.id).where(Membership.workspace_id == ws_id))))
     for model in (Membership, WorkspaceAdAccount, NaverApiCredential):
