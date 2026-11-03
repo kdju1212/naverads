@@ -204,7 +204,7 @@ def needs_web_approval(db: Session, workspace_id: int, rows: list[BulkJobRow], c
             if acc not in clients:
                 clients[acc] = _client(db, workspace_id, acc)
             return clients[acc]
-        if ops and safety.web_approval_needed(ops, client):
+        if ops and not safety.direct(db, workspace_id, acc) and safety.web_approval_needed(ops, client):
             return True
     return False
 

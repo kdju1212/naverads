@@ -616,3 +616,25 @@ def test_reject_audit_once_and_preview_audit_has_account():
     logs = c.get(f"/workspaces/{ws}/audit-logs", headers=owner).json()
     assert [l["action"] for l in logs if l["job_id"] == job["id"]] == ["APPROVAL_REJECTED", "APPROVAL_PENDING", "JOB_PREVIEW"]
     assert all(l["ad_account_id"] == acc for l in logs if l["job_id"] == job["id"])
+
+
+def test_claude_direct_per_account_admin_only():
+    # 관리자가 웹에서 켠 계정만: 캠페인 켜기가 웹 승인 없이 Claude 허용 버튼으로 실행된다. 직원·Claude 토큰은 못 켠다
+    owner, ws, acc = _account("ap-direct@a.com", "7498")
+    MockNaverClient("7498")
+    _off("7498", "cmp-7498-pl")
+    url = f"/workspaces/{ws}/ad-accounts/{acc}/safety/claude-direct"
+    staff, _ = _staff(owner, ws, acc, "ap-direct-staff@a.com")
+    h = _mcp_headers(owner)
+    assert c.put(url, json={"on": True}, headers=staff).status_code == 403
+    assert c.put(url, json={"on": True}, headers=h).status_code == 401
+    on = [ch(acc, "campaign", "cmp-7498-pl", "status", "ON")]
+    pv, _ = _mcp_call(h, "preview_changes", workspace_id=ws, changes=on)
+    assert _mcp_call(h, "execute_job", workspace_id=ws, job_id=pv["id"])[0]["approval"]["status"] == "PENDING"
+    assert c.put(url, json={"on": True}, headers=owner).status_code == 200
+    assert _mcp_call(h, "get_ad_safety", workspace_id=ws, ad_account_id=acc)[0]["claude_direct"] is True
+    pv, _ = _mcp_call(h, "preview_changes", workspace_id=ws, changes=on)
+    out, _ = _mcp_call(h, "execute_job", workspace_id=ws, job_id=pv["id"])
+    assert "approval" not in out and out["status"] == "DONE" and _MOCK_STORE["7498"]["campaigns"]["cmp-7498-pl"]["userLock"] is False
+    logs = c.get(f"/workspaces/{ws}/audit-logs", headers=owner).json()
+    assert any(l["action"] == "CLAUDE_DIRECT_SET" and l["after"] == "ON" for l in logs)

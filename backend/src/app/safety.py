@@ -361,11 +361,28 @@ def account_lock(db: Session, account_id: int):
         release_lock(db, account_id, holder)
 
 
+def direct(db: Session, ws_id: int, account_id: int) -> bool:
+    """관리자가 웹에서 'Claude에서 바로 실행'을 켠 계정이면 웹 승인 없이 실행한다(안전장치 검사는 그대로)."""
+    s = get(db, ws_id, account_id)
+    return bool(s and s.claude_direct)
+
+
+def set_direct(db: Session, m: Membership, account_id: int, on: bool):
+    s = get(db, m.workspace_id, account_id)
+    if s is None:
+        raise HTTPException(400, "안전장치 금액을 먼저 정해 주세요")
+    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, ad_account_id=account_id, action="CLAUDE_DIRECT_SET", entity_type="account",
+                    field="claude_direct", before="ON" if s.claude_direct else "OFF", after="ON" if on else "OFF"))
+    db.flush()
+    s.claude_direct = on
+    db.commit()
+
+
 def status(db: Session, ws_id: int, account_id: int, get_client) -> dict:
     """설정 화면·처음 연결: 지금 켜진 캠페인의 하루예산 설정액과 합계, 문제와 필요한 조치."""
     s = get(db, ws_id, account_id)
     out = {"configured": s is not None, "daily_budget_limit": s and s.daily_budget_limit, "max_bid": s and s.max_bid,
-           "set_by": s and s.set_by, "set_at": s and s.set_at, "note": OVERSPEND_NOTE}
+           "set_by": s and s.set_by, "set_at": s and s.set_at, "claude_direct": bool(s and s.claude_direct), "note": OVERSPEND_NOTE}
     try:
         total, reasons, rows = Snapshot(get_client()).total()
     except NaverApiError as e:

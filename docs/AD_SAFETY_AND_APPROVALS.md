@@ -74,6 +74,11 @@
 
 ## 2. 웹 승인 (`approvals.py`, `approval_requests`)
 
+### 예외: 계정별 'Claude에서 바로 실행' (11/03, 0017)
+- 관리자(OWNER·ADMIN)가 웹 설정 > 안전장치에서 계정마다 켠다(`PUT .../ad-accounts/{id}/safety/claude-direct`, 일반 API라 Claude 토큰으로는 못 부름). 안전장치 금액을 먼저 정해야 켤 수 있다.
+- 켠 계정은 웹 승인 대상도 승인 요청 없이 실행된다(대량 작업: `bulk.needs_web_approval`, 플레이스: `place.plan`의 `web_required`). 웹 화면에서 실행해도 같다.
+- 하루예산 관리 기준·최대 입찰가·계정 잠금·실행 직전 재조회는 그대로. 켜고 끈 기록은 `CLAUDE_DIRECT_SET`.
+
 ### 흐름
 1. **요청이 만들어지는 경우**
    - 대량 작업: 실행(`POST .../bulk-jobs/{id}/execute`, Claude `execute_job`)이나 예약(`.../schedule`, Claude `schedule_job`)을 했는데 웹 승인 대상 행이 있는 경우.

@@ -163,6 +163,7 @@ class AccountSafety(Base):
     ad_account_id: Mapped[int] = mapped_column(ForeignKey("ad_accounts.id"))
     daily_budget_limit: Mapped[int] = mapped_column(Integer)  # 켜진 캠페인 하루예산 설정액 합계의 관리 기준(원)
     max_bid: Mapped[int] = mapped_column(Integer)  # 클릭당 최대 입찰가(원)
+    claude_direct: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")  # 켜면 웹 승인 대상도 Claude 허용 버튼으로 실행
     set_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     set_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 

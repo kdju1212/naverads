@@ -8,7 +8,7 @@ import { useFetch } from "@/lib/useFetch";
 
 // 서버: backend/src/app/safety.py · 문서: docs/AD_SAFETY_AND_APPROVALS.md
 type Status = {
-  configured: boolean; daily_budget_limit: number | null; max_bid: number | null; set_at: string | null; note: string;
+  configured: boolean; claude_direct: boolean; daily_budget_limit: number | null; max_bid: number | null; set_at: string | null; note: string;
   total: number | null; campaigns: { id: string; name: string; type: string; daily_budget: number; from: string }[];
   problems: string[]; needs_action: boolean; actions: string[];
 };
@@ -38,6 +38,17 @@ export function SafetyPanel({ accountId, isAdmin, onSaved }: { accountId: number
     setBusy(false);
   };
 
+  const setDirect = async (on: boolean) => {
+    if (!ws) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/workspaces/${ws.id}/ad-accounts/${accountId}/safety/claude-direct`, { method: "PUT", body: { on } });
+      await st.reload();
+    } catch (e) { setError((e as Error).message); }
+    setBusy(false);
+  };
+
   if (!s) return <div className="p-3 text-sm text-faint">{st.error ?? "네이버에서 지금 예산 설정을 읽는 중…"}</div>;
   return (
     <div className="grid gap-3 bg-subtle p-3 text-sm">
@@ -56,6 +67,16 @@ export function SafetyPanel({ accountId, isAdmin, onSaved }: { accountId: number
         ? <p>관리 기준: 하루예산 설정액 합계 <b>{fmt(s.daily_budget_limit)}원</b> 이하 · 클릭당 최대 입찰가 <b>{fmt(s.max_bid)}원</b>
             {s.set_at && <span className="text-xs text-faint"> ({new Date(s.set_at).toLocaleString("ko-KR")} 설정)</span>}</p>
         : <p className="text-warning">아직 정하지 않았어요. 정하기 전에는 광고 켜기·예산 올리기·입찰가 바꾸기가 막혀요(끄기·조회는 돼요).</p>}
+      {s.configured && (
+        <div className="grid gap-1">
+          <label className="flex items-center gap-2">
+            <input type="checkbox" checked={s.claude_direct} disabled={!isAdmin || busy} onChange={(e) => setDirect(e.target.checked)} />
+            <b>Claude에서 바로 실행</b>
+          </label>
+          <p className="text-xs text-muted">켜면 이 계정의 캠페인 켜기·하루예산 올리기·ADVoost 켜기도 웹 승인 없이 Claude 화면의 허용 버튼으로 실행돼요.
+            위 관리 기준·최대 입찰가 검사는 그대로예요. 끄면 다시 웹에서 승인해야 해요.</p>
+        </div>
+      )}
       {s.actions.length > 0 && <ul className="text-xs text-warning">{s.actions.map((a) => <li key={a}>→ {a}</li>)}</ul>}
       {isAdmin ? (
         <form className="grid gap-2" onSubmit={(e) => { e.preventDefault(); save(); }}>
