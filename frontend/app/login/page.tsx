@@ -51,13 +51,16 @@ export default function LoginPage() {
             처음이면 Google로 계속하면 가입되며, <Link href="/terms" className="underline">이용약관</Link>과{" "}
             <Link href="/privacy" className="underline">개인정보처리방침</Link>에 동의하는 것으로 봅니다
           </p>
+          {/* 운영 로그인은 Google로만(11/03). 비밀번호 로그인은 로컬 화면 확인용 */}
+          {process.env.NODE_ENV === "development" && <>
           <div className="my-1 border-t border-line" />
           <label className="flex flex-col gap-1 text-sm">이메일<input className={inputCls} type="email" value={form.email} onChange={set("email")} required autoComplete="email" /></label>
           <label className="flex flex-col gap-1 text-sm">비밀번호
             <input className={inputCls} type="password" value={form.password} onChange={set("password")} required autoComplete="current-password" />
           </label>
-          <ErrorText error={error} />
           <Button type="submit" disabled={busy}>{busy ? "처리 중…" : "이메일로 로그인"}</Button>
+          </>}
+          <ErrorText error={error} />
         </div>
       </form>
     </div>

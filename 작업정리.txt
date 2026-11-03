@@ -80,7 +80,7 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
      - 비밀번호·쿠키 값·토큰·네이버 키는 화면 캡처·기록에 남기지 않기
      - Claude 혼자 못 하는 이유(11/02 확인): 점검 계정 로그인 401, 이 PC에 Claude용 브라우저 도구 없음, 실계정 조직은 사용자 Google 계정 필요
        → 사용자가 직접 하거나, .test-account 비밀번호를 맞추면 Claude가 API로 로그인·쿠키·세션·로그아웃까지는 확인 가능(캠페인 테스트는 실계정 필요)
-  2. [선택] .test-account(점검 전용 '이메일+비밀번호' 계정, 조직 'Claude 점검용') 비밀번호 확인·수정(운영 로그인 401) → 맞추면 Claude가 운영 쿠키·세션·로그아웃 자동 확인 가능
+  2. [없어짐 11/03] .test-account(점검 전용 이메일+비밀번호 계정): 운영 비밀번호 로그인을 막아(feat/google-login-only) 더는 못 씀. 운영 로그인 확인은 사용자가 직접
   3. [사용자 결정] 앞으로 쓸 로그인(이메일 sdf / Google ㅁㄴ) 정하기, 현지를 두 조직에 계속 둘지 한쪽 해제할지(위 '로그인 계정·조직 정리')
   4. [선택] Cloudflare 브랜치 빌드(비운영 브랜치 검사)가 늘 1분 안에 실패하는 원인: 운영 빌드는 성공하므로 운영 영향 없음.
      대시보드 Workers > naverads / naverads-api > Settings > Builds의 비운영 브랜치 설정·빌드 로그 확인(로그 API는 Forbidden)
