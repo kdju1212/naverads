@@ -855,6 +855,11 @@ def test_mcp_oauth_and_tools():
     assert not err and ext["ext_type"] == "HEADLINE"
     logs, _ = call("list_audit_logs", workspace_id=ws, limit=3)
     assert len(logs) == 3 and logs[0]["user"] == "mcp@a.com" and {x["entity_type"] for x in logs[:2]} == {"ad", "ad_extension"}
+    gone, err = call("delete_ad_extension", workspace_id=ws, ad_account_id=acc, adgroup_id=groups[0]["naver_id"],
+                     extension_id=ext["naver_id"], ext_type="HEADLINE")
+    assert not err and gone == {"ok": True, "already_gone": False}, gone
+    assert ext["naver_id"] not in {x["naver_id"] for x in call("list_ad_extensions", workspace_id=ws, ad_account_id=acc,
+                                                                  adgroup_id=groups[0]["naver_id"])[0]}
 
     # 자동입찰: 순위 확인 → 규칙 저장 → 지금 실행. 원피스1(300→400원)은 Mock 검색 화면 4위, 목표 1위라 20% 올림
     k = [{"ad_account_id": acc, "naver_id": kws[0]["naver_id"], "keyword": kws[0]["keyword"]}]
@@ -1475,6 +1480,7 @@ def test_tenant_isolation_mcp():
     for name, args in (("list_campaigns", {"ad_account_id": acc_a}), ("list_channels", {"ad_account_id": acc_a}),
                        ("list_keywords", {"ad_account_id": acc_a, "adgroup_id": "grp-9111-pl1"}),
                        ("create_ad_extension", {"ad_account_id": acc_a, "adgroup_id": "grp-9111-pl1", "ext_type": "HEADLINE", "heading": "x"}),
+                       ("delete_ad_extension", {"ad_account_id": acc_a, "adgroup_id": "grp-9111-pl1", "extension_id": "ext-x"}),
                        ("create_ad", {"ad_account_id": acc_a, "adgroup_id": "grp-9111-pl1", "headlines": ["x"], "descriptions": ["y"],
                                       "pc_url": "https://a.com"}),
                        ("execute_job", {"job_id": job_a}), ("schedule_job", {"job_id": job_a, "scheduled_at": None}),

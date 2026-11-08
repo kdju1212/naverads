@@ -305,6 +305,12 @@ TOOLS = [
          "heading": {"type": "string"}, "description": {"type": "string"},
          "links": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "final": {"type": "string"}}}}}},
      "annotations": {"destructiveHint": True}},
+    {"name": "delete_ad_extension", "description": "확장소재를 네이버에서 지운다(바로 실행, 되돌릴 수 없음). 지울 확장소재(광고그룹·유형·내용)를 채팅에 표로 보여 준 뒤 호출(허용 버튼이 승인). "
+     "네이버에 이미 없으면 already_gone=true. 확장소재 ID·유형은 list_ad_extensions에서 얻는다.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id", "extension_id"], "properties": {
+         **ACC, "adgroup_id": {"type": "string", "description": "확장소재가 달린 광고그룹 ID"}, "extension_id": {"type": "string"},
+         "ext_type": {"type": "string", "description": "작업 기록에 남길 유형"}}},
+     "annotations": {"destructiveHint": True}},
     {"name": "list_channels", "description": "광고 계정의 비즈채널(사이트·쇼핑몰 등) 목록. 광고그룹을 만들 때 비즈채널 ID를 여기서 고른다.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id"], "properties": ACC}, "annotations": {"readOnlyHint": True}},
     {"name": "preview_changes", "description": "ON/OFF·입찰가·일예산 변경, 캠페인·광고그룹·키워드 등록, 캠페인·광고그룹·키워드 삭제의 미리보기를 만든다. 아직 네이버에 반영되지 않는다. "
@@ -428,6 +434,8 @@ async def _call(db, user: User, name: str, a: dict):
     if name == "create_ad_extension":
         return await api.create_ad_extension(api.ExtensionIn(ad_account_id=acc, adgroup_naver_id=a["adgroup_id"], **{
             k: a[k] for k in ("ext_type", "heading", "description", "links") if k in a}), m=m, db=db)
+    if name == "delete_ad_extension":
+        return {"ok": True, "already_gone": bulk.delete_extension(db, m, acc, a["extension_id"], a["adgroup_id"], a.get("ext_type"))}
     if name == "related_keywords":
         return (await api.keyword_tool(acc, a["hint"], m=m, db=db))[:100]  # 웹 화면과 같이 검색량 상위 100개
     raise HTTPException(400, f"알 수 없는 도구: {name}")
@@ -455,12 +463,13 @@ async def mcp(request: Request):
                       "serverInfo": {"name": "naverads", "version": "0.1.0"},
                       "instructions": "네이버 검색광고 관리. 먼저 list_ad_accounts로 조직·계정을 확인한다. "
                                       "변경은 preview_changes → 채팅에 미리보기 표 → execute_job(또는 schedule_job으로 예약) 순서로만 한다. "
-                                      "변경 도구(execute_job, schedule_job, create_ad, create_shopping_ad, create_ad_extension, set_auto_bid, delete_auto_bid, run_auto_bids)를 "
+                                      "변경 도구(execute_job, schedule_job, create_ad, create_shopping_ad, create_ad_extension, delete_ad_extension, set_auto_bid, delete_auto_bid, run_auto_bids)를 "
                                       "부르기 직전에 바뀔 내용(계정·광고그룹·대상·지금 값 → 바뀔 값, 문구와 글자 수, 입찰가, 예약 시각, preview_changes의 VALID/INVALID 행)을 "
                                       "채팅에 표로 보여 준 다음 그 도구를 부른다. 사용자는 표를 보고 Claude 화면의 허용 버튼으로 승인한다(채팅 답을 따로 기다리지 않는다). "
                                       "표 없이 변경 도구를 부르지 않는다. 계정 하루예산 합계가 늘 수 있는 변경(캠페인 하루예산 올리기·캠페인 켜기·"
                                       "ADVoost 켜기)은 도구가 실행하지 않고 웹 승인 요청(approval)을 돌려준다(관리자가 그 계정의 'Claude에서 바로 실행'을 켰으면 바로 실행). 그때는 실행됐다고 말하지 말고 승인 주소를 알려 주며, "
-                                      "결과는 get_approval로 확인해 성공·실패·대기를 구분해서 전한다. 하루예산 설정액은 실제 과금의 절대 상한이 아니다."}
+                                      "결과는 get_approval로 확인해 성공·실패·대기를 구분해서 전한다. 하루예산 설정액은 실제 과금의 절대 상한이 아니다. "
+                                      "소재·확장소재 문구는 네이버에서 고칠 수 없다: 문구를 바꿔 달라면 새로 등록하고, 검수 통과 뒤 예전 것을 지운다."}
         elif method == "ping":
             result = {}
         elif method == "tools/list":
