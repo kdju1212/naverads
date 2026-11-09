@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 
 from fastapi import HTTPException
 
-from . import bulk
+from . import bulk, safety
 from .access import resolve_account_ids
 from .models import KST, AuditLog, Membership, today_kst
 from .naver import NaverApiError
@@ -63,7 +63,9 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "report_type", "date"], "properties": {
          **_ACC, "report_type": {"enum": REPORT_TYPES}, "date": {"type": "string", "description": "YYYY-MM-DD(어제 이전)"}}},
      "annotations": {"readOnlyHint": True}},
-    {"name": "get_stat_report", "description": f"대용량 보고서 상태. BUILT면 파일 앞 {PREVIEW_LINES}줄(원본 TSV, 칸 이름 없음)과 전체 줄 수, NONE이면 그날 데이터 없음. "
+    {"name": "get_stat_report", "description": "대용량 보고서 상태. BUILT면 EXPKEYWORD(확장검색 검색어)는 검색어별 노출·클릭·비용 합계(비용 큰 순 100개, 원은 VAT 제외), "
+     f"그 밖의 유형은 파일 앞 {PREVIEW_LINES}줄(원본 TSV, 칸 이름 없음)과 전체 줄 수. NONE이면 그날 데이터 없음. "
+     "검색어 결과로 제외검색어를 추천할 땐 클릭·비용은 있는데 상품과 맞지 않는 검색어를 고르고, add_exp_negative_keywords로 등록한다. "
      "REGIST·RUNNING·WAITING·AGGREGATING이면 잠시 뒤 다시 부른다.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "report_job_id"], "properties": {
          **_ACC, "report_job_id": {"type": "integer"}}},
@@ -93,10 +95,38 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "ad_ids", "target_adgroup_id"], "properties": {
          **_ACC, "ad_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 20}, "target_adgroup_id": {"type": "string"}}},
      "annotations": {"destructiveHint": True}},
-    {"name": "set_adgroup_options", "description": "파워링크 광고그룹의 확장검색(use_exp_search: 등록 안 한 비슷한 검색어에도 노출)과 ADVoost Max(ai_ads_opt_in) 설정(바로 실행). "
+    {"name": "set_adgroup_options", "description": "파워링크 광고그룹의 확장검색(use_exp_search: 등록 안 한 비슷한 검색어에도 노출), 확장검색 예산 비율, ADVoost Max(ai_ads_opt_in) 설정(바로 실행). "
      "확장검색을 켜면 노출·비용이 늘 수 있다. ADVoost Max는 끄기만 된다(켜기는 웹 승인 대상이라 아직 없음). 지금 → 바뀔 값을 채팅에 표로 보여 준 뒤 호출.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id"], "properties": {
-         **_GRP, "use_exp_search": {"type": "boolean"}, "ai_ads_opt_in": {"type": "boolean"}}},
+         **_GRP, "use_exp_search": {"type": "boolean"}, "ai_ads_opt_in": {"type": "boolean"},
+         "exp_search_budget_ratio": {"type": "integer", "description": "광고그룹 예산 중 확장검색에 쓸 비율 1~100(%, 기본 100)"}}},
+     "annotations": {"destructiveHint": True}},
+    {"name": "get_media_target", "description": "광고그룹이 광고를 내보내는 매체: 검색 매체(search)·콘텐츠 매체(contents, 블로그·카페 등) 각각 naver(네이버)·partner(파트너 사이트). "
+     "type 1이면 모든 매체.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id"], "properties": _GRP},
+     "annotations": {"readOnlyHint": True}},
+    {"name": "set_media_target", "description": "광고그룹의 노출 매체를 바꾼다(바로 실행). search·contents에 켤 매체(naver, partner)를 넣고, 넣지 않은 쪽은 꺼진다. "
+     "둘 다 naver·partner면 모든 매체. 예: 검색에만 내기 = search [naver, partner], contents []. 지금 → 바뀔 매체를 채팅에 표로 보여 준 뒤 호출.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id", "search", "contents"], "properties": {
+         **_GRP, "search": {"type": "array", "items": {"enum": ["naver", "partner"]}},
+         "contents": {"type": "array", "items": {"enum": ["naver", "partner"]}}}},
+     "annotations": {"destructiveHint": True}},
+    {"name": "list_exp_negative_keywords", "description": "확장검색 제외검색어 목록(확장검색으로 이 검색어엔 광고를 안 냄). 일반 제외검색어는 list_negative_keywords.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id"], "properties": _GRP},
+     "annotations": {"readOnlyHint": True}},
+    {"name": "add_exp_negative_keywords", "description": "확장검색 제외검색어를 등록한다(바로 실행, 한 번에 20개까지). 검색어 보고서(EXPKEYWORD)에서 돈만 쓰고 맞지 않는 검색어를 막을 때 쓴다. "
+     "등록할 검색어와 그 검색어의 비용·클릭을 채팅에 표로 보여 준 뒤 호출.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id", "keywords"], "properties": {
+         **_GRP, "keywords": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 20}}},
+     "annotations": {"destructiveHint": True}},
+    {"name": "delete_exp_negative_keyword", "description": "확장검색 제외검색어를 지운다(바로 실행, 그 검색어에 다시 노출될 수 있음). ID는 list_exp_negative_keywords의 naver_id.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id", "naver_id"], "properties": {
+         **_GRP, "naver_id": {"type": "string"}, "keyword": {"type": "string", "description": "작업 기록용"}}},
+     "annotations": {"destructiveHint": True}},
+    {"name": "set_keyword_url", "description": "키워드별 연결 URL을 바꾼다(바로 실행). 이 키워드로 클릭한 사람을 소재 URL 대신 이 주소로 보낸다. "
+     "키워드·지금 URL → 바뀔 URL을 채팅에 표로 보여 준 뒤 호출.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "keyword_id", "pc_url"], "properties": {
+         **_ACC, "keyword_id": {"type": "string"}, "pc_url": {"type": "string"}, "mobile_url": {"type": "string", "description": "비우면 PC URL"}}},
      "annotations": {"destructiveHint": True}},
 ]
 
@@ -211,7 +241,60 @@ def call_tool(db, m: Membership, name: str, a: dict):
         if job.get("status") != "BUILT" or not job.get("downloadUrl"):
             return job
         lines = _naver(lambda: c.stat_file(job), "보고서 다운로드").splitlines()
+        if job.get("reportTp") == "EXPKEYWORD":
+            return {**job, **search_terms(lines)}
         return {**job, "total_lines": len(lines), "preview": lines[:PREVIEW_LINES]}
+    if name == "get_media_target":
+        c = _client(db, m, acc, False)
+        return _naver(lambda: c.media_target(a["adgroup_id"]), "매체 설정 조회")["target"]
+    if name == "set_media_target":
+        pick = {k: sorted({x for x in a.get(k) or [] if x in ("naver", "partner")}) for k in ("search", "contents")}
+        if not pick["search"] and not pick["contents"]:
+            raise HTTPException(400, "검색·콘텐츠 매체 중 하나는 켜야 해요")
+        everything = pick["search"] == pick["contents"] == ["naver", "partner"]
+        target = ({"type": 1, "search": [], "contents": [], "black": {"media": None, "mediaGroup": None}} if everything
+                  else {"type": 2, **pick, "black": {"media": [], "mediaGroup": []}})
+        target["white"] = {"media": None, "mediaGroup": None}
+        c = _client(db, m, acc, True)
+        out = _naver(lambda: c.set_media_target(a["adgroup_id"], target), "매체 설정 변경")
+        _log(db, m, acc, "UPDATE", "adgroup", a["adgroup_id"], "media",
+             after="모든 매체" if everything else f"검색:{'+'.join(pick['search']) or '없음'} 콘텐츠:{'+'.join(pick['contents']) or '없음'}")
+        return out
+    if name == "list_exp_negative_keywords":
+        c = _client(db, m, acc, False)
+        return [{"naver_id": k["nccAdgroupRestrictKwdId"], "keyword": k["keyword"]}
+                for k in _naver(lambda: c.list_restricted_keywords(a["adgroup_id"], "EXP_SEARCH"), "확장검색 제외검색어 조회")]
+    if name == "add_exp_negative_keywords":
+        kws = list(dict.fromkeys(k.strip() for k in a["keywords"] if k.strip()))[:20]
+        if not kws:
+            raise HTTPException(400, "검색어를 넣으세요")
+        c = _client(db, m, acc, True)
+        done, failed = [], []
+        for k in kws:  # 하나가 거부돼도 나머지는 등록하고 결과를 나눠 알린다
+            try:
+                r = c.create_restricted_keyword(a["adgroup_id"], k, "EXP_SEARCH")
+                done.append({"naver_id": r["nccAdgroupRestrictKwdId"], "keyword": k})
+                _log(db, m, acc, "CREATE", "negative_keyword", r["nccAdgroupRestrictKwdId"], "exp_search", after=k)
+            except NaverApiError as e:
+                failed.append({"keyword": k, "error": bulk.UNKNOWN if str(e).startswith("네트워크 오류") else str(e)})
+        return {"added": done, "failed": failed}
+    if name == "delete_exp_negative_keyword":
+        c = _client(db, m, acc, True)
+        try:  # 지우면 그 검색어에 다시 노출될 수 있다 → 대량 작업의 제외검색어 삭제와 같은 안전장치
+            safety.check(db, m.workspace_id, acc, [("expose",)], lambda: c)
+        except safety.SafetyError as e:
+            raise HTTPException(400, str(e))
+        _naver(lambda: c.delete_restricted_keyword(a["adgroup_id"], a["naver_id"]), "확장검색 제외검색어 삭제")
+        _log(db, m, acc, "DELETE", "negative_keyword", a["naver_id"], "exp_search", before=a.get("keyword"))
+        return {"ok": True}
+    if name == "set_keyword_url":
+        pc, mo = a["pc_url"].strip(), (a.get("mobile_url") or a["pc_url"]).strip()
+        if not all(u.startswith(("http://", "https://")) for u in (pc, mo)):
+            raise HTTPException(400, "URL은 http(s):// 로 시작해야 해요")
+        c = _client(db, m, acc, True)
+        _naver(lambda: c.set_keyword_url(a["keyword_id"], pc, mo), "키워드 URL 변경")
+        _log(db, m, acc, "UPDATE", "keyword", a["keyword_id"], "url", after=pc)
+        return {"ok": True, "pc_url": pc, "mobile_url": mo}
     if name == "estimate_bid":
         return _estimate(_client(db, m, acc, False), a)
     if name == "get_inspect_history":
@@ -233,15 +316,20 @@ def call_tool(db, m: Membership, name: str, a: dict):
         return out
     if name == "set_adgroup_options":
         opts = {k: a[f] for f, k in (("use_exp_search", "useExpSearch"), ("ai_ads_opt_in", "aiAdsOptIn")) if isinstance(a.get(f), bool)}
+        ratio = a.get("exp_search_budget_ratio")
+        if ratio is not None:
+            if not isinstance(ratio, int) or isinstance(ratio, bool) or not 1 <= ratio <= 100:
+                raise HTTPException(400, "확장검색 예산 비율은 1~100(%)")
+            opts["expSearchBudgetRatio"] = ratio
         if not opts:
-            raise HTTPException(400, "use_exp_search 또는 ai_ads_opt_in을 넣으세요")
+            raise HTTPException(400, "use_exp_search, exp_search_budget_ratio, ai_ads_opt_in 중 하나를 넣으세요")
         if opts.get("aiAdsOptIn"):  # 정책(2026-11-02): ADVoost 켜기는 웹 승인 대상
             raise HTTPException(400, "ADVoost Max 켜기는 웹 승인 대상이라 아직 Claude에서 켤 수 없어요. 네이버 광고관리에서 켜 주세요")
         c = _client(db, m, acc, True)
         out = _naver(lambda: c.set_adgroup_options(a["adgroup_id"], opts), "광고그룹 설정 변경")
         for k, v in opts.items():
-            _log(db, m, acc, "UPDATE", "adgroup", a["adgroup_id"], k, after="ON" if v else "OFF")
-        return {k: out.get(k) for k in ("nccAdgroupId", "name", "useExpSearch", "aiAdsOptIn")}
+            _log(db, m, acc, "UPDATE", "adgroup", a["adgroup_id"], k[:20], after=str(v) if isinstance(v, int) and not isinstance(v, bool) else ("ON" if v else "OFF"))
+        return {k: out.get(k) for k in ("nccAdgroupId", "name", "useExpSearch", "expSearchBudgetRatio", "aiAdsOptIn")}
     raise HTTPException(400, f"알 수 없는 도구: {name}")
 
 
@@ -273,3 +361,23 @@ def _estimate(c, a: dict):
         raise HTTPException(400, "성과 예측은 키워드 문구로만 할 수 있어요")
     items = [{"keyword": k, "bid": b, "device": device, "keywordplus": False} for k in keys for b in bids][:200]
     return _naver(lambda: c.estimate("estimate/performance-bulk", {"items": items}), "성과 예측")
+
+
+# 확장검색 검색어 보고서(EXPKEYWORD) 칸: 실계정 파일(2026-11-08, 12칸)에서 클릭당 비용이 계정 평균과 맞는 것으로 확인.
+# 7번째(0~2)·마지막(전부 0) 칸은 의미 미확인이라 쓰지 않는다
+EXP_COLS = {"adgroup_id": 3, "term": 4, "device": 6, "impressions": 8, "clicks": 9, "cost": 10}
+
+
+def search_terms(lines: list[str], top: int = 100) -> dict:
+    """검색어별(광고그룹·검색어) 노출·클릭·비용 합계, 비용 큰 순. 기기·매체별로 나뉜 줄을 합친다."""
+    agg: dict[tuple, dict] = {}
+    for ln in lines:
+        f = ln.split("\t")
+        if len(f) < 11:
+            continue
+        key = (f[EXP_COLS["adgroup_id"]], f[EXP_COLS["term"]])
+        r = agg.setdefault(key, {"adgroup_id": key[0], "search_term": key[1], "impressions": 0, "clicks": 0, "cost": 0})
+        for k in ("impressions", "clicks", "cost"):
+            r[k] += int(f[EXP_COLS[k]]) if f[EXP_COLS[k]].isdigit() else 0
+    rows = sorted(agg.values(), key=lambda r: (-r["cost"], -r["clicks"], -r["impressions"]))
+    return {"terms": len(rows), "total_cost": sum(r["cost"] for r in rows), "total_clicks": sum(r["clicks"] for r in rows), "rows": rows[:top]}

@@ -205,12 +205,12 @@ class RealNaverClient:
         return k
 
     # 제외검색어: 명세(ncc-heroes-ncc.json) /ncc/adgroups/{id}/restricted-keywords. 실계정 조회·등록·삭제 확인(10/27)
-    def list_restricted_keywords(self, adgroup_id):
-        return self._req("GET", f"/ncc/adgroups/{adgroup_id}/restricted-keywords", params={"type": "KEYWORD_PLUS_RESTRICT"}) or []
+    def list_restricted_keywords(self, adgroup_id, tp="KEYWORD_PLUS_RESTRICT"):
+        return self._req("GET", f"/ncc/adgroups/{adgroup_id}/restricted-keywords", params={"type": tp}) or []
 
-    def create_restricted_keyword(self, adgroup_id, keyword):
+    def create_restricted_keyword(self, adgroup_id, keyword, tp="KEYWORD_PLUS_RESTRICT"):
         r = self._req("POST", f"/ncc/adgroups/{adgroup_id}/restricted-keywords",
-                      json=[{"nccAdgroupId": adgroup_id, "keyword": keyword, "type": "KEYWORD_PLUS_RESTRICT"}])
+                      json=[{"nccAdgroupId": adgroup_id, "keyword": keyword, "type": tp}])
         k = r[0] if isinstance(r, list) and r else r
         if not isinstance(k, dict) or "nccAdgroupRestrictKwdId" not in k:
             rs = k.get("resultStatus") if isinstance(k, dict) else None
@@ -391,8 +391,37 @@ class RealNaverClient:
         """소재를 다른 광고그룹으로 복사(명세 #25). 비용이 바로 나가지 않게 늘 OFF로."""
         return self._req("PUT", "/ncc/ads", params={"ids": ",".join(ad_ids), "targetAdgroupId": target_adgroup_id, "userLock": "true"}) or []
 
+    def media_target(self, adgroup_id):
+        """광고그룹의 매체 타깃(MEDIA_TARGET). target은 JSON 문자열로 올 수 있다."""
+        r = self._req("GET", "/ncc/targets", params={"ownerId": adgroup_id, "types": "MEDIA_TARGET"}) or []
+        t = next((x for x in r if x.get("targetTp") == "MEDIA_TARGET"), None)
+        if t is None:
+            raise NaverApiError("이 광고그룹의 매체 설정을 찾지 못했습니다")
+        return {**t, "target": _json(t.get("target"))}
+
+    def set_media_target(self, adgroup_id, target: dict):
+        """형식: 릴리스 노트 2024-11-13 MEDIA_TARGET 예제. 응답으로 반영을 확인한다. shortcut: 플레이스 그룹 예제를 파워링크에도 씀(실계정 미확인)"""
+        cur = self.media_target(adgroup_id)
+        out = self._req("PUT", f"/ncc/targets/{cur['nccTargetId']}", json={
+            "nccTargetId": cur["nccTargetId"], "ownerId": adgroup_id, "targetTp": "MEDIA_TARGET", "target": target})
+        got = _json((out or {}).get("target"))
+        if not isinstance(got, dict) or any(sorted(got.get(k) or []) != sorted(target[k]) for k in ("search", "contents")) \
+                or got.get("type") != target["type"]:
+            raise NaverApiError(f"네이버에 매체 설정이 반영되지 않았습니다 (응답 {json.dumps(got, ensure_ascii=False)[:200]})")
+        return got
+
+    def set_keyword_url(self, keyword_id, pc_url, mobile_url):
+        """키워드별 연결 URL(명세 #53 fields=links). shortcut: links 형식은 소재와 같은 {pc:{final}, mobile:{final}}로 가정(실계정 미확인)"""
+        kw = self._req("GET", f"/ncc/keywords/{keyword_id}")
+        links = {"pc": {"final": pc_url}, "mobile": {"final": mobile_url}}
+        out = self._req("PUT", f"/ncc/keywords/{keyword_id}", params={"fields": "links"},
+                        json={"nccKeywordId": keyword_id, "nccAdgroupId": kw["nccAdgroupId"], "links": links})
+        if _json((out or {}).get("links")) != links:
+            raise NaverApiError("네이버에 연결 URL이 반영된 것을 확인하지 못했습니다. 네이버 광고관리에서 확인하세요")
+        return out
+
     def set_adgroup_options(self, adgroup_id, opts: dict):
-        """확장검색(useExpSearch)·ADVoost Max(aiAdsOptIn). 명세 fields 목록에 없어 전체 변경(#12)으로 보내고 응답으로 확인한다."""
+        """확장검색(useExpSearch)·확장검색 예산 비율(expSearchBudgetRatio)·ADVoost Max(aiAdsOptIn). 명세 fields 목록에 없어 전체 변경(#12)으로 보내고 응답으로 확인한다."""
         obj = self._req("GET", f"/ncc/adgroups/{adgroup_id}")
         out = self._req("PUT", f"/ncc/adgroups/{adgroup_id}", json={**obj, **opts})
         if any((out or {}).get(k) != v for k, v in opts.items()):
@@ -705,16 +734,16 @@ class MockNaverClient:
         self.s["keywords"][kid] = k
         return dict(k)
 
-    def list_restricted_keywords(self, adgroup_id):
-        return [dict(k) for k in self.s.setdefault("restricted", {}).values() if k["nccAdgroupId"] == adgroup_id]
+    def list_restricted_keywords(self, adgroup_id, tp="KEYWORD_PLUS_RESTRICT"):
+        return [dict(k) for k in self.s.setdefault("restricted", {}).values() if k["nccAdgroupId"] == adgroup_id and k["type"] == tp]
 
-    def create_restricted_keyword(self, adgroup_id, keyword):
+    def create_restricted_keyword(self, adgroup_id, keyword, tp="KEYWORD_PLUS_RESTRICT"):
         if adgroup_id not in self.s["adgroups"]:
             raise NaverApiError("대상 광고그룹이 존재하지 않습니다")
         if advoost_on(self.s["adgroups"][adgroup_id]):
             raise NaverApiError('400 {"code":3754,"title":"ADVoost 플레이스 광고그룹에는 제외검색어를 등록할 수 없습니다"}')
         rid = f"nrk-{self.customer_id}-{len(self.s.setdefault('restricted', {})) + 1}"
-        self.s["restricted"][rid] = {"nccAdgroupRestrictKwdId": rid, "nccAdgroupId": adgroup_id, "keyword": keyword, "type": "KEYWORD_PLUS_RESTRICT"}
+        self.s["restricted"][rid] = {"nccAdgroupRestrictKwdId": rid, "nccAdgroupId": adgroup_id, "keyword": keyword, "type": tp}
         return dict(self.s["restricted"][rid])
 
     def delete_restricted_keyword(self, adgroup_id, kwd_id):
@@ -851,6 +880,25 @@ class MockNaverClient:
             out.append(dict(self.s["ads"][nid]))
         return out
 
+    def media_target(self, adgroup_id):
+        if adgroup_id not in self.s["adgroups"]:
+            raise NaverApiError("광고그룹이 없습니다")
+        t = self.s.setdefault("media", {}).get(adgroup_id) or {"type": 1, "search": [], "contents": [],
+                                                                "black": {"media": None, "mediaGroup": None}, "white": {"media": None, "mediaGroup": None}}
+        return {"nccTargetId": f"tgt-{adgroup_id}", "ownerId": adgroup_id, "targetTp": "MEDIA_TARGET", "target": t}
+
+    def set_media_target(self, adgroup_id, target: dict):
+        self.media_target(adgroup_id)
+        self.s["media"][adgroup_id] = target
+        return target
+
+    def set_keyword_url(self, keyword_id, pc_url, mobile_url):
+        k = self.s["keywords"].get(keyword_id)
+        if k is None:
+            raise NaverApiError("대상 키워드가 존재하지 않습니다")
+        k["links"] = {"pc": {"final": pc_url}, "mobile": {"final": mobile_url}}
+        return dict(k)
+
     def set_adgroup_options(self, adgroup_id, opts: dict):
         g = self.s["adgroups"].get(adgroup_id)
         if g is None or g.get("adgroupType") != "WEB_SITE":
@@ -859,7 +907,10 @@ class MockNaverClient:
         return dict(g)
 
     def stat_file(self, job) -> str:
-        return "\n".join(f"20261108\t{self.customer_id}\tcmp-{self.customer_id}-pl\t{g}\t100\t3\t1500" for g in self.s["adgroups"])
+        g, c = f"grp-{self.customer_id}-pl1", f"cmp-{self.customer_id}-pl"
+        rows = [("원피스만드는법", "8753", "M", "1", "15", "1", "110"), ("원피스만드는법", "27758", "P", "1", "5", "0", "0"),
+                ("롱원피스", "8753", "M", "0", "106", "6", "561"), ("원피스무료도안", "8753", "M", "1", "40", "2", "300")]
+        return "\n".join("\t".join(["20261108", self.customer_id, c, g, *r, "0"]) for r in rows)
 
     def get_many(self, kind, ids):
         return [dict(self.s[kind][i]) for i in ids if i in self.s.get(kind, {})]
