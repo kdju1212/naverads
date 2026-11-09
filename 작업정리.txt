@@ -505,3 +505,9 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
     - 막는 것/주의: 주문이 실제로 들어오는 스마트스토어 + 집행 중 메타 광고가 있어야 검증 가능(지금 없음),
       CAPI는 7일 지난 구매 안 받음, 전화번호 해시·IP 보내면 개인정보처리방침 수정, 엑셀 속 개인정보가 Claude를 거침
     - 같이 한 것: 11/1 UTM 빌더에 NT(스마트스토어) 탭 추가(nt_source 영문만 검사, 키워드→nt_keyword) — 로컬 수정, 아직 push 안 함
+20. 11/09 Claude 도구 추가(웹 화면 없음, 브랜치 fix/adgroup-advoost-max-off, 실계정 미확인) — backend/src/app/account_tools.py
+    - 파워링크 광고그룹 생성 때 aiAdsOptIn:false(ADVoost Max 기본 켜짐 방지), API 조사 문서 docs/naver-searchad-api 커밋
+    - get_bizmoney(잔액·일별 현황), list/add/delete_ip_exclusion(노출 제한 IP), create_site_channel(웹사이트 비즈채널, 공식 샘플 형식)·reinspect_channel,
+      get_targeting/set_targeting(요일·시간·지역·기기·연령·성별 켜기/끄기, 빠진 코드는 꺼짐·빈 목록 거부), request_stat_report/get_stat_report(대용량 보고서)
+    - 안 한 것: 타기팅 입찰 가중치(승인 정책 정한 뒤), 대용량 보고서 칸 이름(공식 문서에 없음 → 실계정 파일 앞 50줄 원본만 넘김), 쇼핑몰·플레이스 채널 등록
+    - [확인] 실계정에서 각 도구 한 번씩: 특히 set_targeting 본문 형식, IP 등록 응답, 보고서 파일 칸 구성
