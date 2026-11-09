@@ -128,7 +128,19 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "keyword_id", "pc_url"], "properties": {
          **_ACC, "keyword_id": {"type": "string"}, "pc_url": {"type": "string"}, "mobile_url": {"type": "string", "description": "비우면 PC URL"}}},
      "annotations": {"destructiveHint": True}},
+    {"name": "get_stats", "description": "네이버 성과를 바로 조회(조회만). breakdown으로 쪼개 보기: hh24 시간대별, dayw 요일별, regnNo 지역별, pcMblTp PC·모바일별(이때 ids는 1개). "
+     "today=true면 오늘 지금까지(실시간에 가깝지만 몇 시간 늦을 수 있음). 그 밖엔 since~until 합계(비우면 어제까지 7일). ids는 캠페인·광고그룹·키워드·소재 ID(최대 100개). "
+     "칸: impCnt 노출, clkCnt 클릭, salesAmt 비용(VAT 포함), ctr, cpc, avgRnk 평균 순위, pcNxAvgRnk·mblNxAvgRnk PC·모바일 평균 순위, ccnt 전환, convAmt 전환 매출, "
+     "purchaseCcnt·purchaseConvAmt 구매 전환. 응답은 네이버 형식 그대로라 breakdowns 안의 이름·숫자를 읽어 표로 정리한다.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "ids"], "properties": {
+         **_ACC, "ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 100},
+         "breakdown": {"enum": ["hh24", "dayw", "regnNo", "pcMblTp"]}, "today": {"type": "boolean"},
+         "since": {"type": "string", "description": "YYYY-MM-DD"}, "until": {"type": "string", "description": "YYYY-MM-DD"}}},
+     "annotations": {"readOnlyHint": True}},
 ]
+
+STAT_FIELDS = ["impCnt", "clkCnt", "salesAmt", "ctr", "cpc", "avgRnk", "pcNxAvgRnk", "mblNxAvgRnk", "ccnt", "convAmt",
+               "purchaseCcnt", "purchaseConvAmt"]
 
 
 def _client(db, m: Membership, acc: int, edit: bool):
@@ -244,6 +256,23 @@ def call_tool(db, m: Membership, name: str, a: dict):
         if job.get("reportTp") == "EXPKEYWORD":
             return {**job, **search_terms(lines)}
         return {**job, "total_lines": len(lines), "preview": lines[:PREVIEW_LINES]}
+    if name == "get_stats":
+        ids = list(dict.fromkeys(a["ids"]))
+        bd = a.get("breakdown")
+        if not 1 <= len(ids) <= 100 or (bd and len(ids) != 1):
+            raise HTTPException(400, "ids는 1~100개, 쪼개 보기(breakdown)는 1개만")
+        if bd and bd not in ("hh24", "dayw", "regnNo", "pcMblTp"):
+            raise HTTPException(400, "breakdown은 hh24, dayw, regnNo, pcMblTp 중 하나")
+        c = _client(db, m, acc, False)
+        if a.get("today"):
+            data = _naver(lambda: c.stats_raw(ids, STAT_FIELDS, preset="today", breakdown=bd), "성과 조회")
+            return {"period": "today", "data": data}
+        until = date.fromisoformat(a["until"]) if a.get("until") else today_kst() - timedelta(days=1)
+        since = date.fromisoformat(a["since"]) if a.get("since") else until - timedelta(days=6)
+        if since > until or (until - since).days > 92:
+            raise HTTPException(400, "기간은 93일 이내로")
+        data = _naver(lambda: c.stats_raw(ids, STAT_FIELDS, since, until, breakdown=bd), "성과 조회")
+        return {"since": since, "until": until, "data": data}
     if name == "get_media_target":
         c = _client(db, m, acc, False)
         return _naver(lambda: c.media_target(a["adgroup_id"]), "매체 설정 조회")["target"]

@@ -525,3 +525,5 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
       AD_DETAIL(16칸)은 원본 그대로: 4 키워드 ID('-'=확장검색) · 5 소재 · 6 비즈채널 · 7 (시간대?) · 8 지역 코드(이슈 #1529) · 9 매체 · 10 P/M · 11 노출 · 12 클릭 · 13 비용 · 14 순위 합 · 15 (?)
     - list/add/delete_exp_negative_keywords(확장검색 제외검색어 type=EXP_SEARCH, 삭제는 대량 작업과 같은 안전장치), set_adgroup_options에 확장검색 예산 비율
     - set_keyword_url(fields=links, 형식은 소재와 같은 {pc:{final}, mobile:{final}}로 가정 — 응답으로 확인)
+23. 11/09 get_stats(브랜치 feat/mcp-stats-breakdown): /stats breakdown(hh24 시간대·dayw 요일·regnNo 지역·pcMblTp 기기), 오늘 성과(datePreset=today),
+    구매 전환·PC/모바일 평균 순위 칸. 응답은 네이버 형식 그대로(breakdown 응답 모양이 명세에 없음) — 실계정 응답 보고 정리

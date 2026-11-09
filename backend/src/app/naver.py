@@ -361,6 +361,16 @@ class RealNaverClient:
         return self._req("PUT", f"/ncc/criterion/{adgroup_id}/{tp}", json=[
             {"ownerId": adgroup_id, "type": tp, "dictionaryCode": c, "customerId": int(self.customer_id)} for c in codes])
 
+    def stats_raw(self, ids, fields, since=None, until=None, preset=None, breakdown=None):
+        """명세 #107·#108 GET /stats 그대로. breakdown(hh24·dayw·regnNo·pcMblTp)은 id 하나만. 응답 data를 그대로 돌려준다.
+        shortcut: breakdown 응답 모양이 명세에 없어 가공하지 않는다, 실계정 응답 확인 후 정리"""
+        p = {"fields": json.dumps(fields), "timeIncrement": "allDays"}
+        p.update({"id": ids[0]} if len(ids) == 1 else {"ids": ",".join(ids)})
+        p.update({"datePreset": preset} if preset else {"timeRange": json.dumps({"since": since.isoformat(), "until": until.isoformat()})})
+        if breakdown:
+            p["breakdown"] = breakdown
+        return (self._req("GET", "/stats", params=p) or {}).get("data", [])
+
     def create_stat_report(self, report_tp, stat_dt: date):
         # 공식 샘플 StatReports.java
         return self._req("POST", "/stat-reports", json={"reportTp": report_tp, "statDt": stat_dt.strftime("%Y%m%d")})
@@ -834,6 +844,15 @@ class MockNaverClient:
             raise NaverApiError("광고그룹이 없습니다")
         self.s.setdefault("criterion", {})[(adgroup_id, tp)] = list(codes)
         return self.targeting(adgroup_id, tp)
+
+    def stats_raw(self, ids, fields, since=None, until=None, preset=None, breakdown=None):
+        r = random.Random(f"{ids}{since}{preset}{breakdown}")
+        keys = {"hh24": [f"{h:02d}" for h in range(24)], "dayw": ["월", "화", "수", "목", "금", "토", "일"],
+                "pcMblTp": ["PC", "모바일"], "regnNo": ["서울", "부산"]}.get(breakdown)
+        row = lambda: {f: r.randint(0, 50) for f in fields}  # noqa: E731
+        if keys:
+            return [{"id": ids[0], "breakdowns": [{"name": k, **row()} for k in keys]}]
+        return [{"id": i, **row()} for i in ids]
 
     def create_stat_report(self, report_tp, stat_dt: date):
         return {"reportJobId": 1, "reportTp": report_tp, "statDt": stat_dt.isoformat(), "status": "BUILT", "downloadUrl": "mock"}
