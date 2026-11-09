@@ -225,8 +225,11 @@ def call_tool(db, m: Membership, name: str, a: dict):
             raise HTTPException(400, f"type은 {', '.join(TARGET_TYPES)} 중 하나")
         c = _client(db, m, acc, False)
         out = {"type": TARGET_TYPES[tp], "current": _naver(lambda: c.targeting(a["adgroup_id"], tp), "타기팅 조회")}
-        if a.get("codes"):
-            out["codes"] = _naver(lambda: c.targeting_codes(tp), "타기팅 코드표 조회")
+        if tp == "SD":  # 요일·시간 코드표는 2,100개(35만 자, 11/09 실계정)라 규칙만 알려 준다
+            out["code_rule"] = "SD + 요일(MON TUE WED THU FRI SAT SUN) + 시작 시 2자리 + 끝 시 2자리. 예: SDMON0918 = 월요일 09시부터 18시까지"
+        elif a.get("codes"):
+            codes = _naver(lambda: c.targeting_codes(tp), "타기팅 코드표 조회")
+            out["codes"] = [{"code": x.get("dictionaryCode") or x.get("code"), "name": x.get("name")} for x in codes]
         return out
     if name == "set_targeting":
         tp, codes = a["type"], list(dict.fromkeys(str(x).strip() for x in a["codes"] if str(x).strip()))

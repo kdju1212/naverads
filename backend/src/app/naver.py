@@ -541,7 +541,9 @@ def advoost_on(g) -> bool:
 
 def channel_row(aid, c):
     return {"ad_account_id": aid, "naver_id": c["nccBusinessChannelId"], "name": c.get("name", ""), "channel_tp": c.get("channelTp", ""),
-            "key": c.get("channelKey", ""), "inspect_status": c.get("inspectStatus", "")}
+            # 실계정은 inspectStatus 없이 PC·모바일 검수 상태를 따로 준다(11/09 확인)
+            "key": c.get("channelKey", ""), "inspect_status": c.get("inspectStatus") or c.get("pcInspectStatus") or "",
+            "mobile_inspect_status": c.get("mobileInspectStatus", "")}
 
 
 # 브라우저 보관용 행. DB 사본 없이 네이버 ID로만 식별한다
@@ -837,7 +839,7 @@ class MockNaverClient:
                 for c in self.s.setdefault("criterion", {}).get((adgroup_id, tp), [])]
 
     def targeting_codes(self, tp):
-        return [{"code": c, "name": n} for c, n in MOCK_CODES[tp].items()]
+        return [{"dictionaryCode": c, "type": tp, "name": n} for c, n in MOCK_CODES[tp].items()]
 
     def set_targeting(self, adgroup_id, tp, codes):
         if adgroup_id not in self.s["adgroups"]:
