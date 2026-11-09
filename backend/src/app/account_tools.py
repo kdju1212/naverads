@@ -1,15 +1,16 @@
-"""Claude 도구: 비즈머니, 노출 제한 IP, 비즈채널 등록·재검수, 타기팅(켜기/끄기만), 대용량 보고서.
+"""Claude 도구: 비즈머니, 노출 제한 IP, 비즈채널 등록·재검수, 타기팅(켜기/끄기만), 대용량 보고서,
+입찰가 예측, 검수 이력, 키워드·소재 재검수, 소재 복사(OFF로), 확장검색·ADVoost Max(끄기만) 설정.
 웹 화면 없이 Claude(MCP)에서만 쓴다(2026-11-09 결정). 요청 형식 근거는 docs/naver-searchad-api, 실계정 미확인.
 타기팅·IP·비즈채널은 하루예산 합계와 입찰가를 바꾸지 않아 안전장치 검사 없이 수정 권한과 작업 기록만 확인한다.
 입찰 가중치(타기팅별 입찰가 50~500%)는 광고비가 크게 늘 수 있어 승인 정책을 정할 때까지 만들지 않는다."""
 import ipaddress
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import HTTPException
 
 from . import bulk
 from .access import resolve_account_ids
-from .models import AuditLog, Membership, today_kst
+from .models import KST, AuditLog, Membership, today_kst
 from .naver import NaverApiError
 
 TARGET_TYPES = {"SD": "요일·시간", "RL": "지역", "DV": "기기(PC·모바일)", "AG": "연령", "GN": "성별"}
@@ -22,9 +23,11 @@ _ACC = {"workspace_id": {"type": "integer"}, "ad_account_id": {"type": "integer"
 _GRP = {**_ACC, "adgroup_id": {"type": "string", "description": "광고그룹 네이버 ID"}}
 
 TOOLS = [
-    {"name": "get_bizmoney", "description": "비즈머니(광고비 충전금) 잔액·잠금 상태와 일별 사용 현황(VAT 포함). 기간을 비우면 최근 7일. 충전·환불은 API로 할 수 없다.",
+    {"name": "get_bizmoney", "description": "비즈머니(광고비 충전금) 잔액·잠금 상태와 내역(원, VAT 포함, 날짜는 한국 기준). 기간을 비우면 최근 7일. "
+     "history: period 일별 잔액·사용(기본), charge 충전 내역, exhaust 광고비 차감 내역(campaignTp 1 파워링크, 2 쇼핑검색). 충전·환불은 API로 할 수 없다.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id"], "properties": {
-         **_ACC, "since": {"type": "string", "description": "YYYY-MM-DD"}, "until": {"type": "string", "description": "YYYY-MM-DD"}}},
+         **_ACC, "since": {"type": "string", "description": "YYYY-MM-DD"}, "until": {"type": "string", "description": "YYYY-MM-DD"},
+         "history": {"enum": ["period", "charge", "exhaust"]}}},
      "annotations": {"readOnlyHint": True}},
     {"name": "list_ip_exclusions", "description": "광고를 보여 주지 않게 막은 IP 목록(부정 클릭 방지). 계정 전체에 적용된다.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id"], "properties": _ACC}, "annotations": {"readOnlyHint": True}},
@@ -65,6 +68,36 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "report_job_id"], "properties": {
          **_ACC, "report_job_id": {"type": "integer"}}},
      "annotations": {"readOnlyHint": True}},
+    {"name": "estimate_bid", "description": "입찰가 예측(네이버 통계 기반, 조회만). kind: position 원하는 순위의 평균 입찰가(positions 필요), "
+     "median 중간 입찰가, minimum 최소 노출 입찰가, performance 입찰가별 예상 노출·클릭·비용(bids 필요, 파워링크만). "
+     "product WEB_SITE면 keys는 키워드 문구(by_id면 키워드 ID), SHOPPING이면 상품 ID(by_id면 소재 ID)이고 position·minimum만 된다. "
+     "device PC|MOBILE. 한 번에 200개까지. 예측은 과거 통계라 실제 순위·비용과 다를 수 있다고 함께 알린다.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "kind", "keys", "device"], "properties": {
+         **_ACC, "kind": {"enum": ["position", "median", "minimum", "performance"]}, "product": {"enum": ["WEB_SITE", "SHOPPING"]},
+         "keys": {"type": "array", "items": {"type": "string"}, "minItems": 1}, "by_id": {"type": "boolean"},
+         "device": {"enum": ["PC", "MOBILE"]}, "positions": {"type": "array", "items": {"type": "integer"}, "description": "position: 1~15"},
+         "bids": {"type": "array", "items": {"type": "integer"}, "description": "performance: 입찰가(원)"},
+         "period": {"enum": ["DAY", "MONTH"], "description": "median·minimum: 어제(DAY) 또는 최근 28일(MONTH, 기본)"}}},
+     "annotations": {"readOnlyHint": True}},
+    {"name": "get_inspect_history", "description": "비즈채널·소재·확장소재·키워드의 검수 결과와 보류·반려 사유(최근 3개월). ids 최대 100개.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "ids"], "properties": {
+         **_ACC, "ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 100}}},
+     "annotations": {"readOnlyHint": True}},
+    {"name": "request_inspect", "description": "보류·반려된 키워드나 소재를 다시 검수해 달라고 요청한다(바로 실행). 반려 사유(get_inspect_history)를 고친 뒤에 쓴다. "
+     "대상을 채팅에 표로 보여 준 뒤 호출.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "kind", "naver_id"], "properties": {
+         **_ACC, "kind": {"enum": ["keyword", "ad"]}, "naver_id": {"type": "string"}}},
+     "annotations": {"destructiveHint": True}},
+    {"name": "copy_ads", "description": "소재를 다른 광고그룹으로 복사한다(바로 실행). 복사본은 OFF로 만들어지고 검수를 다시 받는다. "
+     "복사할 소재·대상 광고그룹을 채팅에 표로 보여 준 뒤 호출.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "ad_ids", "target_adgroup_id"], "properties": {
+         **_ACC, "ad_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 20}, "target_adgroup_id": {"type": "string"}}},
+     "annotations": {"destructiveHint": True}},
+    {"name": "set_adgroup_options", "description": "파워링크 광고그룹의 확장검색(use_exp_search: 등록 안 한 비슷한 검색어에도 노출)과 ADVoost Max(ai_ads_opt_in) 설정(바로 실행). "
+     "확장검색을 켜면 노출·비용이 늘 수 있다. ADVoost Max는 끄기만 된다(켜기는 웹 승인 대상이라 아직 없음). 지금 → 바뀔 값을 채팅에 표로 보여 준 뒤 호출.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id"], "properties": {
+         **_GRP, "use_exp_search": {"type": "boolean"}, "ai_ads_opt_in": {"type": "boolean"}}},
+     "annotations": {"destructiveHint": True}},
 ]
 
 
@@ -86,6 +119,18 @@ def _log(db, m, acc, action, entity_type, naver_id, field=None, before=None, aft
     db.commit()
 
 
+def _won(v):
+    return round(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
+
+
+def _money_row(r: dict) -> dict:
+    """settleDt는 밀리초 유닉스 시각, 금액은 VAT 포함 소수 → 한국 날짜와 원 단위. 0원 칸은 뺀다."""
+    out = {k: _won(v) for k, v in r.items() if k not in ("customerId", "settleDt") and v not in (0, None)}
+    if isinstance(r.get("settleDt"), (int, float)):
+        out["date"] = datetime.fromtimestamp(r["settleDt"] / 1000, KST).date().isoformat()
+    return out
+
+
 def call_tool(db, m: Membership, name: str, a: dict):
     acc = int(a["ad_account_id"])
     if name == "get_bizmoney":
@@ -93,8 +138,13 @@ def call_tool(db, m: Membership, name: str, a: dict):
         since = date.fromisoformat(a["since"]) if a.get("since") else until - timedelta(days=6)
         if since > until or (until - since).days > 92:
             raise HTTPException(400, "기간은 93일 이내로")
+        kind = a.get("history") or "period"
+        if kind not in ("period", "charge", "exhaust"):
+            raise HTTPException(400, "history는 period, charge, exhaust 중 하나")
         c = _client(db, m, acc, False)
-        return {"balance": _naver(c.bizmoney, "비즈머니 조회"), "daily": _naver(lambda: c.bizmoney_daily(since, until), "비즈머니 현황 조회")}
+        bal = _naver(c.bizmoney, "비즈머니 조회")
+        rows = _naver(lambda: c.bizmoney_history(kind, since, until), "비즈머니 내역 조회")
+        return {"balance": {**bal, "bizmoney": _won(bal.get("bizmoney"))}, "history": kind, "rows": [_money_row(r) for r in rows]}
     if name == "list_ip_exclusions":
         return _naver(_client(db, m, acc, False).list_ip_exclusions, "노출 제한 IP 조회")
     if name == "add_ip_exclusion":
@@ -162,4 +212,64 @@ def call_tool(db, m: Membership, name: str, a: dict):
             return job
         lines = _naver(lambda: c.stat_file(job), "보고서 다운로드").splitlines()
         return {**job, "total_lines": len(lines), "preview": lines[:PREVIEW_LINES]}
+    if name == "estimate_bid":
+        return _estimate(_client(db, m, acc, False), a)
+    if name == "get_inspect_history":
+        c = _client(db, m, acc, False)
+        return _naver(lambda: c.inspect_history(a["ids"][:100]), "검수 이력 조회")
+    if name == "request_inspect":
+        if a["kind"] not in ("keyword", "ad"):
+            raise HTTPException(400, "kind는 keyword 또는 ad")
+        c = _client(db, m, acc, True)
+        out = _naver(lambda: c.request_inspect(a["kind"], a["naver_id"]), "재검수 요청")
+        _log(db, m, acc, "UPDATE", a["kind"], a["naver_id"], "inspect", after="재검수 요청")
+        return out
+    if name == "copy_ads":
+        ids = list(dict.fromkeys(a["ad_ids"]))[:20]
+        c = _client(db, m, acc, True)
+        out = _naver(lambda: c.copy_ads(ids, a["target_adgroup_id"]), "소재 복사")
+        for x in out or []:
+            _log(db, m, acc, "CREATE", "ad", x.get("nccAdId", a["target_adgroup_id"]), "copy", after="OFF로 복사")
+        return out
+    if name == "set_adgroup_options":
+        opts = {k: a[f] for f, k in (("use_exp_search", "useExpSearch"), ("ai_ads_opt_in", "aiAdsOptIn")) if isinstance(a.get(f), bool)}
+        if not opts:
+            raise HTTPException(400, "use_exp_search 또는 ai_ads_opt_in을 넣으세요")
+        if opts.get("aiAdsOptIn"):  # 정책(2026-11-02): ADVoost 켜기는 웹 승인 대상
+            raise HTTPException(400, "ADVoost Max 켜기는 웹 승인 대상이라 아직 Claude에서 켤 수 없어요. 네이버 광고관리에서 켜 주세요")
+        c = _client(db, m, acc, True)
+        out = _naver(lambda: c.set_adgroup_options(a["adgroup_id"], opts), "광고그룹 설정 변경")
+        for k, v in opts.items():
+            _log(db, m, acc, "UPDATE", "adgroup", a["adgroup_id"], k, after="ON" if v else "OFF")
+        return {k: out.get(k) for k in ("nccAdgroupId", "name", "useExpSearch", "aiAdsOptIn")}
     raise HTTPException(400, f"알 수 없는 도구: {name}")
+
+
+def _estimate(c, a: dict):
+    kind, product, keys, device = a["kind"], a.get("product") or "WEB_SITE", list(dict.fromkeys(a["keys"])), a["device"]
+    if device not in ("PC", "MOBILE") or not keys or len(keys) > 200:
+        raise HTTPException(400, "device는 PC·MOBILE, keys는 1~200개")
+    shop = product == "SHOPPING"
+    if shop and kind not in ("position", "minimum"):
+        raise HTTPException(400, "쇼핑은 position·minimum만 예측할 수 있어요")
+    base = "npla-estimate" if shop else "estimate"
+    tp = "id" if a.get("by_id") else ("product" if shop else "keyword")
+    if kind == "position":
+        pos = [p for p in (a.get("positions") or []) if isinstance(p, int) and 1 <= p <= 15]
+        if not pos:
+            raise HTTPException(400, "positions에 1~15위를 넣으세요")
+        body = {"device": device, "items": [{"key": k, "position": p} for k in keys for p in pos][:200]}
+        return _naver(lambda: c.estimate(f"{base}/average-position-bid/{tp}", body), "입찰가 예측")
+    if kind in ("median", "minimum"):
+        path = {"median": "median-bid", "minimum": "exposure-minimum-bid"}[kind]
+        body = {"device": device, "period": a.get("period") or "MONTH", "items": keys}
+        return _naver(lambda: c.estimate(f"{base}/{path}/{tp}", body), "입찰가 예측")
+    if kind != "performance":
+        raise HTTPException(400, "kind는 position, median, minimum, performance 중 하나")
+    bids = [b for b in (a.get("bids") or []) if isinstance(b, int) and 70 <= b <= 100_000]
+    if not bids:
+        raise HTTPException(400, "bids에 70~100,000원 입찰가를 넣으세요")
+    if a.get("by_id"):  # 여러 키워드용(performance-bulk)은 문구만 받는다
+        raise HTTPException(400, "성과 예측은 키워드 문구로만 할 수 있어요")
+    items = [{"keyword": k, "bid": b, "device": device, "keywordplus": False} for k in keys for b in bids][:200]
+    return _naver(lambda: c.estimate("estimate/performance-bulk", {"items": items}), "성과 예측")

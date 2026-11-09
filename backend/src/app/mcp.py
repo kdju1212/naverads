@@ -214,7 +214,7 @@ CHANGE = {"type": "object", "required": ["entity_type", "naver_id", "field", "va
     "naver_id": {"type": "string", "description": "대상 네이버 ID. 키워드·제외검색어 등록(create)이면 광고그룹 ID, 광고그룹 create면 캠페인 ID, "
                   "캠페인 create면 유형(WEB_SITE 파워링크 | SHOPPING 쇼핑검색), 제외검색어 삭제면 제외검색어 ID"},
     "field": {"enum": ["status", "bid_amt", "daily_budget", "create", "delete"],
-              "description": "status: ON/OFF, bid_amt: 입찰가(10원 단위), daily_budget: 캠페인 일예산, create: 캠페인·광고그룹·키워드·제외검색어 등록, delete: 캠페인·광고그룹(OFF인 것만, 안의 광고까지 삭제)·키워드·소재·제외검색어 삭제"},
+              "description": "status: ON/OFF, bid_amt: 입찰가(10원 단위), daily_budget: 캠페인·광고그룹 하루예산(광고그룹은 캠페인 하루예산 안에서 쓰임), create: 캠페인·광고그룹·키워드·제외검색어 등록, delete: 캠페인·광고그룹(OFF인 것만, 안의 광고까지 삭제)·키워드·소재·제외검색어 삭제"},
     "value": {"type": "string", "description": "새 값. 캠페인 create는 '이름|일예산'(일예산 필수), "
               "광고그룹 create는 '이름|비즈채널ID|입찰가|하루예산'(비즈채널은 list_channels에서 캠페인 유형에 맞는 것: 파워링크는 SITE, 쇼핑은 MALL. "
               "입찰가 비우면 최저, 하루예산 비우면 제한 없음). 새 캠페인·광고그룹은 OFF로 만들어진다. 키워드 create는 '키워드' 또는 '키워드|입찰가'(입찰가 비우면 70원), "
@@ -469,7 +469,7 @@ async def mcp(request: Request):
                       "serverInfo": {"name": "naverads", "version": "0.1.0"},
                       "instructions": "네이버 검색광고 관리. 먼저 list_ad_accounts로 조직·계정을 확인한다. "
                                       "변경은 preview_changes → 채팅에 미리보기 표 → execute_job(또는 schedule_job으로 예약) 순서로만 한다. "
-                                      "변경 도구(execute_job, schedule_job, create_ad, create_shopping_ad, create_ad_extension, delete_ad_extension, set_auto_bid, delete_auto_bid, run_auto_bids, add_ip_exclusion, delete_ip_exclusion, create_site_channel, reinspect_channel, set_targeting)를 "
+                                      "변경 도구(execute_job, schedule_job, create_ad, create_shopping_ad, create_ad_extension, delete_ad_extension, set_auto_bid, delete_auto_bid, run_auto_bids, add_ip_exclusion, delete_ip_exclusion, create_site_channel, reinspect_channel, set_targeting, request_inspect, copy_ads, set_adgroup_options)를 "
                                       "부르기 직전에 바뀔 내용(계정·광고그룹·대상·지금 값 → 바뀔 값, 문구와 글자 수, 입찰가, 예약 시각, preview_changes의 VALID/INVALID 행)을 "
                                       "채팅에 표로 보여 준 다음 그 도구를 부른다. 사용자는 표를 보고 Claude 화면의 허용 버튼으로 승인한다(채팅 답을 따로 기다리지 않는다). "
                                       "표 없이 변경 도구를 부르지 않는다. 계정 하루예산 합계가 늘 수 있는 변경(캠페인 하루예산 올리기·캠페인 켜기·"

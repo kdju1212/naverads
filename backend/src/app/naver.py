@@ -75,6 +75,7 @@ UPDATE_SPEC = {
     ("campaign", "daily_budget"): ("campaigns", "budget", _set_budget),
     ("adgroup", "status"): ("adgroups", "userLock", _set_lock),
     ("adgroup", "bid_amt"): ("adgroups", "bidAmt", _set_group_bid),
+    ("adgroup", "daily_budget"): ("adgroups", "budget", _set_budget),
     ("keyword", "status"): ("keywords", "userLock", _set_lock),
     ("keyword", "bid_amt"): ("keywords", "bidAmt", _set_bid),
     ("ad", "status"): ("ads", "userLock", _set_lock),
@@ -86,7 +87,9 @@ UPDATE_SPEC = {
 VERIFIED_WRITES = {("campaign", "status"), ("campaign", "daily_budget"), ("adgroup", "status"), ("adgroup", "bid_amt"),
                    ("keyword", "status"), ("keyword", "bid_amt"), ("ad", "status"), ("ad", "bid_amt"),
                    # 확장소재: 명세에 fields 목록은 없지만 userLock이 ON/OFF용으로 정의돼 있다(응답 검증으로 반영 확인)
-                   ("ad_extension", "status")}
+                   ("ad_extension", "status"),
+                   # 광고그룹 하루예산: 명세 #17 fields=budget(캠페인과 같은 필드), 응답 검증으로 반영 확인. shortcut: 실계정 미확인
+                   ("adgroup", "daily_budget")}
 
 
 # 확장소재 노출 스케줄: 요일별 0~23시 비트 합 (2^24-1 = 매시간)
@@ -330,10 +333,6 @@ class RealNaverClient:
     def bizmoney(self):
         return self._req("GET", "/billing/bizmoney")
 
-    def bizmoney_daily(self, since: date, until: date):
-        return self._req("GET", "/billing/bizmoney/histories/period",
-                         params={"searchStartDt": since.strftime("%Y%m%d"), "searchEndDt": until.strftime("%Y%m%d")}) or []
-
     def list_ip_exclusions(self):
         return self._req("GET", "/tool/ip-exclusions") or []
 
@@ -368,6 +367,37 @@ class RealNaverClient:
 
     def get_stat_report(self, job_id):
         return self._req("GET", f"/stat-reports/{job_id}")
+
+    def bizmoney_history(self, kind, since: date, until: date):
+        """kind: charge(충전) | exhaust(차감) | period(일별 현황)"""
+        return self._req("GET", f"/billing/bizmoney/histories/{kind}",
+                         params={"searchStartDt": since.strftime("%Y%m%d"), "searchEndDt": until.strftime("%Y%m%d")}) or []
+
+    def estimate(self, path, body):
+        """입찰가 예측(공식 샘플 Estimate.java). path 예: estimate/average-position-bid/keyword, npla-estimate/exposure-minimum-bid/product"""
+        return self._req("POST", f"/{path}", json=body)
+
+    def inspect_history(self, ids):
+        return self._req("POST", "/ncc/inspect-history", json=list(ids)) or []
+
+    def request_inspect(self, kind, naver_id):
+        """보류·반려된 키워드·소재 재검수 요청(명세 #53·#24 fields=inspect)."""
+        res, key = {"keyword": ("keywords", "nccKeywordId"), "ad": ("ads", "nccAdId")}[kind]
+        obj = self._req("GET", f"/ncc/{res}/{naver_id}")
+        return self._req("PUT", f"/ncc/{res}/{naver_id}", params={"fields": "inspect"},
+                         json={key: naver_id, "nccAdgroupId": obj["nccAdgroupId"]})
+
+    def copy_ads(self, ad_ids, target_adgroup_id):
+        """소재를 다른 광고그룹으로 복사(명세 #25). 비용이 바로 나가지 않게 늘 OFF로."""
+        return self._req("PUT", "/ncc/ads", params={"ids": ",".join(ad_ids), "targetAdgroupId": target_adgroup_id, "userLock": "true"}) or []
+
+    def set_adgroup_options(self, adgroup_id, opts: dict):
+        """확장검색(useExpSearch)·ADVoost Max(aiAdsOptIn). 명세 fields 목록에 없어 전체 변경(#12)으로 보내고 응답으로 확인한다."""
+        obj = self._req("GET", f"/ncc/adgroups/{adgroup_id}")
+        out = self._req("PUT", f"/ncc/adgroups/{adgroup_id}", json={**obj, **opts})
+        if any((out or {}).get(k) != v for k, v in opts.items()):
+            raise NaverApiError(f"네이버에 반영되지 않았습니다 (요청 {opts}, 응답 { {k: (out or {}).get(k) for k in opts} })")
+        return out
 
     def stat_file(self, job) -> str:
         """서명 uri는 쿼리를 뺀 경로(마스터 보고서와 같은 /report-download)."""
@@ -729,7 +759,7 @@ class MockNaverClient:
     def bizmoney_daily(self, since: date, until: date):
         out, d = [], since
         while d <= until:
-            out.append({"settleDt": d.isoformat(), "refundableAmt": 152000, "nonRefundableAmt": 0, "useRefundableAmt": 8000,
+            out.append({"settleDt": int(time.mktime(d.timetuple())) * 1000, "refundableAmt": 152000, "nonRefundableAmt": 0, "useRefundableAmt": 8000,
                         "useNonRefundableAmt": 0, "addRefundableAmt": 0, "addNonRefundableAmt": 0})
             d += timedelta(days=1)
         return out
@@ -781,6 +811,52 @@ class MockNaverClient:
 
     def get_stat_report(self, job_id):
         return {"reportJobId": int(job_id), "reportTp": "AD", "status": "BUILT", "downloadUrl": "mock"}
+
+    def bizmoney_history(self, kind, since: date, until: date):
+        if kind == "period":
+            return self.bizmoney_daily(since, until)
+        ms = int(time.mktime(until.timetuple())) * 1000
+        return ([{"settleDt": ms, "addRefundableAmt": 10000.0}] if kind == "charge"
+                else [{"settleDt": ms, "campaignTp": 1, "useRefundableAmt": 812.5, "useNonrefundableAmt": 0}])
+
+    def estimate(self, path, body):
+        if path.endswith("performance-bulk"):
+            return {"items": [{**x, "impressions": x["bid"] * 3, "clicks": x["bid"] // 50, "cost": x["bid"] // 50 * x["bid"]} for x in body["items"]]}
+        if "/performance/" in path:
+            return {"keyword": body["key"], "estimate": [{"bid": b, "impressions": b * 3, "clicks": b // 50, "cost": b // 50 * b} for b in body["bids"]]}
+        if "average-position-bid" in path:
+            return {"device": body["device"], "estimate": [{**x, "bid": 1000 // x["position"]} for x in body["items"]]}
+        return {"device": body["device"], "estimate": [{"keyword": k, "bid": 120} for k in body["items"]]}
+
+    def inspect_history(self, ids):
+        return [{"id": i, "pcInspectComments": [{"comment": "보류: 랜딩 페이지 확인 필요"}], "mobileInspectComments": []} for i in ids]
+
+    def request_inspect(self, kind, naver_id):
+        obj = self.s["keywords" if kind == "keyword" else "ads"].get(naver_id)
+        if obj is None:
+            raise NaverApiError("대상이 존재하지 않습니다")
+        obj["inspectStatus"] = "UNDER_REVIEW"
+        return dict(obj)
+
+    def copy_ads(self, ad_ids, target_adgroup_id):
+        if target_adgroup_id not in self.s["adgroups"]:
+            raise NaverApiError("광고그룹이 없습니다")
+        out = []
+        for i in ad_ids:
+            a = self.s["ads"].get(i)
+            if a is None:
+                raise NaverApiError(f"소재가 없습니다: {i}")
+            nid = f"nad-{self.customer_id}-{len(self.s['ads']) + 1}"
+            self.s["ads"][nid] = {**a, "nccAdId": nid, "nccAdgroupId": target_adgroup_id, "userLock": True, "inspectStatus": "UNDER_REVIEW"}
+            out.append(dict(self.s["ads"][nid]))
+        return out
+
+    def set_adgroup_options(self, adgroup_id, opts: dict):
+        g = self.s["adgroups"].get(adgroup_id)
+        if g is None or g.get("adgroupType") != "WEB_SITE":
+            raise NaverApiError("파워링크 광고그룹이 아닙니다")
+        g.update(opts)
+        return dict(g)
 
     def stat_file(self, job) -> str:
         return "\n".join(f"20261108\t{self.customer_id}\tcmp-{self.customer_id}-pl\t{g}\t100\t3\t1500" for g in self.s["adgroups"])
