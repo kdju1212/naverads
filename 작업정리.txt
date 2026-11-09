@@ -527,3 +527,5 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
     - set_keyword_url(fields=links, 형식은 소재와 같은 {pc:{final}, mobile:{final}}로 가정 — 응답으로 확인)
 23. 11/09 get_stats(브랜치 feat/mcp-stats-breakdown): /stats breakdown(hh24 시간대·dayw 요일·regnNo 지역·pcMblTp 기기), 오늘 성과(datePreset=today),
     구매 전환·PC/모바일 평균 순위 칸. 응답은 네이버 형식 그대로(breakdown 응답 모양이 명세에 없음) — 실계정 응답 보고 정리
+    - 11/09 실계정 확인: 11/08 EXPKEYWORD 비용 합계 1,093원 = 비즈머니 차감 1,092원(VAT 포함) → 보고서 비용은 VAT 포함(도구 설명 고침)
+      배포 직후 첫 get_stat_report는 Worker CPU 한도(1102)로 실패, 바로 다시 부르면 성공(처음 뜰 때 비용으로 봄)

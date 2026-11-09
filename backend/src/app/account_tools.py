@@ -63,7 +63,7 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "report_type", "date"], "properties": {
          **_ACC, "report_type": {"enum": REPORT_TYPES}, "date": {"type": "string", "description": "YYYY-MM-DD(어제 이전)"}}},
      "annotations": {"readOnlyHint": True}},
-    {"name": "get_stat_report", "description": "대용량 보고서 상태. BUILT면 EXPKEYWORD(확장검색 검색어)는 검색어별 노출·클릭·비용 합계(비용 큰 순 100개, 원은 VAT 제외), "
+    {"name": "get_stat_report", "description": "대용량 보고서 상태. BUILT면 EXPKEYWORD(확장검색 검색어)는 검색어별 노출·클릭·비용 합계(비용 큰 순 100개, 비용은 비즈머니 차감액과 같은 VAT 포함 원), "
      f"그 밖의 유형은 파일 앞 {PREVIEW_LINES}줄(원본 TSV, 칸 이름 없음)과 전체 줄 수. NONE이면 그날 데이터 없음. "
      "검색어 결과로 제외검색어를 추천할 땐 클릭·비용은 있는데 상품과 맞지 않는 검색어를 고르고, add_exp_negative_keywords로 등록한다. "
      "REGIST·RUNNING·WAITING·AGGREGATING이면 잠시 뒤 다시 부른다.",
