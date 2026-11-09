@@ -511,3 +511,10 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
       get_targeting/set_targeting(요일·시간·지역·기기·연령·성별 켜기/끄기, 빠진 코드는 꺼짐·빈 목록 거부), request_stat_report/get_stat_report(대용량 보고서)
     - 안 한 것: 타기팅 입찰 가중치(승인 정책 정한 뒤), 대용량 보고서 칸 이름(공식 문서에 없음 → 실계정 파일 앞 50줄 원본만 넘김), 쇼핑몰·플레이스 채널 등록
     - [확인] 실계정에서 각 도구 한 번씩: 특히 set_targeting 본문 형식, IP 등록 응답, 보고서 파일 칸 구성
+21. 11/09 Claude 도구 2차(브랜치 feat/mcp-estimate-and-more, 실계정 미확인)
+    - estimate_bid(순위별 평균·중간·최소 노출 입찰가, 입찰가별 성과 예측 — 파워링크, 쇼핑은 순위·최소만), get_inspect_history(반려 사유),
+      request_inspect(키워드·소재 재검수), copy_ads(다른 그룹으로 OFF 복사), set_adgroup_options(확장검색 켜기/끄기, ADVoost Max 끄기만)
+    - 광고그룹 하루예산: preview_changes의 adgroup·daily_budget(fields=budget). 계정 합계를 늘리지 않아 웹 승인 없음
+    - get_bizmoney: 날짜(한국)·원 단위로 정리, history=charge(충전)·exhaust(차감) 추가
+    - 안 한 것: ADVoost Max 켜기(웹 승인 대상 — 승인 흐름에 붙여야 함), 파워콘텐츠 예측, 확장소재 유형 추가(PHONE·이미지 등 내용 형식이 공식 문서에 없음)
+    - [확인] set_adgroup_options는 명세 fields 목록에 없어 전체 변경 PUT으로 보냄 → 실계정에서 거부되면 형식 조정

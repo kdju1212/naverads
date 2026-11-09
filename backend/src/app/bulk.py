@@ -26,7 +26,7 @@ ALLOWED_FIELDS = {
     # delete(캠페인·광고그룹)는 안의 광고그룹·키워드·소재까지 지워지므로 실행 시 OFF인 것만 지운다
     "campaign": {"status", "daily_budget", "create", "delete"},
     # 광고그룹 create: naver_id는 캠페인, value는 "이름|비즈채널ID|입찰가|하루예산"(입찰가·하루예산은 비워도 됨)
-    "adgroup": {"status", "bid_amt", "create", "delete"},
+    "adgroup": {"status", "bid_amt", "daily_budget", "create", "delete"},
     "keyword": {"status", "bid_amt", "create", "delete"},  # create: naver_id는 광고그룹, value는 "키워드" 또는 "키워드|입찰가"
     "ad": {"status", "bid_amt", "delete"},
     "ad_extension": {"status"},  # 파워링크 확장소재: ON/OFF만 (내용 수정은 유형별 구조 확인 후)
@@ -668,7 +668,7 @@ def excel_template() -> bytes:
     ws.append(["keyword", "kwd-...", "delete", ""])
     guide = wb.create_sheet("guide")
     for line in [["entity_type", "campaign | adgroup | keyword(파워링크) | ad | ad_extension(파워링크 확장소재)"],
-                 ["field", "status(ON/OFF), daily_budget(캠페인), bid_amt(광고그룹·키워드·쇼핑 상품소재), 확장소재는 status만"],
+                 ["field", "status(ON/OFF), daily_budget(캠페인·광고그룹), bid_amt(광고그룹·키워드·쇼핑 상품소재), 확장소재는 status만"],
                  ["value", "10원 단위 숫자 또는 ON/OFF"],
                  ["키워드 등록", "entity_type=keyword, naver_id=광고그룹 ID(grp-...), field=create, value=키워드|입찰가 (입찰가 비우면 70원)"],
                  ["키워드 삭제", "entity_type=keyword, naver_id=키워드 ID(kwd-...), field=delete, value 비움"],

@@ -118,8 +118,8 @@ def ops_of_row(entity_type: str, field: str, naver_id: str, value: str) -> list[
         return []
     if field == "status":
         return [("on", entity_type, naver_id)] if value == "ON" else []
-    if field == "daily_budget":
-        return [("budget", naver_id, int(value))]
+    if field == "daily_budget":  # 광고그룹 하루예산은 캠페인 하루예산 안에서만 쓰여 계정 합계를 늘리지 않는다
+        return [("budget", naver_id, int(value))] if entity_type == "campaign" else []
     if field == "bid_amt":
         return [("bid", int(value), entity_type, naver_id)]
     if field == "create" and entity_type == "keyword":
