@@ -518,3 +518,10 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
     - get_bizmoney: 날짜(한국)·원 단위로 정리, history=charge(충전)·exhaust(차감) 추가
     - 안 한 것: ADVoost Max 켜기(웹 승인 대상 — 승인 흐름에 붙여야 함), 파워콘텐츠 예측, 확장소재 유형 추가(PHONE·이미지 등 내용 형식이 공식 문서에 없음)
     - [확인] set_adgroup_options는 명세 fields 목록에 없어 전체 변경 PUT으로 보냄 → 실계정에서 거부되면 형식 조정
+22. 11/09 Claude 도구 3차(브랜치 feat/mcp-media-searchterms, 실계정 미확인)
+    - get/set_media_target: 검색·콘텐츠 매체 × 네이버·파트너 켜기/끄기(형식: 릴리스 노트 2024-11-13 MEDIA_TARGET 예제, 플레이스용 예제를 파워링크에도 씀)
+    - get_stat_report: EXPKEYWORD면 검색어별 노출·클릭·비용 합계(비용 큰 순 100개). 칸은 실계정 파일(11/08, 12칸)로 확인 —
+      3 광고그룹 · 4 검색어 · 5 매체 코드 · 6 P/M · 8 노출 · 9 클릭 · 10 비용(클릭당 비용이 계정 평균 106원과 맞음). 7번째(0~2)·11번째(전부 0)는 의미 미확인
+      AD_DETAIL(16칸)은 원본 그대로: 4 키워드 ID('-'=확장검색) · 5 소재 · 6 비즈채널 · 7 (시간대?) · 8 지역 코드(이슈 #1529) · 9 매체 · 10 P/M · 11 노출 · 12 클릭 · 13 비용 · 14 순위 합 · 15 (?)
+    - list/add/delete_exp_negative_keywords(확장검색 제외검색어 type=EXP_SEARCH, 삭제는 대량 작업과 같은 안전장치), set_adgroup_options에 확장검색 예산 비율
+    - set_keyword_url(fields=links, 형식은 소재와 같은 {pc:{final}, mobile:{final}}로 가정 — 응답으로 확인)

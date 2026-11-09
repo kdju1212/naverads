@@ -103,3 +103,48 @@ def test_account_tools():
                     ("copy_ads", {"ad_ids": ["ad-9501-pl1"], "target_adgroup_id": grp}),
                     ("set_adgroup_options", {"adgroup_id": grp, "use_exp_search": True})):
         assert vcall(tool, **a)[1], tool
+
+
+def test_search_terms_real_layout():
+    """실계정 EXPKEYWORD 줄(2026-11-08) 그대로: 같은 검색어의 기기·매체별 줄을 합치고 비용 큰 순."""
+    from app.account_tools import search_terms
+
+    lines = ["20261108\t4286027\tcmp-a\tgrp-35\t수제말랑이\t8753\tM\t0\t106\t6\t561\t0",
+             "20261108\t4286027\tcmp-a\tgrp-35\t수제말랑이\t122875\tP\t0\t1\t0\t0\t0",
+             "20261108\t4286027\tcmp-a\tgrp-33\t슬랑이\t8753\tM\t1\t542\t1\t142\t0",
+             "20261108\t4286027\tcmp-a\tgrp-33\t퐁퐁미니\t8753\tM\t1\t1\t0\t0\t0", "깨진 줄"]
+    out = search_terms(lines)
+    assert out["terms"] == 3 and out["total_cost"] == 703 and out["total_clicks"] == 7
+    assert out["rows"][0] == {"adgroup_id": "grp-35", "search_term": "수제말랑이", "impressions": 107, "clicks": 6, "cost": 561}
+
+
+def test_media_exp_negative_keyword_url():
+    owner, ws, acc = _account("media@a.com", "9503")
+    call = _tool(_mcp_headers(owner), ws, acc)
+    grp = "grp-9503-pl1"
+
+    assert call("get_media_target", adgroup_id=grp)[0]["type"] == 1  # 기본은 모든 매체
+    assert call("set_media_target", adgroup_id=grp, search=[], contents=[])[1]  # 다 끄기는 막는다
+    out, err = call("set_media_target", adgroup_id=grp, search=["naver", "partner"], contents=[])
+    assert not err and out["type"] == 2 and out["search"] == ["naver", "partner"] and out["contents"] == []
+    out, _ = call("set_media_target", adgroup_id=grp, search=["partner", "naver"], contents=["naver", "partner"])
+    assert out["type"] == 1  # 전부 켜면 '모든 매체' 형식
+
+    added, err = call("add_exp_negative_keywords", adgroup_id=grp, keywords=["만드는법", " 만드는법 ", "도안"])
+    assert not err and [x["keyword"] for x in added["added"]] == ["만드는법", "도안"] and added["failed"] == []
+    lst, _ = call("list_exp_negative_keywords", adgroup_id=grp)
+    assert {x["keyword"] for x in lst} == {"만드는법", "도안"}
+    assert call("list_negative_keywords", adgroup_id=grp)[0] == []  # 일반 제외검색어와 섞이지 않는다
+    assert not call("delete_exp_negative_keyword", adgroup_id=grp, naver_id=lst[0]["naver_id"], keyword=lst[0]["keyword"])[1]
+    assert len(call("list_exp_negative_keywords", adgroup_id=grp)[0]) == 1
+
+    opt, err = call("set_adgroup_options", adgroup_id=grp, exp_search_budget_ratio=40)
+    assert not err and opt["expSearchBudgetRatio"] == 40
+    assert call("set_adgroup_options", adgroup_id=grp, exp_search_budget_ratio=0)[1]
+
+    assert call("set_keyword_url", keyword_id="kwd-9503-11", pc_url="example.com")[1]
+    assert not call("set_keyword_url", keyword_id="kwd-9503-11", pc_url="https://example.com/a")[1]
+
+    job, _ = call("request_stat_report", report_type="EXPKEYWORD", date="2026-11-08")
+    from app.naver import MockNaverClient
+    assert MockNaverClient("9503").stat_file(job).count("\n") == 3  # Mock 파일도 실계정과 같은 12칸
