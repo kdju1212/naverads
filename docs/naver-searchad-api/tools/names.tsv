@@ -1,0 +1,128 @@
+# key(METHOD 공개경로)	작업명	쉬운 설명	구분	광고비·노출 영향
+POST /ncc/ad-extensions	확장소재 등록	광고그룹·캠페인에 추가제목·홍보문구·서브링크·이미지 같은 확장소재를 새로 붙인다	생성	있음 — 검수 통과·ON이면 광고 모양이 바뀌고 클릭이 늘 수 있음
+GET /ncc/ad-extensions/{adExtensionId}	확장소재 1개 조회	확장소재 하나의 내용·상태·검수 결과를 본다	조회	없음
+DELETE /ncc/ad-extensions/{adExtensionId}	확장소재 1개 삭제	확장소재 하나를 지운다(되돌릴 수 없음)	삭제	있음 — 노출되던 확장소재가 사라짐
+PUT /ncc/ad-extensions/{adExtensionId}{?fields}	확장소재 1개 변경	확장소재 하나의 ON/OFF·노출 기간을 바꾼다(fields 없으면 전체 변경)	변경	있음 — ON/OFF·기간에 따라 노출이 바뀜
+PUT /ncc/ad-extensions{?fields}	확장소재 여러 개 변경	여러 확장소재의 ON/OFF·검수 요청·노출 기간을 한 번에 바꾼다	변경	있음 — ON/OFF·기간에 따라 노출이 바뀜
+GET /ncc/ad-extensions{?ids}	확장소재 ID로 여러 개 조회	확장소재 ID 목록으로 내용을 본다	조회	없음
+GET /ncc/ad-extensions{?nccLabelId}	즐겨찾기별 확장소재 조회	즐겨찾기(라벨)에 넣어 둔 확장소재 목록을 본다	조회	없음
+GET /ncc/ad-extensions{?ownerId}	광고그룹·캠페인별 확장소재 조회	특정 캠페인·광고그룹(또는 소재)에 붙은 확장소재 목록을 본다	조회	없음
+POST /ncc/adgroups	광고그룹 생성	캠페인 안에 광고그룹을 새로 만든다(입찰가·하루예산·비즈채널·타기팅 등)	생성	있음 — ON으로 만들면 바로 노출·과금될 수 있음
+GET /ncc/adgroups/shared-budgets/{sharedBudgetId}	공유예산에 묶인 광고그룹 조회	공유예산 하나에 연결된 광고그룹 목록을 본다	조회	없음
+GET /ncc/adgroups/{adgroupId}	광고그룹 1개 조회	광고그룹 하나의 설정(입찰가·예산·상태·ADVoost 등)을 본다	조회	없음
+PUT /ncc/adgroups/{adgroupId}	광고그룹 전체 변경	광고그룹 설정 전체를 보낸 값으로 바꾼다(ADVoost Max·플레이스 ADVoost 포함)	변경	높음 — 입찰가·예산·ON/OFF·자동화 설정이 한꺼번에 바뀔 수 있음
+DELETE /ncc/adgroups/{adgroupId}	광고그룹 삭제	광고그룹과 그 안의 키워드·소재를 지운다(되돌릴 수 없음)	삭제	있음 — 그 그룹 광고가 전부 사라짐
+POST /ncc/adgroups/{adgroupId}/restricted-keywords	제외검색어 등록	이 검색어로는 광고가 나오지 않게 막는다(파워링크 그룹만)	생성	있음 — 노출이 줄어듦(낭비 클릭 감소)
+GET /ncc/adgroups/{adgroupId}/restricted-keywords?type=KEYWORD_PLUS_RESTRICT	제외검색어 조회	광고그룹에 등록한 제외검색어 목록을 본다	조회	없음
+DELETE /ncc/adgroups/{adgroupId}/restricted-keywords{?ids}	제외검색어 삭제	제외검색어를 지워서 다시 그 검색어에 광고가 나올 수 있게 한다	삭제	있음 — 노출이 다시 늘 수 있음
+PUT /ncc/adgroups/{adgroupId}{?fields}	광고그룹 일부 변경	광고그룹의 입찰가·ON/OFF·하루예산·매체 가중치·지역·시간·매체·성별 중 하나만 바꾼다	변경	높음 — 입찰가·예산·ON/OFF가 바로 광고비에 반영
+GET /ncc/adgroups{?ids}	광고그룹 ID로 여러 개 조회	광고그룹 ID 목록으로 설정을 본다	조회	없음
+GET /ncc/adgroups{?nccCampaignId,baseSearchId,recordSize,selector}	캠페인별 광고그룹 목록	캠페인 안의 광고그룹 목록을 본다(나눠 받기 가능)	조회	없음
+GET /ncc/adgroups{?nccLabelId}	즐겨찾기별 광고그룹 조회	즐겨찾기(라벨)에 넣어 둔 광고그룹 목록을 본다	조회	없음
+POST /ncc/ads	소재 등록	광고그룹에 광고 문구(소재)나 쇼핑 상품소재를 새로 등록한다	생성	있음 — 검수 통과·ON이면 노출 시작
+GET /ncc/ads/{adId}	소재 1개 조회	소재 하나의 문구·상태·검수 결과를 본다	조회	없음
+DELETE /ncc/ads/{adId}	소재 삭제	소재 하나를 지운다(되돌릴 수 없음)	삭제	있음 — 그 소재 노출이 멈춤
+PUT /ncc/ads/{adId}{?fields}	소재 변경	소재의 ON/OFF를 바꾸거나 검수를 다시 요청한다(명세 허용값: userLock, inspect)	변경	있음 — ON/OFF가 바로 노출에 반영
+PUT /ncc/ads{?ids,targetAdgroupId,userLock}	소재 복사	소재를 다른 광고그룹으로 복사한다(복사본 ON/OFF 지정)	생성	있음 — ON으로 복사하면 그 그룹에서 노출 시작
+GET /ncc/ads{?ids}	소재 ID로 여러 개 조회	소재 ID 목록으로 내용을 본다	조회	없음
+GET /ncc/ads{?nccAdgroupId}	광고그룹별 소재 목록	광고그룹 안의 소재 목록을 본다	조회	없음
+GET /ncc/brand-new/contracts	신제품검색 계약 전체 조회	계정의 신제품검색(브랜드 신제품) 계약 목록을 본다	조회	없음
+GET /ncc/brand-new/contracts{?adgroupId}	광고그룹별 신제품검색 계약 조회	광고그룹 하나의 신제품검색 계약을 본다	조회	없음
+POST /ncc/campaigns	캠페인 생성	파워링크·쇼핑·플레이스 등 캠페인을 새로 만든다(하루예산·기간)	생성	있음 — ON으로 만들면 하위 광고가 노출·과금될 수 있음
+GET /ncc/campaigns/shared-budgets/{sharedBudgetId}	공유예산에 묶인 캠페인 조회	공유예산 하나에 연결된 캠페인 목록을 본다	조회	없음
+GET /ncc/campaigns/{campaignId}	캠페인 1개 조회	캠페인 하나의 설정(하루예산·상태·기간)을 본다	조회	없음
+DELETE /ncc/campaigns/{campaignId}	캠페인 삭제	캠페인과 그 안의 모든 광고그룹·키워드·소재를 영구 삭제한다	삭제	있음 — 캠페인 광고 전부 사라짐(복구 불가)
+PUT /ncc/campaigns/{campaignId}{?fields}	캠페인 변경	캠페인의 ON/OFF·하루예산·노출 기간을 바꾼다(fields 없으면 전체 변경)	변경	높음 — ON·예산 증액은 광고비 증가로 이어질 수 있음
+GET /ncc/campaigns{?campaignType,baseSearchId,recordSize,selector}	캠페인 목록	계정의 캠페인 목록을 본다(유형별, 나눠 받기 가능)	조회	없음
+GET /ncc/campaigns{?ids}	캠페인 ID로 여러 개 조회	캠페인 ID 목록으로 설정을 본다	조회	없음
+DELETE /ncc/campaigns{?ids}	캠페인 여러 개 삭제	여러 캠페인과 하위 광고를 한 번에 영구 삭제한다	삭제	있음 — 복구 불가
+GET /ncc/channels	비즈채널 목록	등록된 비즈채널(웹사이트·쇼핑몰·플레이스·전화번호 등) 목록을 본다	조회	없음
+POST /ncc/channels	비즈채널 등록	광고에 연결할 웹사이트·쇼핑몰·전화번호 등을 새로 등록한다(검수 필요)	생성	간접 — 검수 통과 전엔 그 채널로 광고 불가
+GET /ncc/channels/{businessChannelId}	비즈채널 1개 조회	비즈채널 하나의 정보·검수 상태를 본다	조회	없음
+DELETE /ncc/channels/{businessChannelId}	비즈채널 삭제	비즈채널 하나를 지운다	삭제	있음 — 연결된 광고가 노출되지 못할 수 있음
+PUT /ncc/channels/{businessChannelId}/inspect	비즈채널 재검수 요청	검수에서 보류·반려된 비즈채널을 다시 검수해 달라고 요청한다	변경	간접 — 통과하면 광고 가능
+PUT /ncc/channels/{businessChannelId}{?fields}	비즈채널 변경	비즈채널 이름·검수용 계정 정보 등을 바꾼다	변경	간접
+GET /ncc/channels{?channelTp}	유형별 비즈채널 목록	웹사이트·쇼핑몰·플레이스 등 유형을 골라 비즈채널을 본다	조회	없음
+GET /ncc/channels{?ids}	비즈채널 ID로 여러 개 조회	비즈채널 ID 목록으로 정보를 본다	조회	없음
+DELETE /ncc/channels{?ids}	비즈채널 여러 개 삭제	여러 비즈채널을 한 번에 지운다	삭제	있음
+GET /ncc/criterion-dictionary/{type}	타기팅 코드표 조회	지역·연령·성별·요일·시간·기기 등 타기팅에 쓸 수 있는 코드 목록을 본다	조회	없음
+PUT /ncc/criterion/{ownerId}/bidWeight{?codes,bidWeight}	타기팅 입찰 가중치 변경	특정 지역·시간·기기 등에 입찰가를 더 주거나 덜 준다(%)	변경	높음 — 가중치가 오르면 실제 입찰가가 오름
+PUT /ncc/criterion/{ownerId}/{type}	타기팅 설정 변경	광고그룹의 지역·연령·성별·요일·시간·기기 타기팅을 유형별로 바꾼다(빠진 코드는 꺼짐)	변경	있음 — 노출 대상이 넓어지거나 좁아짐
+GET /ncc/criterion/{ownerId}{?type}	타기팅 설정 조회	광고그룹에 걸린 타기팅 설정을 본다	조회	없음
+GET /ncc/keywords/{nccKeywordId}	키워드 1개 조회	키워드 하나의 입찰가·상태·지표를 본다	조회	없음
+DELETE /ncc/keywords/{nccKeywordId}	키워드 1개 삭제	키워드 하나를 지운다	삭제	있음 — 그 키워드 노출이 멈춤
+PUT /ncc/keywords/{nccKeywordId}{?fields}	키워드 1개 변경	키워드 하나의 ON/OFF·입찰가·연결 URL·검수 요청을 바꾼다	변경	높음 — 입찰가·ON/OFF가 바로 광고비에 반영
+PUT /ncc/keywords{?fields}	키워드 여러 개 변경	키워드 최대 200개의 ON/OFF·입찰가·연결 URL·검수 요청을 한 번에 바꾼다	변경	높음 — 입찰가·ON/OFF가 바로 광고비에 반영
+GET /ncc/keywords{?ids}	키워드 ID로 여러 개 조회	키워드 ID 목록으로 정보를 본다	조회	없음
+DELETE /ncc/keywords{?ids}	키워드 여러 개 삭제	여러 키워드를 한 번에 지운다	삭제	있음
+GET /ncc/keywords{?nccAdgroupId,baseSearchId,recordSize,selector}	광고그룹별 키워드 목록	광고그룹 안의 키워드 목록을 본다(나눠 받기 가능)	조회	없음
+POST /ncc/keywords{?nccAdgroupId}	키워드 등록	광고그룹에 키워드를 최대 100개 새로 등록한다(입찰가 포함)	생성	있음 — 검수 통과·ON이면 노출·과금 시작
+GET /ncc/keywords{?nccLabelId}	즐겨찾기별 키워드 조회	즐겨찾기(라벨)에 넣어 둔 키워드 목록을 본다	조회	없음
+PUT /ncc/label-refs	즐겨찾기에 넣기·빼기	광고그룹·소재·키워드를 즐겨찾기(라벨)에 넣거나 뺀다	변경	없음
+GET /ncc/labels	즐겨찾기 목록	계정의 즐겨찾기(라벨) 목록을 본다	조회	없음
+PUT /ncc/labels	즐겨찾기 이름 변경	즐겨찾기(라벨) 이름을 바꾼다	변경	없음
+POST /ncc/managedKeyword	키워드 정보 조회(본문 방식)	키워드가 성인·브랜드 등 관리 키워드인지 등 키워드 속성을 본다(긴 목록용)	조회	없음
+GET /ncc/managedKeyword{?keywords}	키워드 정보 조회	키워드 속성(관리 키워드 여부 등)을 본다	조회	없음
+GET /ncc/product-groups	상품 그룹 목록	계정에 등록된 상품 그룹(쇼핑) 목록을 본다	조회	없음
+GET /ncc/purchasable-place-channels{?type}	광고 가능한 플레이스 채널 조회	플레이스 광고에 쓸 수 있는 플레이스 비즈채널 목록을 본다	조회	없음
+GET /ncc/shared-budgets	공유예산 목록	여러 캠페인·광고그룹이 함께 쓰는 공유예산 목록을 본다	조회	없음
+POST /ncc/shared-budgets	공유예산 만들기	여러 캠페인·광고그룹이 함께 쓰는 예산을 새로 만든다	생성	높음 — 예산 한도 구조가 바뀜
+PUT /ncc/shared-budgets/adgroups{?ids}	공유예산에서 광고그룹 빼기	광고그룹을 공유예산에서 제외한다	변경	있음 — 그 그룹의 예산 기준이 바뀜
+PUT /ncc/shared-budgets/campaigns{?ids}	공유예산에서 캠페인 빼기	캠페인을 공유예산에서 제외한다	변경	있음 — 그 캠페인의 예산 기준이 바뀜
+GET /ncc/shared-budgets/{sharedBudgetId}	공유예산 1개 조회	공유예산 하나의 금액·연결 대상을 본다	조회	없음
+PUT /ncc/shared-budgets/{sharedBudgetId}	공유예산 변경	공유예산 설정을 바꾼다	변경	높음 — 예산 증액 시 광고비 증가 가능
+PUT /ncc/shared-budgets{?fields}	공유예산 하루예산 변경	공유예산의 하루예산 금액을 바꾼다	변경	높음 — 예산 증액 시 광고비 증가 가능
+DELETE /ncc/shared-budgets{?ids}	공유예산 삭제	공유예산을 지운다(명세 설명은 '하루예산 수정'으로 잘못 복사돼 있음)	삭제	있음 — 연결 대상의 예산 기준이 바뀜(동작 세부는 미확인)
+PUT /ncc/targets/{targetId}	타깃 변경	광고그룹·소재의 타깃 설정(매체·지역·시간·쇼핑 카탈로그 태그 등)을 바꾼다	변경	있음 — 노출 범위가 바뀜
+GET /ncc/targets{?ownerId,types}	타깃 조회	광고그룹·소재 하나의 타깃 설정을 본다	조회	없음
+GET /ncc/targets{?ownerIds}	타깃 여러 개 조회	여러 광고그룹·소재의 타깃 설정을 한 번에 본다	조회	없음
+GET /ncc/time-contracts	브랜드검색 계약 전체 조회	계정의 브랜드검색 계약 목록을 본다	조회	없음
+GET /ncc/time-contracts{?adgroupId}	광고그룹별 브랜드검색 계약 조회	광고그룹 하나의 브랜드검색 계약을 본다	조회	없음
+POST /tool/analyticses{?field}	애널리틱스 신청	네이버 애널리틱스(전환 추적 등) 서비스를 신청한다	생성	없음(추적 설정)
+PUT /tool/analyticses{?modifyType}	애널리틱스 해지·변경	애널리틱스 해지, 전환일 변경, 해지 취소를 한다	변경	없음(추적 설정)
+GET /tool/analyticses{?searchType}	애널리틱스 현황 조회	애널리틱스 신청 현황을 본다	조회	없음
+GET /tool/bill-recipient-histories/latest	세금계산서 발행처 위임 일자 조회	세금계산서 발행처 위임 최근 일자를 본다	조회	없음
+GET /tool/client-ip	내 접속 IP 조회	API를 부른 쪽의 IP를 본다(명세에서 #hidden 표시)	조회	없음
+GET /tool/document	서류 관리 현황 조회	광고 심사용 제출 서류 현황을 본다	조회	없음
+POST /tool/document	서류 내용 등록	광고 심사용 서류 내용을 등록한다	생성	간접 — 검수 통과에 필요할 수 있음
+POST /tool/file/upload{?data}	서류 파일 업로드	심사용 서류 파일을 올린다	생성	간접
+GET /tool/ip-exclusion-histories{?page,rpp,searchStartDate,searchEndDate}	노출 제한 IP 변경 이력	노출 제한 IP를 바꾼 이력을 본다(명세에서 #hidden 표시)	조회	없음
+GET /tool/ip-exclusions	노출 제한 IP 목록	내 광고를 보지 못하게 막은 IP 목록을 본다	조회	없음
+POST /tool/ip-exclusions	노출 제한 IP 등록	특정 IP에 광고가 노출되지 않게 막는다(부정 클릭 방지)	생성	있음 — 해당 IP 노출·클릭 차단
+PUT /tool/ip-exclusions	노출 제한 IP 변경	노출 제한 IP를 바꾼다	변경	있음
+DELETE /tool/ip-exclusions/{id}	노출 제한 IP 1개 삭제	노출 제한 IP 하나를 풀어 준다	삭제	있음 — 그 IP에 다시 노출
+DELETE /tool/ip-exclusions{?ids}	노출 제한 IP 여러 개 삭제	노출 제한 IP 여러 개를 풀어 준다	삭제	있음
+GET /billing/bizmoney	비즈머니 잔액 조회	광고비 충전금(비즈머니) 잔액과 잠금 상태를 본다	조회	없음
+GET /billing/bizmoney/histories/charge{?searchStartDt,searchEndDt}	비즈머니 충전 내역	기간별 비즈머니 충전 내역을 본다	조회	없음
+GET /billing/bizmoney/histories/exhaust{?searchStartDt,searchEndDt}	비즈머니 차감 내역	기간별 광고비로 빠져나간 비즈머니 내역을 본다	조회	없음
+GET /billing/bizmoney/histories/period{?searchStartDt,searchEndDt}	일별 비즈머니 현황	날짜별 비즈머니 잔액·사용 현황을 본다	조회	없음
+GET /ad-accounts	내 광고 계정 목록	내가 구성원으로 들어가 있는 광고 계정 목록을 본다(2025-09 계정 통합 후)	조회	없음
+GET /ad-accounts/{adAccountNo}/members	광고 계정 구성원 조회	광고 계정 하나의 구성원(권한) 목록을 본다	조회	없음
+GET /manager-accounts	내 관리 계정 목록	내가 구성원인 관리 계정(대행사 등) 목록을 본다	조회	없음
+GET /manager-accounts/{managerAccountNo}/child-ad-accounts	관리 계정의 하위 광고 계정	관리 계정 아래에서 관리할 수 있는 광고 계정 목록을 본다	조회	없음
+GET /stat-reports	대용량 보고서 작업 목록	요청해 둔 대용량 성과 보고서 작업 목록을 본다	조회	없음
+POST /stat-reports	대용량 보고서 요청	하루 단위 상세 성과 보고서(TSV) 생성을 요청한다	생성	없음
+DELETE /stat-reports	대용량 보고서 전체 삭제	요청해 둔 대용량 보고서 작업을 모두 지운다	삭제	없음
+GET /stat-reports/{reportJobId}	대용량 보고서 1개 조회	보고서 작업 상태와 내려받기 주소를 본다	조회	없음
+DELETE /stat-reports/{reportJobId}	대용량 보고서 1개 삭제	보고서 작업 하나를 지운다	삭제	없음
+GET /stats{?id,fields,timeRange,datePreset,timeIncrement,breakdown}	성과 요약(1개 대상)	캠페인·광고그룹·키워드·소재 하나의 노출·클릭·비용·전환 등을 기간별로 본다	조회	없음
+GET /stats{?ids,fields,timeRange,datePreset,timeIncrement,breakdown}	성과 요약(여러 대상)	여러 대상의 성과를 한 번에 본다	조회	없음
+GET /stats{?id,statType}	유형별 성과(1개 대상)	정해진 통계 유형(statType)으로 대상 하나의 성과를 본다	조회	없음
+GET /master-reports	마스터 보고서 작업 목록	요청해 둔 마스터 보고서(전체 광고 구조 파일) 작업 목록을 본다(최근 최대 100개)	조회	없음
+DELETE /master-reports	마스터 보고서 전체 삭제	마스터 보고서 작업을 모두 지운다	삭제	없음
+POST /master-reports	마스터 보고서 요청	캠페인·광고그룹·키워드·소재 등 전체 구조를 파일로 받기 위한 작업을 만든다	생성	없음
+DELETE /master-reports/{id}	마스터 보고서 1개 삭제	마스터 보고서 작업 하나를 지운다	삭제	없음
+GET /master-reports/{id}	마스터 보고서 1개 조회	마스터 보고서 작업 상태와 내려받기 주소를 본다	조회	없음
+GET /keywordstool	연관 키워드·검색량 조회	힌트 키워드·사이트·업종·시즌으로 연관 키워드와 월간 검색수·클릭 지표를 본다	조회	없음
+POST /estimate/average-position-bid/{type}	순위별 평균 입찰가 예측(파워링크)	키워드를 몇 위에 올리려면 평균 얼마를 써야 했는지 본다	조회	없음(예측만)
+POST /estimate/median-bid/{type}	중간 입찰가 예측(파워링크)	키워드의 중간 입찰가를 본다	조회	없음(예측만)
+POST /estimate/exposure-minimum-bid/{type}	최소 노출 입찰가 예측(파워링크)	키워드가 노출되려면 최소 얼마가 필요한지 본다	조회	없음(예측만)
+POST /estimate/performance/{type}	입찰가별 성과 예측(파워링크)	입찰가를 이만큼 쓰면 노출·클릭·비용이 얼마나 될지 예측한다	조회	없음(예측만)
+POST /estimate/performance-bulk	입찰가별 성과 예측(여러 키워드)	여러 키워드·입찰가 조합의 예상 노출·클릭·비용을 한 번에 본다	조회	없음(예측만)
+POST /npla-estimate/average-position-bid/{type}	순위별 평균 입찰가 예측(쇼핑)	쇼핑 상품소재를 몇 위에 올리려면 평균 얼마였는지 본다	조회	없음(예측만)
+POST /npla-estimate/exposure-minimum-bid/{type}	최소 노출 입찰가 예측(쇼핑)	쇼핑 상품소재 노출에 필요한 최소 입찰가를 본다	조회	없음(예측만)
+POST /npc-estimate/average-position-bid/{type}	순위별 평균 입찰가 예측(파워콘텐츠)	파워콘텐츠 키워드 순위별 평균 입찰가를 본다	조회	없음(예측만)
+POST /npc-estimate/exposure-minimum-bid/{type}	최소 노출 입찰가 예측(파워콘텐츠)	파워콘텐츠 노출에 필요한 최소 입찰가를 본다	조회	없음(예측만)
+POST /npc-estimate/performance	성과 예측(파워콘텐츠)	파워콘텐츠 키워드의 예상 성과를 본다	조회	없음(예측만)
+POST /ncc/inspect-history	검수 이력 여러 개 조회	비즈채널·소재·확장소재·키워드의 검수 결과와 반려 사유를 최대 100개 본다(최근 3개월)	조회	없음
+GET /ncc/inspect-history/{id}	검수 이력 1개 조회	대상 하나의 검수 결과와 반려 사유를 본다(최근 3개월)	조회	없음

@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
-from . import approvals, bulk, main as api, place, shopping_ads
+from . import account_tools, approvals, bulk, main as api, place, shopping_ads
 from .access import membership_of, user_from_header
 from .db import SessionLocal
 from .models import OAuthUsed, User, now
@@ -336,6 +336,7 @@ TOOLS = [
      "annotations": {"readOnlyHint": True}},
     shopping_ads.TOOL,
     *place.TOOLS,
+    *account_tools.TOOLS,
     {"name": "get_ad_safety", "description": "광고 계정의 광고비 안전장치: 하루예산 관리 기준·클릭당 최대 입찰가, 네이버에 지금 켜진 캠페인의 하루예산 설정액과 합계, "
      "문제(공유예산·무제한 예산·기준 초과)와 필요한 조치. 광고 켜기·예산 증액·입찰가 변경 전에 확인한다. 하루예산 설정액은 실제 과금의 절대 상한이 아니다"
      "(네이버가 광고를 멈추는 데 시간이 걸려 더 과금될 수 있음). 설정은 관리자가 웹 설정 화면에서 직접 한다. 읽기만 한다.",
@@ -350,6 +351,9 @@ TOOLS = [
          **WS, "ad_account_id": {"type": "integer"},
          "entity_type": {"enum": ["campaign", "adgroup", "keyword", "ad", "ad_extension"]}, "naver_id": {"type": "string"}}}},
 ]
+
+
+ACCOUNT_TOOLS = {t["name"] for t in account_tools.TOOLS}
 
 
 def _day(s):
@@ -369,6 +373,8 @@ async def _call(db, user: User, name: str, a: dict):
     m = membership_of(db, int(a["workspace_id"]), user)
     if name.startswith("place_ads_"):
         return place.call_tool(db, m, name, a)
+    if name in ACCOUNT_TOOLS:
+        return account_tools.call_tool(db, m, name, a)
     if name == "get_performance":
         return await api.performance_accounts(_day(a.get("since")), _day(a.get("until")), _joined(a.get("account_ids")), m=m, db=db)
     if name == "get_daily_performance":
@@ -463,7 +469,7 @@ async def mcp(request: Request):
                       "serverInfo": {"name": "naverads", "version": "0.1.0"},
                       "instructions": "네이버 검색광고 관리. 먼저 list_ad_accounts로 조직·계정을 확인한다. "
                                       "변경은 preview_changes → 채팅에 미리보기 표 → execute_job(또는 schedule_job으로 예약) 순서로만 한다. "
-                                      "변경 도구(execute_job, schedule_job, create_ad, create_shopping_ad, create_ad_extension, delete_ad_extension, set_auto_bid, delete_auto_bid, run_auto_bids)를 "
+                                      "변경 도구(execute_job, schedule_job, create_ad, create_shopping_ad, create_ad_extension, delete_ad_extension, set_auto_bid, delete_auto_bid, run_auto_bids, add_ip_exclusion, delete_ip_exclusion, create_site_channel, reinspect_channel, set_targeting)를 "
                                       "부르기 직전에 바뀔 내용(계정·광고그룹·대상·지금 값 → 바뀔 값, 문구와 글자 수, 입찰가, 예약 시각, preview_changes의 VALID/INVALID 행)을 "
                                       "채팅에 표로 보여 준 다음 그 도구를 부른다. 사용자는 표를 보고 Claude 화면의 허용 버튼으로 승인한다(채팅 답을 따로 기다리지 않는다). "
                                       "표 없이 변경 도구를 부르지 않는다. 계정 하루예산 합계가 늘 수 있는 변경(캠페인 하루예산 올리기·캠페인 켜기·"

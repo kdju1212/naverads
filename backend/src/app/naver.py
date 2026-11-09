@@ -326,6 +326,59 @@ class RealNaverClient:
         Workers는 이걸로 JS fetch를 해서 파이썬이 본문을 건드리지 않는다(9MB 실측: CPU 25ms, httpx는 1.5초)."""
         return {"url": job["downloadUrl"], "headers": self._headers("GET", urlsplit(job["downloadUrl"]).path)}
 
+    # ---- 비즈머니·노출 제한 IP·비즈채널·타기팅·대용량 보고서(명세 gh-pages assets/json, 2026-11-09). shortcut: 실계정 미확인
+    def bizmoney(self):
+        return self._req("GET", "/billing/bizmoney")
+
+    def bizmoney_daily(self, since: date, until: date):
+        return self._req("GET", "/billing/bizmoney/histories/period",
+                         params={"searchStartDt": since.strftime("%Y%m%d"), "searchEndDt": until.strftime("%Y%m%d")}) or []
+
+    def list_ip_exclusions(self):
+        return self._req("GET", "/tool/ip-exclusions") or []
+
+    def add_ip_exclusion(self, ip, memo):
+        return self._req("POST", "/tool/ip-exclusions", json={"filterIp": ip, "memo": memo})
+
+    def delete_ip_exclusion(self, filter_id):
+        self._req("DELETE", f"/tool/ip-exclusions/{filter_id}")
+
+    def create_site_channel(self, name, url):
+        # 공식 샘플 Channels.java: channelTp SITE, businessInfo {site}
+        return self._req("POST", "/ncc/channels", json={"customerId": int(self.customer_id), "name": name, "channelTp": "SITE",
+                                                        "businessInfo": {"site": url}})
+
+    def reinspect_channel(self, channel_id):
+        return self._req("PUT", f"/ncc/channels/{channel_id}/inspect", json={"nccBusinessChannelId": channel_id})
+
+    def targeting(self, adgroup_id, tp):
+        return self._req("GET", f"/ncc/criterion/{adgroup_id}", params={"type": tp}) or []
+
+    def targeting_codes(self, tp):
+        return self._req("GET", f"/ncc/criterion-dictionary/{tp}") or []
+
+    def set_targeting(self, adgroup_id, tp, codes):
+        """본문에 없는 코드는 네이버가 모두 끈다(명세 #49) → 부르는 쪽이 켤 코드 전체를 넘긴다."""
+        return self._req("PUT", f"/ncc/criterion/{adgroup_id}/{tp}", json=[
+            {"ownerId": adgroup_id, "type": tp, "dictionaryCode": c, "customerId": int(self.customer_id)} for c in codes])
+
+    def create_stat_report(self, report_tp, stat_dt: date):
+        # 공식 샘플 StatReports.java
+        return self._req("POST", "/stat-reports", json={"reportTp": report_tp, "statDt": stat_dt.strftime("%Y%m%d")})
+
+    def get_stat_report(self, job_id):
+        return self._req("GET", f"/stat-reports/{job_id}")
+
+    def stat_file(self, job) -> str:
+        """서명 uri는 쿼리를 뺀 경로(마스터 보고서와 같은 /report-download)."""
+        try:
+            r = httpx.get(job["downloadUrl"], headers=self._headers("GET", urlsplit(job["downloadUrl"]).path), timeout=30)
+        except httpx.HTTPError as e:
+            raise NaverApiError(f"네트워크 오류: {e}") from e
+        if r.status_code >= 400:
+            raise NaverApiError(f"보고서 다운로드 실패: {r.status_code}")
+        return r.text
+
     def get_many(self, kind, ids):
         """ids로 여러 개 조회(명세의 /ncc/{kind}?ids=). kind: adgroups | keywords | ads | ad-extensions"""
         out = []
@@ -400,7 +453,9 @@ MIN_BID = {"WEB_SITE": 70, "SHOPPING": 50}  # bulk.BID_RANGE 최저값과 같게
 
 def _adgroup_body(campaign_id, tp, name, channel_id, bid, daily_budget):
     return {"nccCampaignId": campaign_id, "name": name, "adgroupType": tp, "pcChannelId": channel_id, "mobileChannelId": channel_id,
-            "bidAmt": bid or MIN_BID[tp], "useDailyBudget": daily_budget is not None, "dailyBudget": daily_budget or 0, "userLock": True}
+            "bidAmt": bid or MIN_BID[tp], "useDailyBudget": daily_budget is not None, "dailyBudget": daily_budget or 0, "userLock": True,
+            # ADVoost Max는 값을 빼면 켜진다(릴리스 노트 2026-07-15). 웹 승인 없이 켜지지 않게 끈다. 파워링크 그룹만 받는 값
+            **({"aiAdsOptIn": False} if tp == "WEB_SITE" else {})}
 
 
 def _place_adgroup_body(campaign_id, name, channel_id, bid, use_advoost):
@@ -495,6 +550,10 @@ def _seed(cid: str) -> dict:
                          "ad": {"productName": f"린넨 원피스 {p}", "productId": f"{cid}{p:04d}"},
                          "adAttr": {"bidAmt": 200 * p, "useGroupBidAmt": False}}
     return s
+
+
+MOCK_CODES = {"DV": {"PC": "PC", "MOBILE": "모바일"}, "RL": {"09": "서울", "02": "부산"},
+              "SD": {"MO_ALL": "월요일 전체"}, "AG": {"20_24": "20~24세"}, "GN": {"M": "남성", "F": "여성"}}
 
 
 class MockNaverClient:
@@ -663,6 +722,68 @@ class MockNaverClient:
         else:
             rows = []
         return {"text": "\n".join("\t".join(r) for r in rows)}
+
+    def bizmoney(self):
+        return {"customerId": int(self.customer_id), "bizmoney": 152000, "budgetLock": False, "refundLock": False}
+
+    def bizmoney_daily(self, since: date, until: date):
+        out, d = [], since
+        while d <= until:
+            out.append({"settleDt": d.isoformat(), "refundableAmt": 152000, "nonRefundableAmt": 0, "useRefundableAmt": 8000,
+                        "useNonRefundableAmt": 0, "addRefundableAmt": 0, "addNonRefundableAmt": 0})
+            d += timedelta(days=1)
+        return out
+
+    def list_ip_exclusions(self):
+        return [dict(x) for x in self.s.setdefault("ip", {}).values()]
+
+    def add_ip_exclusion(self, ip, memo):
+        if any(x["filterIp"] == ip for x in self.s.setdefault("ip", {}).values()):
+            raise NaverApiError("이미 등록된 IP입니다")
+        fid = len(self.s["ip"]) + 1
+        self.s["ip"][fid] = {"ipFilterId": fid, "filterIp": ip, "memo": memo}
+        return dict(self.s["ip"][fid])
+
+    def delete_ip_exclusion(self, filter_id):
+        if self.s.setdefault("ip", {}).pop(int(filter_id), None) is None:
+            raise NaverApiError("대상 IP가 존재하지 않습니다")
+
+    def create_site_channel(self, name, url):
+        nid = f"bsn-{self.customer_id}-new{len(self.s['channels']) + 1}"
+        self.s["channels"][nid] = {"nccBusinessChannelId": nid, "name": name, "channelTp": "SITE", "channelKey": url,
+                                   "inspectStatus": "UNDER_REVIEW"}
+        return dict(self.s["channels"][nid])
+
+    def reinspect_channel(self, channel_id):
+        ch = self.s["channels"].get(channel_id)
+        if ch is None:
+            raise NaverApiError("대상 비즈채널이 존재하지 않습니다")
+        ch["inspectStatus"] = "UNDER_REVIEW"
+        return dict(ch)
+
+    def targeting(self, adgroup_id, tp):
+        if adgroup_id not in self.s["adgroups"]:
+            raise NaverApiError("광고그룹이 없습니다")
+        return [{"ownerId": adgroup_id, "type": tp, "dictionaryCode": c, "codeName": MOCK_CODES[tp].get(c, c), "enable": True}
+                for c in self.s.setdefault("criterion", {}).get((adgroup_id, tp), [])]
+
+    def targeting_codes(self, tp):
+        return [{"code": c, "name": n} for c, n in MOCK_CODES[tp].items()]
+
+    def set_targeting(self, adgroup_id, tp, codes):
+        if adgroup_id not in self.s["adgroups"]:
+            raise NaverApiError("광고그룹이 없습니다")
+        self.s.setdefault("criterion", {})[(adgroup_id, tp)] = list(codes)
+        return self.targeting(adgroup_id, tp)
+
+    def create_stat_report(self, report_tp, stat_dt: date):
+        return {"reportJobId": 1, "reportTp": report_tp, "statDt": stat_dt.isoformat(), "status": "BUILT", "downloadUrl": "mock"}
+
+    def get_stat_report(self, job_id):
+        return {"reportJobId": int(job_id), "reportTp": "AD", "status": "BUILT", "downloadUrl": "mock"}
+
+    def stat_file(self, job) -> str:
+        return "\n".join(f"20261108\t{self.customer_id}\tcmp-{self.customer_id}-pl\t{g}\t100\t3\t1500" for g in self.s["adgroups"])
 
     def get_many(self, kind, ids):
         return [dict(self.s[kind][i]) for i in ids if i in self.s.get(kind, {})]

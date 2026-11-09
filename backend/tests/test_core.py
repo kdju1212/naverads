@@ -347,6 +347,7 @@ def test_campaign_adgroup_create():
     a, b, s_ = groups["그룹A"], groups["그룹B"], groups["쇼핑그룹"]
     assert a["userLock"] and a["bidAmt"] == 500 and a["useDailyBudget"] and a["dailyBudget"] == 20000 and a["pcChannelId"] == site
     assert b["bidAmt"] == 70 and not b["useDailyBudget"] and s_["adgroupType"] == "SHOPPING" and s_["bidAmt"] == 50
+    assert a["aiAdsOptIn"] is False and "aiAdsOptIn" not in s_  # ADVoost Max 끈 채로 생성, 쇼핑엔 안 보냄
     assert "채널 틀림" not in groups
     acts = {(h["action"], h["field"]) for h in c.get(f"/workspaces/{ws}/audit-logs", headers=owner).json()}
     assert {("CREATE", "campaign"), ("CREATE", "adgroup")} <= acts
