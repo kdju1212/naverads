@@ -148,3 +148,15 @@ def test_media_exp_negative_keyword_url():
     job, _ = call("request_stat_report", report_type="EXPKEYWORD", date="2026-11-08")
     from app.naver import MockNaverClient
     assert MockNaverClient("9503").stat_file(job).count("\n") == 3  # Mock 파일도 실계정과 같은 12칸
+
+
+def test_get_stats():
+    owner, ws, acc = _account("stats@a.com", "9504")
+    call = _tool(_mcp_headers(owner), ws, acc)
+    out, err = call("get_stats", ids=["grp-9504-pl1"], breakdown="hh24", today=True)
+    assert not err and out["period"] == "today" and len(out["data"][0]["breakdowns"]) == 24
+    out, err = call("get_stats", ids=["grp-9504-pl1", "grp-9504-pl2"], since="2026-11-01", until="2026-11-07")
+    assert not err and len(out["data"]) == 2 and "purchaseCcnt" in out["data"][0]
+    assert call("get_stats", ids=["a", "b"], breakdown="dayw")[1]  # 쪼개 보기는 1개만
+    assert call("get_stats", ids=["a"], breakdown="month")[1]
+    assert call("get_stats", ids=["a"], since="2026-01-01", until="2026-11-07")[1]  # 93일 넘음
