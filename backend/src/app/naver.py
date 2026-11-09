@@ -400,7 +400,9 @@ MIN_BID = {"WEB_SITE": 70, "SHOPPING": 50}  # bulk.BID_RANGE 최저값과 같게
 
 def _adgroup_body(campaign_id, tp, name, channel_id, bid, daily_budget):
     return {"nccCampaignId": campaign_id, "name": name, "adgroupType": tp, "pcChannelId": channel_id, "mobileChannelId": channel_id,
-            "bidAmt": bid or MIN_BID[tp], "useDailyBudget": daily_budget is not None, "dailyBudget": daily_budget or 0, "userLock": True}
+            "bidAmt": bid or MIN_BID[tp], "useDailyBudget": daily_budget is not None, "dailyBudget": daily_budget or 0, "userLock": True,
+            # ADVoost Max는 값을 빼면 켜진다(릴리스 노트 2026-07-15). 웹 승인 없이 켜지지 않게 끈다. 파워링크 그룹만 받는 값
+            **({"aiAdsOptIn": False} if tp == "WEB_SITE" else {})}
 
 
 def _place_adgroup_body(campaign_id, name, channel_id, bid, use_advoost):
