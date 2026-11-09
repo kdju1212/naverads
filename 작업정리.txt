@@ -529,3 +529,8 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
     구매 전환·PC/모바일 평균 순위 칸. 응답은 네이버 형식 그대로(breakdown 응답 모양이 명세에 없음) — 실계정 응답 보고 정리
     - 11/09 실계정 확인: 11/08 EXPKEYWORD 비용 합계 1,093원 = 비즈머니 차감 1,092원(VAT 포함) → 보고서 비용은 VAT 포함(도구 설명 고침)
       배포 직후 첫 get_stat_report는 Worker CPU 한도(1102)로 실패, 바로 다시 부르면 성공(처음 뜰 때 비용으로 봄)
+24. 11/09 실계정('현지') 도구 시험 — 이 대화는 1차 도구까지만 보임(claude.ai 커넥터가 예전 목록 유지, 2~4차 도구는 커넥터 재등록 필요)
+    - 통과: get_bizmoney(날짜·원 단위), list/add/delete_ip_exclusion(192.0.2.1 등록→삭제), get_targeting GN(남·여·알 수 없음), request/get_stat_report
+    - 고침: list_channels 검수 상태가 빈 값(실계정은 pcInspectStatus·mobileInspectStatus만 줌), SD 코드표 2,100개(35만 자) → 규칙만 안내
+    - 의심: 파워링크 그룹의 DV 코드표가 빈 목록 → 기기 타기팅은 criterion이 아니라 targets API(PC_MOBILE_TARGET)일 수 있음. set_targeting 실계정 미시험(꺼진 파워링크 그룹 없음)
+    - 정정: 11/08 검색어 '말랑이만드는법'은 'DIY재료' 그룹(…035) → 제외 후보 아님
