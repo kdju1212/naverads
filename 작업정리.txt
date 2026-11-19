@@ -534,3 +534,11 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
     - 고침: list_channels 검수 상태가 빈 값(실계정은 pcInspectStatus·mobileInspectStatus만 줌), SD 코드표 2,100개(35만 자) → 규칙만 안내
     - 의심: 파워링크 그룹의 DV 코드표가 빈 목록 → 기기 타기팅은 criterion이 아니라 targets API(PC_MOBILE_TARGET)일 수 있음. set_targeting 실계정 미시험(꺼진 파워링크 그룹 없음)
     - 정정: 11/08 검색어 '말랑이만드는법'은 'DIY재료' 그룹(…035) → 제외 후보 아님
+25. 11/19 get_stat_report 보고서 요약 확대(브랜치 feat/stat-report-summary) — 외부 '네이버 검색광고 MCP 확장판' 가이드 참고
+    - AD·AD_DETAIL·ADEXTENSION·CRITERION + 각 _CONVERSION을 group_by 칸별 합계로 요약(노출·클릭·비용·평균순위 / 전환수·전환매출)
+    - 칸은 실계정 '현지' 11/17 파일로 확인: AD 14칸(…비즈채널·매체·P/M·노출·클릭·비용·순위합·?), AD_DETAIL 16칸(7 시간대 · 8 지역 확인),
+      ADEXTENSION 14칸(11/16 8번 칸 삭제 뒤, 7 확장소재 ID), CRITERION 7칸('광고그룹~코드'·P/M·노출·클릭·비용, 비용은 클릭당 110원 = VAT 포함)
+    - [확인] 전환 보고서 4종은 공식 순서(바탕 칸 + 전환방식·전환유형·전환수·전환매출)로 가정, 이 계정은 전환 없어 NONE → 전환 생기면 실파일로 확인
+      칸 수가 안 맞으면 요약 대신 원본 미리보기로 돌아감
+    - 안 한 것: 쇼핑 검색어·브랜드 상품 보고서(NONE이라 칸 확인 불가, 미리보기 유지), 품질지수 조회(파워링크 7/29부터 고정 4라 의미 없음),
+      CSV 저장(원격 MCP라 PC에 파일 못 씀, Claude가 결과로 만들면 됨), 기간 제한 없이 쌓기(서버 DB 안 씀·무료 플랜)

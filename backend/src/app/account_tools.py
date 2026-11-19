@@ -17,7 +17,7 @@ TARGET_TYPES = {"SD": "요일·시간", "RL": "지역", "DV": "기기(PC·모바
 REPORT_TYPES = ["AD", "AD_DETAIL", "AD_CONVERSION", "AD_CONVERSION_DETAIL", "ADEXTENSION", "ADEXTENSION_CONVERSION", "EXPKEYWORD",
                 "SHOPPINGKEYWORD_DETAIL", "SHOPPINGKEYWORD_CONVERSION_DETAIL", "SHOPPINGBRANDPRODUCT", "SHOPPINGBRANDPRODUCT_CONVERSION",
                 "CRITERION", "CRITERION_CONVERSION"]
-PREVIEW_LINES = 50  # shortcut: 칸 이름을 모르는 원본이라 앞부분만 넘긴다, 실계정 파일로 칸을 확인하면 이름 붙여 요약
+PREVIEW_LINES = 50  # shortcut: 쇼핑 보고서는 칸 이름을 몰라 앞부분만 넘긴다, 실계정 파일로 칸을 확인하면 REPORT_LAYOUTS에 추가
 
 _ACC = {"workspace_id": {"type": "integer"}, "ad_account_id": {"type": "integer"}}
 _GRP = {**_ACC, "adgroup_id": {"type": "string", "description": "광고그룹 네이버 ID"}}
@@ -64,11 +64,16 @@ TOOLS = [
          **_ACC, "report_type": {"enum": REPORT_TYPES}, "date": {"type": "string", "description": "YYYY-MM-DD(어제 이전)"}}},
      "annotations": {"readOnlyHint": True}},
     {"name": "get_stat_report", "description": "대용량 보고서 상태. BUILT면 EXPKEYWORD(확장검색 검색어)는 검색어별 노출·클릭·비용 합계(비용 큰 순 100개, 비용은 비즈머니 차감액과 같은 VAT 포함 원), "
-     f"그 밖의 유형은 파일 앞 {PREVIEW_LINES}줄(원본 TSV, 칸 이름 없음)과 전체 줄 수. NONE이면 그날 데이터 없음. "
+     "AD·AD_DETAIL·ADEXTENSION·CRITERION과 각 _CONVERSION은 group_by 칸별 합계(큰 순 100개, totals는 전체 합): 성과는 노출·클릭·비용(같은 VAT 포함 원)·avg_rank, "
+     "전환은 conversions·sales(conv_method 1 직접 2 간접, conv_type 전환유형). device P·M, hour 0~23, region 지역코드, criterion 타기팅코드(GNM 남·AG2529 25~29세 등), "
+     "-는 해당 없음(keyword_id -는 확장검색 등). ROAS는 같은 날 성과·전환 보고서를 같은 group_by로 받아 sales÷cost×100. 이름은 list_keywords 등으로 찾는다. "
+     f"쇼핑 검색어·브랜드 상품 보고서는 파일 앞 {PREVIEW_LINES}줄(원본 TSV, 칸 이름 없음)과 전체 줄 수. NONE이면 그날 데이터 없음. "
      "검색어 결과로 제외검색어를 추천할 땐 클릭·비용은 있는데 상품과 맞지 않는 검색어를 고르고, add_exp_negative_keywords로 등록한다. "
      "REGIST·RUNNING·WAITING·AGGREGATING이면 잠시 뒤 다시 부른다.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "report_job_id"], "properties": {
-         **_ACC, "report_job_id": {"type": "integer"}}},
+         **_ACC, "report_job_id": {"type": "integer"},
+         "group_by": {"type": "array", "items": {"type": "string"}, "description": "묶을 칸. 비우면 유형별 기본(AD 키워드별, AD_DETAIL 시간대별 등). "
+                      "campaign_id, adgroup_id, keyword_id, ad_id, channel_id, extension_id, criterion, hour, region, media, device, conv_method, conv_type 중 그 유형에 있는 것"}}},
      "annotations": {"readOnlyHint": True}},
     {"name": "estimate_bid", "description": "입찰가 예측(네이버 통계 기반, 조회만). kind: position 원하는 순위의 평균 입찰가(positions 필요), "
      "median 중간 입찰가, minimum 최소 노출 입찰가, performance 입찰가별 예상 노출·클릭·비용(bids 필요, 파워링크만). "
@@ -258,6 +263,8 @@ def call_tool(db, m: Membership, name: str, a: dict):
         lines = _naver(lambda: c.stat_file(job), "보고서 다운로드").splitlines()
         if job.get("reportTp") == "EXPKEYWORD":
             return {**job, **search_terms(lines)}
+        if job.get("reportTp") in REPORT_LAYOUTS and (out := summarize_report(job["reportTp"], lines, a.get("group_by"))):
+            return {**job, "total_lines": len(lines), **out}
         return {**job, "total_lines": len(lines), "preview": lines[:PREVIEW_LINES]}
     if name == "get_stats":
         ids = list(dict.fromkeys(a["ids"]))
@@ -413,3 +420,60 @@ def search_terms(lines: list[str], top: int = 100) -> dict:
             r[k] += int(f[EXP_COLS[k]]) if f[EXP_COLS[k]].isdigit() else 0
     rows = sorted(agg.values(), key=lambda r: (-r["cost"], -r["clicks"], -r["impressions"]))
     return {"terms": len(rows), "total_cost": sum(r["cost"] for r in rows), "total_clicks": sum(r["clicks"] for r in rows), "rows": rows[:top]}
+
+
+# 보고서 칸(앞 2칸 날짜·고객 ID 다음부터): AD·AD_DETAIL·ADEXTENSION·CRITERION은 실계정 파일(2026-11-17)로 확인.
+# 확장소재는 2026-11-16 8번 칸 삭제 뒤 모양. CRITERION의 3번째 칸은 '광고그룹ID~타기팅코드'.
+# 전환 보고서는 같은 바탕 칸 + 전환방식(1 직접·2 간접)·전환유형·전환수·전환매출(공식 문서 순서, 실계정 미확인: 전환 없는 계정).
+# 쇼핑 검색어·브랜드 상품 보고서는 칸을 확인할 파일이 없어 원본 미리보기로 둔다
+_AD = ["campaign_id", "adgroup_id", "keyword_id", "ad_id", "channel_id"]
+_PERF, _CONV = ["impressions", "clicks", "cost", "rank_sum"], ["conversions", "sales"]
+_CV = ["conv_method", "conv_type"]
+REPORT_LAYOUTS = {  # 유형: (나눠 볼 칸, 합칠 숫자 칸, 기본 묶음)
+    "AD": (_AD + ["media", "device"], _PERF, ["adgroup_id", "keyword_id"]),
+    "AD_DETAIL": (_AD + ["hour", "region", "media", "device"], _PERF, ["hour"]),
+    "ADEXTENSION": (_AD[:4] + ["extension_id", "media", "device"], _PERF, ["extension_id"]),
+    "CRITERION": (["adgroup_id", "criterion", "device"], _PERF[:3], ["adgroup_id", "criterion"]),
+    "AD_CONVERSION": (_AD + ["media", "device"] + _CV, _CONV, ["adgroup_id", "keyword_id", "conv_type"]),
+    "AD_CONVERSION_DETAIL": (_AD + ["hour", "region", "media", "device"] + _CV, _CONV, ["hour", "conv_type"]),
+    "ADEXTENSION_CONVERSION": (_AD[:4] + ["extension_id", "media", "device"] + _CV, _CONV, ["extension_id", "conv_type"]),
+    "CRITERION_CONVERSION": (["adgroup_id", "criterion", "device"] + _CV, _CONV, ["adgroup_id", "criterion", "conv_type"]),
+}
+
+
+def _num(x: str) -> int:
+    try:
+        return int(float(x))
+    except ValueError:  # '-' 등 빈 값
+        return 0
+
+
+def summarize_report(tp: str, lines: list[str], group_by: list[str] | None = None, top: int = 100) -> dict | None:
+    """group_by 칸별 합계, 비용(전환 보고서는 전환매출) 큰 순. 칸 수가 맞는 줄이 하나도 없으면 None(칸이 바뀐 것)."""
+    dims, mets, default = REPORT_LAYOUTS[tp]
+    gb = list(dict.fromkeys(group_by or default))
+    if bad := [g for g in gb if g not in dims]:
+        raise HTTPException(400, f"{tp}의 group_by는 {', '.join(dims)} 중에서 (틀림: {', '.join(bad)})")
+    # shortcut: 파일 전체를 Worker 한 번에 집계, 줄이 수만 개인 큰 계정은 CPU 한도(1102)에 걸릴 수 있음 → 그때 날짜·유형을 쪼개 받거나 유료 플랜
+    agg: dict[tuple, dict] = {}
+    for ln in lines:
+        f = ln.split("\t")
+        if tp.startswith("CRITERION") and len(f) > 2:
+            f[2:3] = f[2].split("~", 1)
+        if len(f) < 2 + len(dims) + len(mets):
+            continue
+        row = dict(zip(dims + mets, f[2:]))
+        key = tuple(row[g] for g in gb)
+        r = agg.setdefault(key, {**dict(zip(gb, key)), **{m: 0 for m in mets}})
+        for m in mets:
+            r[m] += _num(row[m])
+    if lines and not agg:
+        return None
+    rows = list(agg.values())
+    for r in rows:
+        if "rank_sum" in r:
+            rank = r.pop("rank_sum")
+            r["avg_rank"] = round(rank / r["impressions"], 1) if r["impressions"] else None
+    rows.sort(key=lambda r: (-r.get("sales", 0), -r.get("conversions", 0)) if "sales" in r else (-r["cost"], -r["clicks"], -r["impressions"]))
+    totals = {m: sum(r[m] for r in rows) for m in mets if m != "rank_sum"}
+    return {"group_by": gb, "groups": len(rows), "totals": totals, "rows": rows[:top]}

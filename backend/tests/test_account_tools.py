@@ -118,6 +118,33 @@ def test_search_terms_real_layout():
     assert out["rows"][0] == {"adgroup_id": "grp-35", "search_term": "수제말랑이", "impressions": 107, "clicks": 6, "cost": 561}
 
 
+def test_summarize_report_real_layout():
+    """실계정 AD·CRITERION 줄(2026-11-17) 그대로, 전환은 문서 순서. 칸 수가 안 맞으면 None(미리보기로)."""
+    import pytest
+    from fastapi import HTTPException
+
+    from app.account_tools import summarize_report
+
+    ad = ["20261117\t4286027\tcmp-1\tgrp-35\tkwd-92\tnad-45\tbsn-1\t27758\tP\t41\t1\t110\t261\t0",
+          "20261117\t4286027\tcmp-1\tgrp-35\tkwd-92\tnad-45\tbsn-1\t8753\tM\t5\t0\t0\t20\t0",
+          "20261117\t4286027\tcmp-1\tgrp-35\t-\t-\tbsn-1\t8753\tM\t5\t0\t0\t6\t0"]
+    out = summarize_report("AD", ad)
+    assert out["groups"] == 2 and out["totals"] == {"impressions": 51, "clicks": 1, "cost": 110}
+    assert out["rows"][0] == {"adgroup_id": "grp-35", "keyword_id": "kwd-92", "impressions": 46, "clicks": 1, "cost": 110, "avg_rank": 6.1}
+    assert summarize_report("AD", ad, ["device"])["rows"][0]["device"] == "P"
+    with pytest.raises(HTTPException):
+        summarize_report("AD", ad, ["hour"])  # AD에는 시간대 칸이 없다
+
+    crit = ["20261117\t4286027\tgrp-35~GNF\tM\t58\t1\t110", "20261117\t4286027\tgrp-35~GNF\tP\t22\t0\t0"]
+    assert summarize_report("CRITERION", crit)["rows"] == [{"adgroup_id": "grp-35", "criterion": "GNF", "impressions": 80, "clicks": 1, "cost": 110}]
+
+    conv = ["20261117\t4286027\tcmp-1\tgrp-35\tkwd-92\tnad-45\tbsn-1\t8753\tM\t1\tpurchase\t2\t39800",
+            "20261117\t4286027\tcmp-1\tgrp-35\tkwd-92\tnad-45\tbsn-1\t8753\tM\t2\tcart\t1\t0"]
+    out = summarize_report("AD_CONVERSION", conv, ["conv_type"])
+    assert out["rows"][0] == {"conv_type": "purchase", "conversions": 2, "sales": 39800} and out["totals"]["conversions"] == 3
+    assert summarize_report("AD", ["20261108\t1\tc\tg\t검색어\t8753\tM\t0\t1\t0\t0\t0"]) is None  # 12칸 = 다른 유형
+
+
 def test_media_exp_negative_keyword_url():
     owner, ws, acc = _account("media@a.com", "9503")
     call = _tool(_mcp_headers(owner), ws, acc)
