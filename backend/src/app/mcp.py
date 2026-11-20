@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
-from . import account_tools, approvals, bulk, main as api, place, shopping_ads
+from . import account_tools, approvals, bulk, channels, main as api, place, shopping_ads
 from .access import membership_of, user_from_header
 from .db import SessionLocal
 from .models import OAuthUsed, User, now
@@ -229,7 +229,7 @@ KEYS = {"type": "array", "minItems": 1, "items": {"type": "object", "required": 
     "keyword": {"type": "string", "description": "키워드 문구(자동입찰 목록 표시용)"}}}}
 
 TOOLS = [
-    {"name": "list_ad_accounts", "description": "내가 속한 조직과 조직별로 볼 수 있는 네이버 광고 계정 목록. 다른 도구의 workspace_id·ad_account_id는 여기서 얻는다.",
+    {"name": "list_ad_accounts", "description": "내가 속한 조직과 조직별로 볼 수 있는 네이버 광고 계정 목록(other_channels: 연결된 메타·구글 계정). 다른 도구의 workspace_id·ad_account_id는 여기서 얻는다.",
      "inputSchema": {"type": "object", "properties": {}}, "annotations": {"readOnlyHint": True}},
     {"name": "get_performance", "description": "광고 계정별·상품 유형별 성과 합계(노출·클릭·비용·전환·매출·CTR·CPC·ROAS). 기간을 비우면 어제까지 7일.",
      "inputSchema": {"type": "object", "required": ["workspace_id"], "properties": {**WS, **PERIOD}}, "annotations": {"readOnlyHint": True}},
@@ -334,6 +334,8 @@ TOOLS = [
     {"name": "list_negative_keywords", "description": "광고그룹의 제외검색어 목록(naver_id·keyword). 등록·삭제는 preview_changes의 entity_type=negative_keyword로.",
      "inputSchema": {"type": "object", "required": ["workspace_id", "ad_account_id", "adgroup_id"], "properties": {**ACC, "adgroup_id": {"type": "string"}}},
      "annotations": {"readOnlyHint": True}},
+    channels.TOOL,
+    channels.CONVERSIONS_TOOL,
     shopping_ads.TOOL,
     *place.TOOLS,
     *account_tools.TOOLS,
@@ -368,7 +370,9 @@ async def _call(db, user: User, name: str, a: dict):
     if name == "list_ad_accounts":
         out = await api.my_workspaces(user=user, db=db)
         for w in out:
-            w["accounts"] = await api.list_accounts(m=membership_of(db, w["id"], user), db=db)
+            m = membership_of(db, w["id"], user)
+            w["accounts"] = await api.list_accounts(m=m, db=db)
+            w["other_channels"] = channels.visible(db, m)  # 메타·구글(get_cross_channel_performance로 조회)
         return out
     m = membership_of(db, int(a["workspace_id"]), user)
     if name.startswith("place_ads_"):
@@ -377,6 +381,11 @@ async def _call(db, user: User, name: str, a: dict):
         return account_tools.call_tool(db, m, name, a)
     if name == "get_performance":
         return await api.performance_accounts(_day(a.get("since")), _day(a.get("until")), _joined(a.get("account_ids")), m=m, db=db)
+    if name == "get_cross_channel_performance":
+        since, until = channels.period(a.get("since"), a.get("until"))
+        return channels.cross_performance(db, m, await api.performance_accounts(since, until, None, m=m, db=db), since, until)
+    if name == "get_google_conversions":
+        return channels.conversions_tool(db, m, a.get("account_id"), *channels.period(a.get("since"), a.get("until")))
     if name == "get_daily_performance":
         return await api.performance_daily(_day(a["since"]), _day(a["until"]), _joined(a.get("account_ids")), a.get("product"), m=m, db=db)
     if name == "preview_changes":

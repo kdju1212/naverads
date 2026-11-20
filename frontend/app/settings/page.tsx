@@ -20,6 +20,7 @@ export default function SettingsPage() {
       <PageTitle desc={isAdmin ? "광고 계정 연결, 직원과 담당 계정 배정, 구독 정보" : "계정 연결·직원 관리는 관리자만 할 수 있습니다."}>설정</PageTitle>
       <div className="flex flex-col gap-4">
         <Accounts isAdmin={isAdmin} />
+        {isAdmin && <OtherChannels />}
         {isAdmin && <Members />}
         {/* 계정 연결·해제 시 과금 계정 수를 다시 불러온다 */}
         {isAdmin && <Subscription key={accounts.length} />}
@@ -135,6 +136,72 @@ function Accounts({ isAdmin }: { isAdmin: boolean }) {
           </form>
         </div>
       )}
+    </Card>
+  );
+}
+
+interface Channel { id: number; channel: "META" | "GOOGLE"; account_id: string; name: string }
+
+// 메타·구글은 Claude에서 네이버와 성과를 나란히 볼 때만 쓴다(조회만, 이 웹에는 화면 없음)
+function OtherChannels() {
+  const { ws } = useApp();
+  const list = useFetch<Channel[]>(ws ? `/workspaces/${ws.id}/channels` : null);
+  const [meta, setMeta] = useState({ ad_account_id: "", access_token: "" });
+  const [google, setGoogle] = useState({ customer_id: "", login_customer_id: "" });
+  const [msg, setMsg] = useState<string | null>(null);
+  const { error, busy, run } = useAction();
+  useEffect(() => {
+    const h = new URLSearchParams(location.hash.slice(1));
+    if (!h.has("google_ads") && !h.has("ads_error")) return;
+    history.replaceState(null, "", location.pathname);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 주소 조각은 브라우저에서만 읽을 수 있다(정적 내보내기)
+    setMsg(h.has("google_ads") ? "구글 광고 계정을 연결했습니다." : h.get("ads_error"));
+  }, []);
+  const connectGoogle = () => {
+    const q = new URLSearchParams({ ads_ws: String(ws!.id), ...google, redirect: location.origin + "/settings" });
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- API 서버(다른 주소)로 이동
+    location.href = `${API_URL}/auth/google/start?${q}`;
+  };
+  return (
+    <Card title="메타·구글 광고 계정 (Claude 비교 조회용)">
+      <p className="mb-3 text-sm text-faint">연결하면 Claude에서 &ldquo;이번 주 네이버·메타·구글 광고비·ROAS 비교해줘&rdquo;처럼 물어볼 수 있습니다. 조회만 하고 광고는 바꾸지 않습니다. 관리자만 볼 수 있습니다.</p>
+      <ErrorText error={error} />
+      {msg && <p className="mb-2 text-sm text-info" role="status">{msg}</p>}
+      <table className="mb-4 w-full text-sm">
+        <thead className="text-left text-xs text-faint"><tr><th className="py-2">매체</th><th>계정</th><th>ID</th><th /></tr></thead>
+        <tbody>
+          {(list.data ?? []).map((c) => (
+            <tr key={c.id} className="border-t border-line">
+              <td className="py-2">{c.channel === "META" ? "메타" : "구글"}</td>
+              <td className="font-medium">{c.name}</td>
+              <td className="font-mono text-xs">{c.account_id}</td>
+              <td className="text-right"><Button variant="danger" disabled={busy} onClick={() => confirm(`${c.name} 연결을 해제할까요? 저장된 토큰이 지워집니다.`) && run(async () => {
+                await api(`/workspaces/${ws!.id}/channels/${c.id}`, { method: "DELETE" });
+                await list.reload();
+              })}>해제</Button></td>
+            </tr>
+          ))}
+          {list.data?.length === 0 && <tr><td colSpan={4} className="py-4 text-center text-faint">연결된 계정이 없습니다</td></tr>}
+        </tbody>
+      </table>
+      <div className="grid gap-4 border-t border-line pt-4 lg:grid-cols-2">
+        <form className="flex flex-col gap-2" onSubmit={(e) => { e.preventDefault(); run(async () => {
+          await api(`/workspaces/${ws!.id}/channels/meta`, { body: meta });
+          setMeta({ ad_account_id: "", access_token: "" });
+          await list.reload();
+        }); }}>
+          <h3 className="text-[15px] font-semibold">메타 광고계정 연결</h3>
+          <input className={inputCls} placeholder="광고계정 ID (act_ 뒤의 숫자)" value={meta.ad_account_id} onChange={(e) => setMeta({ ...meta, ad_account_id: e.target.value.trim() })} required aria-label="메타 광고계정 ID" />
+          <input className={inputCls} type="text" style={{ WebkitTextSecurity: "disc" } as React.CSSProperties} spellCheck={false} autoComplete="off" placeholder="시스템 사용자 토큰 (ads_read, 저장 후 다시 표시되지 않음)" value={meta.access_token} onChange={(e) => setMeta({ ...meta, access_token: e.target.value })} required aria-label="메타 토큰" />
+          <Button type="submit" disabled={busy}>접근 확인 후 연결</Button>
+        </form>
+        <form className="flex flex-col gap-2" onSubmit={(e) => { e.preventDefault(); connectGoogle(); }}>
+          <h3 className="text-[15px] font-semibold">구글 광고 계정 연결</h3>
+          <input className={inputCls} placeholder="고객 ID (예: 123-456-7890)" value={google.customer_id} onChange={(e) => setGoogle({ ...google, customer_id: e.target.value.trim() })} required aria-label="구글 광고 고객 ID" />
+          <input className={inputCls} placeholder="관리자(MCC) 계정 ID — 관리자 계정을 거쳐 볼 때만" value={google.login_customer_id} onChange={(e) => setGoogle({ ...google, login_customer_id: e.target.value.trim() })} aria-label="관리자 계정 ID" />
+          <Button type="submit" disabled={busy}>Google로 권한 허용하고 연결</Button>
+        </form>
+      </div>
     </Card>
   );
 }

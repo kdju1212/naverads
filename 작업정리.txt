@@ -553,3 +553,15 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
     - 순서: 메타 먼저(앱 검수 없이 내 광고계정 조회 가능) → 구글(개발자 토큰 Basic 승인 며칠 걸림, 그전엔 테스트 계정만)
     - 사용자가 먼저 할 일: Google Ads 관리자(MCC) 계정 API 센터에서 개발자 토큰 신청, developers.facebook.com에서 앱 만들고 Marketing API 추가
     - 안 할 것: BigQuery 등 데이터 창고에 쌓기, 멀티터치 어트리뷰션
+27. 11/20 통합 MCP 1차(브랜치 feat/cross-channel-mcp, 실계정 미확인) — 26번 보류안을 사용자 요청으로 시작, 메타·구글 둘 다
+    - 새 도구 get_cross_channel_performance: 네이버(동기화된 성과)·메타·구글을 같은 칸(노출·클릭·비용·전환·전환매출·CTR·CPC·ROAS)으로
+      계정별 합계 + 메타·구글 캠페인 비용 큰 순 50개. 한 매체 실패해도 나머지는 보이고 error에 이유. list_ad_accounts에 other_channels
+    - 연결은 웹 설정 '메타·구글 광고 계정' 카드(관리자만): 메타는 광고계정 ID + 시스템 사용자 토큰 붙여넣기(저장 전 /act_ID로 접근 확인),
+      구글은 고객 ID(+MCC ID) 입력 → Google 동의(adwords 범위, offline) → 갱신 토큰 저장. 토큰은 CRED_KEY 암호화, 표 channel_connections(0018)
+    - API 버전: 메타 Graph v27.0(2026-11-04), Google Ads v26(2026-10-14). 메타 구매는 omni_purchase > purchase > fb_pixel_purchase 중 하나만
+    - 안 한 것: 직원(MEMBER)에게 메타·구글 보여 주기(담당 계정 배정 없음 → 관리자만), 환율 변환(통화 칸만), 일별 추이, 토큰 만료 알림
+    - 배포 전 할 일: D1에 0018 적용, Worker 시크릿 GOOGLE_ADS_DEVELOPER_TOKEN, Google Cloud 동의 화면에 adwords 범위 추가
+      (민감 범위 — 앱 검증 전엔 테스트 사용자만·경고 화면), 승인된 리디렉션 URI는 기존 /auth/google/callback 그대로
+    - get_google_conversions(같은 날 추가): 전환 액션 설정(종류·상태·전환에 포함·집계 방식·기간) + 액션별 전환수·모든 전환·마지막 전환일
+      + 캠페인 × 액션별(모든 전환 많은 순 100개). GAQL 3개를 출입증 갱신 한 번으로. 삭제된 액션의 예전 전환은 뺌
+    - [확인] 실계정: 메타 insights 응답 칸·페이지 넘김, 구글 search 응답(int64 문자열·오류 배열 형식), 비용 단위(메타 spend는 원 단위 문자열로 가정)
