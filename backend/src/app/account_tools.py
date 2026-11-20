@@ -65,7 +65,7 @@ TOOLS = [
      "annotations": {"readOnlyHint": True}},
     {"name": "get_stat_report", "description": "대용량 보고서 상태. BUILT면 EXPKEYWORD(확장검색 검색어)는 검색어별 노출·클릭·비용 합계(비용 큰 순 100개, 비용은 비즈머니 차감액과 같은 VAT 포함 원), "
      "AD·AD_DETAIL·ADEXTENSION·CRITERION과 각 _CONVERSION은 group_by 칸별 합계(큰 순 100개, totals는 전체 합): 성과는 노출·클릭·비용(같은 VAT 포함 원)·avg_rank, "
-     "전환은 conversions·sales(conv_method 1 직접 2 간접, conv_type 전환유형). device P·M, hour 0~23, region 지역코드, criterion 타기팅코드(GNM 남·AG2529 25~29세 등), "
+     "전환은 conversions·sales(conv_method 1 직접 2 간접, conv_type 전환유형). device P·M, hour 0~23, region 지역코드, criterion 타기팅코드(GNM 남·AG2529 25~29세 등, 같은 노출이 유형마다 있어 criterion_type별로만 합친다), "
      "-는 해당 없음(keyword_id -는 확장검색 등). ROAS는 같은 날 성과·전환 보고서를 같은 group_by로 받아 sales÷cost×100. 이름은 list_keywords 등으로 찾는다. "
      f"쇼핑 검색어·브랜드 상품 보고서는 파일 앞 {PREVIEW_LINES}줄(원본 TSV, 칸 이름 없음)과 전체 줄 수. NONE이면 그날 데이터 없음. "
      "검색어 결과로 제외검색어를 추천할 땐 클릭·비용은 있는데 상품과 맞지 않는 검색어를 고르고, add_exp_negative_keywords로 등록한다. "
@@ -424,6 +424,7 @@ def search_terms(lines: list[str], top: int = 100) -> dict:
 
 # 보고서 칸(앞 2칸 날짜·고객 ID 다음부터): AD·AD_DETAIL·ADEXTENSION·CRITERION은 실계정 파일(2026-11-17)로 확인.
 # 확장소재는 2026-11-16 8번 칸 삭제 뒤 모양. CRITERION의 3번째 칸은 '광고그룹ID~타기팅코드'.
+# 같은 노출이 타기팅 유형(코드 앞 2글자 GN 성별·AG 연령·AD 등)마다 한 줄씩 있어, 유형을 섞어 더하면 유형 수만큼 부풀려진다(실파일 11/17 확인)
 # 전환 보고서는 같은 바탕 칸 + 전환방식(1 직접·2 간접)·전환유형·전환수·전환매출(공식 문서 순서, 실계정 미확인: 전환 없는 계정).
 # 쇼핑 검색어·브랜드 상품 보고서는 칸을 확인할 파일이 없어 원본 미리보기로 둔다
 _AD = ["campaign_id", "adgroup_id", "keyword_id", "ad_id", "channel_id"]
@@ -433,11 +434,11 @@ REPORT_LAYOUTS = {  # 유형: (나눠 볼 칸, 합칠 숫자 칸, 기본 묶음)
     "AD": (_AD + ["media", "device"], _PERF, ["adgroup_id", "keyword_id"]),
     "AD_DETAIL": (_AD + ["hour", "region", "media", "device"], _PERF, ["hour"]),
     "ADEXTENSION": (_AD[:4] + ["extension_id", "media", "device"], _PERF, ["extension_id"]),
-    "CRITERION": (["adgroup_id", "criterion", "device"], _PERF[:3], ["adgroup_id", "criterion"]),
+    "CRITERION": (["adgroup_id", "criterion_type", "criterion", "device"], _PERF[:3], ["adgroup_id", "criterion"]),
     "AD_CONVERSION": (_AD + ["media", "device"] + _CV, _CONV, ["adgroup_id", "keyword_id", "conv_type"]),
     "AD_CONVERSION_DETAIL": (_AD + ["hour", "region", "media", "device"] + _CV, _CONV, ["hour", "conv_type"]),
     "ADEXTENSION_CONVERSION": (_AD[:4] + ["extension_id", "media", "device"] + _CV, _CONV, ["extension_id", "conv_type"]),
-    "CRITERION_CONVERSION": (["adgroup_id", "criterion", "device"] + _CV, _CONV, ["adgroup_id", "criterion", "conv_type"]),
+    "CRITERION_CONVERSION": (["adgroup_id", "criterion_type", "criterion", "device"] + _CV, _CONV, ["adgroup_id", "criterion", "conv_type"]),
 }
 
 
@@ -454,12 +455,16 @@ def summarize_report(tp: str, lines: list[str], group_by: list[str] | None = Non
     gb = list(dict.fromkeys(group_by or default))
     if bad := [g for g in gb if g not in dims]:
         raise HTTPException(400, f"{tp}의 group_by는 {', '.join(dims)} 중에서 (틀림: {', '.join(bad)})")
+    by_type = tp.startswith("CRITERION")
+    if by_type and "criterion_type" not in gb:
+        gb.insert(0, "criterion_type")
     # shortcut: 파일 전체를 Worker 한 번에 집계, 줄이 수만 개인 큰 계정은 CPU 한도(1102)에 걸릴 수 있음 → 그때 날짜·유형을 쪼개 받거나 유료 플랜
     agg: dict[tuple, dict] = {}
     for ln in lines:
         f = ln.split("\t")
-        if tp.startswith("CRITERION") and len(f) > 2:
-            f[2:3] = f[2].split("~", 1)
+        if by_type and len(f) > 2 and "~" in f[2]:
+            grp, code = f[2].split("~", 1)
+            f[2:3] = [grp, code[:2], code]
         if len(f) < 2 + len(dims) + len(mets):
             continue
         row = dict(zip(dims + mets, f[2:]))
@@ -476,4 +481,6 @@ def summarize_report(tp: str, lines: list[str], group_by: list[str] | None = Non
             r["avg_rank"] = round(rank / r["impressions"], 1) if r["impressions"] else None
     rows.sort(key=lambda r: (-r.get("sales", 0), -r.get("conversions", 0)) if "sales" in r else (-r["cost"], -r["clicks"], -r["impressions"]))
     totals = {m: sum(r[m] for r in rows) for m in mets if m != "rank_sum"}
+    if by_type:  # 유형별 합계(각 유형 합이 전체 성과와 같다)
+        totals = {t: {m: sum(r[m] for r in rows if r["criterion_type"] == t) for m in mets} for t in sorted({r["criterion_type"] for r in rows})}
     return {"group_by": gb, "groups": len(rows), "totals": totals, "rows": rows[:top]}
