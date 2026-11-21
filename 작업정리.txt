@@ -606,3 +606,9 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
     - google_ad_preview: ShareablePreviewService 공유 링크. PMax 애셋 그룹만(구글이 반응형 검색·디스플레이는 지원 안 함)
     - google_generate_recommendations: 만들기 전 캠페인(SEARCH·PMAX)에 대한 예산·키워드·입찰 전략·사이트링크 추천, 받기만 함
     - 주소는 v26 공식 문서로 확인. [확인] 실계정 응답 모양
+32. 11/21 메타 조회 도구 meta_ads_search(meta_ads.py, 조회만, 마이그레이션 없음, 지금 토큰 ads_read 그대로)
+    - Graph API GET 그대로: 광고세트·광고별·일별·나이·성별·게재 위치 성과, 구매 외 전환, 도달·빈도·CPM, 광고 목록·상태·예산,
+      소재, 검토 거부 사유, 광고 순위 진단, 픽셀 마지막 수신, 지출 한도·잔액
+    - path는 이 계정(act_ID) 아래 목록·계정 정보·객체 ID만, method·access_token·batch 칸은 막음(GET 덮어쓰기), 200행까지
+    - 빠진 것(필요 낮음): 수정·등록 전부, CAPI, 리드 양식, 광고 라이브러리, 도달 예상, 관심사 찾기
+    - [확인] 실계정 응답(메타 계정 연결 필요)

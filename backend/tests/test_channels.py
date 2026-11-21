@@ -231,3 +231,35 @@ def test_google_tools(monkeypatch):
     assert add["operations"][0]["create"]["userIdentifiers"][0]["hashedEmail"] == hashlib.sha256(b"a@b.com").hexdigest()
     assert "a@b.com" not in json.dumps(sent)
     assert _phone("010-1234-5678") == "+821012345678" and _phone("+1 650 555 0100") == "+16505550100"
+
+
+def test_meta_search(monkeypatch):
+    """메타 조회 도구: Graph API GET 그대로, 이 계정 아래만, 덮어쓰기 칸(method 등) 막음, 페이지 넘김 200행까지."""
+    owner, ws, acc = _account("msearch@a.com", "9703")
+    sent = []
+
+    def get(url, params=None, headers=None, **kw):
+        sent.append((url, params))
+        if url.endswith("/act_222"):
+            return R({"name": "메타", "spend_cap": "1000000"} if "fields" in (params or {}) else {"name": "메타"})
+        page = int((params or {}).get("after") or 0)
+        return R({"data": [{"ad_id": str(page * 150 + i)} for i in range(150)],
+                  "paging": {"cursors": {"after": str(page + 1)}, "next": "https://graph.facebook.com/next"}})
+
+    monkeypatch.setattr(httpx, "get", get)
+    c.post(f"/workspaces/{ws}/channels/meta", headers=owner, json={"ad_account_id": "act_222", "access_token": "t"})
+
+    def tool(**a):
+        res = c.post("/mcp", headers=_mcp_headers(owner), json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+            "name": "meta_ads_search", "arguments": {"workspace_id": ws, "account_id": "222", **a}}}).json()["result"]
+        return json.loads(res["content"][0]["text"]), res["isError"]
+
+    out, err = tool(params={"level": "ad", "time_range": {"since": "2026-11-01", "until": "2026-11-07"}, "breakdowns": "age,gender"})
+    assert not err and out["rows"] == 300 and len(out["data"]) == 200 and "truncated" in out  # 두 페이지에서 멈춤
+    assert sent[-2][0].endswith("/act_222/insights") and sent[-2][1]["time_range"] == '{"since": "2026-11-01", "until": "2026-11-07"}'
+    out, err = tool(path="act_222", params={"fields": "spend_cap"})
+    assert not err and out["result"]["spend_cap"] == "1000000"
+    assert tool(path="123/insights")[1] is False
+    for bad in ({"path": "act_999/insights"}, {"path": "ads", "params": {"method": "post"}}, {"path": "../me"}, {"path": "me/adaccounts"}):
+        assert tool(**bad)[1], bad
+    assert tool(account_id="333")[1]  # 연결 안 된 계정

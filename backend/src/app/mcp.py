@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
-from . import account_tools, approvals, bulk, channels, google_ads, main as api, place, shopping_ads
+from . import account_tools, approvals, bulk, channels, google_ads, main as api, meta_ads, place, shopping_ads
 from .access import membership_of, user_from_header
 from .db import SessionLocal
 from .models import OAuthUsed, User, now
@@ -337,6 +337,7 @@ TOOLS = [
     channels.TOOL,
     channels.CONVERSIONS_TOOL,
     *google_ads.TOOLS,
+    *meta_ads.TOOLS,
     shopping_ads.TOOL,
     *place.TOOLS,
     *account_tools.TOOLS,
@@ -387,6 +388,8 @@ async def _call(db, user: User, name: str, a: dict):
         return channels.cross_performance(db, m, await api.performance_accounts(since, until, None, m=m, db=db), since, until)
     if name in google_ads.CALLS:
         return google_ads.CALLS[name](db, m, a)
+    if name in meta_ads.CALLS:
+        return meta_ads.CALLS[name](db, m, a)
     if name == "get_google_conversions":
         return channels.conversions_tool(db, m, a.get("account_id"), *channels.period(a.get("since"), a.get("until")))
     if name == "get_daily_performance":
@@ -488,7 +491,7 @@ async def mcp(request: Request):
                                       "ADVoost 켜기)은 도구가 실행하지 않고 웹 승인 요청(approval)을 돌려준다(관리자가 그 계정의 'Claude에서 바로 실행'을 켰으면 바로 실행). 그때는 실행됐다고 말하지 말고 승인 주소를 알려 주며, "
                                       "결과는 get_approval로 확인해 성공·실패·대기를 구분해서 전한다. 하루예산 설정액은 실제 과금의 절대 상한이 아니다. "
                                       "소재·확장소재 문구는 네이버에서 고칠 수 없다: 문구를 바꿔 달라면 새로 등록하고, 검수 통과 뒤 예전 것을 지운다. "
-                                      "구글 광고는 google_ads_search(GAQL 조회)·google_ads_change(validate_only=true 검사 → 표 → false로 실행)로 다룬다. 구글 캠페인 켜기·예산 올리기는 도구가 막으니 구글 광고 화면에서 하라고 안내한다."}
+                                      "구글 광고는 google_ads_search(GAQL 조회)·google_ads_change(validate_only=true 검사 → 표 → false로 실행)로 다룬다. 구글 캠페인 켜기·예산 올리기는 도구가 막으니 구글 광고 화면에서 하라고 안내한다. 메타 광고는 meta_ads_search로 조회만 한다."}
         elif method == "ping":
             result = {}
         elif method == "tools/list":
