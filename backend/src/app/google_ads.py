@@ -1,6 +1,6 @@
 """구글 광고 API를 Claude 도구로(작업정리 28번). 기능마다 도구를 만들지 않고 구글 API 모양 그대로 받는다:
 GAQL 조회 하나로 모든 보고서, googleAds:mutate 하나로 모든 수정·등록(캠페인 생성·키워드·광고·확장·타기팅·입찰 전략),
-그 밖에 키워드 플래너·잠재고객 인사이트·추천 적용·오프라인 전환 업로드·고객 목록 업로드.
+그 밖에 키워드 플래너·잠재고객 인사이트·광고 미리보기·새 캠페인 추천·추천 적용·오프라인 전환 업로드·고객 목록 업로드.
 안전장치(네이버와 같은 생각): validate_only로 구글 검사 → 채팅 표 → 허용 버튼으로 실행. 실행 때 서버가 다시 막는다:
 - 하루예산을 늘릴 수 있는 변경(캠페인 켜기, PAUSED 아닌 캠페인 만들기, 예산 올리기, 캠페인 예산 바꿔 끼우기, 예산 추천 적용)
   shortcut: 구글엔 웹 승인 흐름이 없어 아예 막고 구글 광고 화면에서 하게 한다, 필요해지면 approvals.py에 구글 종류 추가
@@ -78,9 +78,28 @@ def audience_insights(db: Session, m: Membership, a: dict) -> dict:
     c, method = _conn(db, m, a["account_id"]), a["method"]
     if method not in INSIGHTS:
         raise HTTPException(400, f"method는 {', '.join(INSIGHTS)} 중 하나")
-    body = {"customerInsightsGroup": c.name, **(a.get("body") or {})}
-    data = _api(lambda: google_post(f"customers/{c.account_id}:{method}", body, google_headers(decrypt(c.token_enc), c.login_customer_id)))
-    return {"account_id": c.account_id, "method": method, "result": data}
+    return {"method": method, **_read(c, f":{method}", {"customerInsightsGroup": c.name, **(a.get("body") or {})})}
+
+
+def _read(c: ChannelConnection, suffix: str, body: dict) -> dict:
+    """GAQL 밖 조회 API(광고를 바꾸지 않는 POST)."""
+    data = _api(lambda: google_post(f"customers/{c.account_id}{suffix}", body, google_headers(decrypt(c.token_enc), c.login_customer_id)))
+    return {"account_id": c.account_id, "result": data}
+
+
+def previews(db: Session, m: Membership, a: dict) -> dict:
+    c, ids = _conn(db, m, a["account_id"]), [str(x) for x in a["asset_group_ids"]][:20]
+    if not ids or not all(x.isdigit() for x in ids):
+        raise HTTPException(400, "asset_group_ids는 PMax 애셋 그룹 ID(숫자) 목록")
+    return _read(c, ":generateShareablePreviews", {"shareablePreviews": [{"assetGroupIdentifier": {"assetGroupId": x}} for x in ids]})
+
+
+def generate_recommendations(db: Session, m: Membership, a: dict) -> dict:
+    """아직 없는 캠페인에 대한 구글 추천(예산·키워드·입찰 전략·사이트링크). 받기만 하고 적용하지 않는다."""
+    c, body = _conn(db, m, a["account_id"]), dict(a.get("body") or {})
+    if not body.get("recommendationTypes") or body.get("advertisingChannelType") not in ("SEARCH", "PERFORMANCE_MAX"):
+        raise HTTPException(400, "body에 recommendationTypes와 advertisingChannelType(SEARCH 또는 PERFORMANCE_MAX)이 필요해요")
+    return _read(c, "/recommendations:generate", body)
 
 
 def _bids(o, out: list[int]) -> list[int]:
@@ -233,6 +252,22 @@ TOOLS = [
          "workspace_id": WS, "account_id": ACCOUNT, "method": {"type": "string", "enum": list(INSIGHTS)},
          "body": {"type": "object", "description": "구글 REST 요청 본문"}}},
      "annotations": {"readOnlyHint": True}},
+    {"name": "google_ad_preview",
+     "description": "구글 광고 미리보기 공유 링크(ShareablePreviewService). PMax 애셋 그룹만 된다(반응형 검색·디스플레이 광고는 구글이 지원 안 함). "
+                    "애셋 그룹 ID는 google_ads_search로 asset_group.id 조회. 링크는 iframe에 못 넣으니 그대로 알려 준다. 관리자만, 조회만 한다.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "account_id", "asset_group_ids"], "properties": {
+         "workspace_id": WS, "account_id": ACCOUNT, "asset_group_ids": {"type": "array", "items": {"type": "string"}, "description": "PMax 애셋 그룹 ID(최대 20)"}}},
+     "annotations": {"readOnlyHint": True}},
+    {"name": "google_generate_recommendations",
+     "description": "만들기 전 캠페인에 대한 구글 추천(RecommendationService.GenerateRecommendations). body는 구글 REST 요청 본문 그대로(camelCase): "
+                    "recommendationTypes(CAMPAIGN_BUDGET, KEYWORD, MAXIMIZE_CLICKS_OPT_IN, MAXIMIZE_CONVERSIONS_OPT_IN, MAXIMIZE_CONVERSION_VALUE_OPT_IN, "
+                    "SET_TARGET_CPA, SET_TARGET_ROAS, SITELINK_ASSET, TARGET_CPA_OPT_IN, TARGET_ROAS_OPT_IN), advertisingChannelType(SEARCH·PERFORMANCE_MAX) 필수, "
+                    "선택: seedInfo{urlSeed, keywordSeeds}, budgetInfo{currentBudget}, biddingInfo, conversionTrackingStatus, countryCodes['KR'], languageCodes['ko'], "
+                    "positiveLocationsIds, adGroupInfo, assetGroupInfo, campaignSitelinkCount. 정보가 부족하거나 이미 추천 상태면 그 종류는 결과가 없다. "
+                    "받기만 하고 적용하지 않는다(만들기는 google_ads_change). 관리자만.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "account_id", "body"], "properties": {
+         "workspace_id": WS, "account_id": ACCOUNT, "body": {"type": "object", "description": "구글 REST 요청 본문"}}},
+     "annotations": {"readOnlyHint": True}},
     {"name": "google_ads_change",
      "description": "구글 광고 수정·등록. body는 구글 광고 REST API 요청 본문 그대로(camelCase). action: "
                     "mutate = googleAds:mutate의 {mutateOperations: [...]} — 켜기/끄기(status), 입찰가(cpcBidMicros), 예산 내리기, 입찰 전략, 키워드·제외 키워드(adGroupCriterion·campaignCriterion), "
@@ -255,4 +290,5 @@ TOOLS = [
          "emails": {"type": "array", "items": {"type": "string"}}, "phones": {"type": "array", "items": {"type": "string"}}, "validate_only": CHECK}},
      "annotations": {"destructiveHint": True}},
 ]
-CALLS = {"google_ads_search": search_tool, "google_keyword_ideas": keyword_ideas, "google_audience_insights": audience_insights, "google_ads_change": change_tool, "google_customer_match": customer_match}
+CALLS = {"google_ads_search": search_tool, "google_keyword_ideas": keyword_ideas, "google_audience_insights": audience_insights, "google_ad_preview": previews,
+         "google_generate_recommendations": generate_recommendations, "google_ads_change": change_tool, "google_customer_match": customer_match}
