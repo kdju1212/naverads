@@ -1,6 +1,6 @@
 """구글 광고 API를 Claude 도구로(작업정리 28번). 기능마다 도구를 만들지 않고 구글 API 모양 그대로 받는다:
 GAQL 조회 하나로 모든 보고서, googleAds:mutate 하나로 모든 수정·등록(캠페인 생성·키워드·광고·확장·타기팅·입찰 전략),
-그 밖에 키워드 플래너·추천 적용·오프라인 전환 업로드·고객 목록 업로드.
+그 밖에 키워드 플래너·잠재고객 인사이트·추천 적용·오프라인 전환 업로드·고객 목록 업로드.
 안전장치(네이버와 같은 생각): validate_only로 구글 검사 → 채팅 표 → 허용 버튼으로 실행. 실행 때 서버가 다시 막는다:
 - 하루예산을 늘릴 수 있는 변경(캠페인 켜기, PAUSED 아닌 캠페인 만들기, 예산 올리기, 캠페인 예산 바꿔 끼우기, 예산 추천 적용)
   shortcut: 구글엔 웹 승인 흐름이 없어 아예 막고 구글 광고 화면에서 하게 한다, 필요해지면 approvals.py에 구글 종류 추가
@@ -67,6 +67,20 @@ def keyword_ideas(db: Session, m: Membership, a: dict) -> dict:
                       "top_bid_low": round(int(mt.get("lowTopOfPageBidMicros") or 0) / 1e6), "top_bid_high": round(int(mt.get("highTopOfPageBidMicros") or 0) / 1e6)})
     ideas.sort(key=lambda r: -r["avg_monthly_searches"])
     return {"account_id": c.account_id, "ideas": ideas[:100]}
+
+
+INSIGHTS = ("searchAudienceInsightsAttributes", "generateAudienceCompositionInsights", "generateSuggestedTargetingInsights",
+            "generateAudienceOverlapInsights", "generateTargetingSuggestionMetrics", "generateInsightsFinderReport")
+
+
+def audience_insights(db: Session, m: Membership, a: dict) -> dict:
+    """AudienceInsightsService(GAQL 밖 조회). 본문은 구글 REST 그대로, customerInsightsGroup(필수 이름표)은 비우면 계정 이름."""
+    c, method = _conn(db, m, a["account_id"]), a["method"]
+    if method not in INSIGHTS:
+        raise HTTPException(400, f"method는 {', '.join(INSIGHTS)} 중 하나")
+    body = {"customerInsightsGroup": c.name, **(a.get("body") or {})}
+    data = _api(lambda: google_post(f"customers/{c.account_id}:{method}", body, google_headers(decrypt(c.token_enc), c.login_customer_id)))
+    return {"account_id": c.account_id, "method": method, "result": data}
 
 
 def _bids(o, out: list[int]) -> list[int]:
@@ -208,6 +222,17 @@ TOOLS = [
          "url": {"type": "string", "description": "씨앗 페이지 주소"}, "language_id": {"type": "integer", "description": "언어 상수 ID(기본 1012 한국어)"},
          "geo_id": {"type": "integer", "description": "지역 상수 ID(기본 2410 대한민국)"}}},
      "annotations": {"readOnlyHint": True}},
+    {"name": "google_audience_insights",
+     "description": "구글 잠재고객 인사이트(AudienceInsightsService). body는 구글 REST 요청 본문 그대로(camelCase). method: "
+                    "searchAudienceInsightsAttributes = 관심사·인구통계·주제 등 속성 찾기 {queryText, dimensions: ['AFFINITY_USER_INTEREST', 'IN_MARKET_USER_INTEREST', 'AGE_RANGE', 'GENDER', ...]} — 다른 method에 넣을 속성은 여기서 얻는다; "
+                    "generateAudienceCompositionInsights = 이 잠재고객은 어떤 관심사·나이·성별·기기로 이뤄졌나 {audience: {...}, dimensions: [...]}; "
+                    "generateSuggestedTargetingInsights = 이 잠재고객에 맞는 타기팅 추천; generateAudienceOverlapInsights = 한 속성과 다른 속성들의 겹침; "
+                    "generateTargetingSuggestionMetrics = 타기팅 후보별 도달 가능 규모; generateInsightsFinderReport = 구글 인사이트 파인더 보고서 링크. "
+                    "지역은 대개 locations: [{geoTargetConstant: 'geoTargetConstants/2410'}](대한민국). customerInsightsGroup은 비우면 계정 이름. 관리자만, 조회만 한다.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "account_id", "method"], "properties": {
+         "workspace_id": WS, "account_id": ACCOUNT, "method": {"type": "string", "enum": list(INSIGHTS)},
+         "body": {"type": "object", "description": "구글 REST 요청 본문"}}},
+     "annotations": {"readOnlyHint": True}},
     {"name": "google_ads_change",
      "description": "구글 광고 수정·등록. body는 구글 광고 REST API 요청 본문 그대로(camelCase). action: "
                     "mutate = googleAds:mutate의 {mutateOperations: [...]} — 켜기/끄기(status), 입찰가(cpcBidMicros), 예산 내리기, 입찰 전략, 키워드·제외 키워드(adGroupCriterion·campaignCriterion), "
@@ -230,4 +255,4 @@ TOOLS = [
          "emails": {"type": "array", "items": {"type": "string"}}, "phones": {"type": "array", "items": {"type": "string"}}, "validate_only": CHECK}},
      "annotations": {"destructiveHint": True}},
 ]
-CALLS = {"google_ads_search": search_tool, "google_keyword_ideas": keyword_ideas, "google_ads_change": change_tool, "google_customer_match": customer_match}
+CALLS = {"google_ads_search": search_tool, "google_keyword_ideas": keyword_ideas, "google_audience_insights": audience_insights, "google_ads_change": change_tool, "google_customer_match": customer_match}

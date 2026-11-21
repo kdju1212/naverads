@@ -187,6 +187,10 @@ def test_google_tools(monkeypatch):
     assert tool("google_ads_search", query="DELETE x")[1]
     out, _ = tool("google_keyword_ideas", keywords=["말랑이"])
     assert [(x["keyword"], x["top_bid_high"]) for x in out["ideas"]] == [("b", 1500), ("a", 0)]
+    out, err = tool("google_audience_insights", method="searchAudienceInsightsAttributes", body={"queryText": "육아", "dimensions": ["AFFINITY_USER_INTEREST"]})
+    assert not err and sent[-1][0].endswith("customers/5555555555:searchAudienceInsightsAttributes")
+    assert sent[-1][1] == {"customerInsightsGroup": "구글", "queryText": "육아", "dimensions": ["AFFINITY_USER_INTEREST"]}  # 이름표는 계정 이름
+    assert tool("google_audience_insights", method="googleAds:mutate")[1]  # 정한 조회 method만
 
     ops = lambda *o: {"mutateOperations": list(o)}  # noqa: E731
     pause = {"campaignOperation": {"update": {"resourceName": "customers/5555555555/campaigns/1", "status": "PAUSED"}, "updateMask": "status"}}

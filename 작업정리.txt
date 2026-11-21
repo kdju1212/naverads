@@ -598,3 +598,7 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
       (구글 웹 승인 흐름은 아직 없음). 입찰 조정 배율·CPM/CPV 입찰은 최대 입찰가 검사 밖
     - 빠진 것: 이미지·동영상 자산 업로드(바이트를 Claude가 넘기기 어려움), 키워드 예측(forecast)
     - [확인] 개발자 토큰·실계정 없이 가짜 응답으로만 테스트함. 실계정에서 GAQL 응답·mutate 오류 모양·키워드 플래너 칸 확인 필요
+30. 11/21 구글 잠재고객 인사이트 — google_audience_insights(AudienceInsightsService, 조회만, 마이그레이션 없음)
+    - method 6개: 속성 찾기(searchAudienceInsightsAttributes) → 구성(나이·성별·관심사)·타기팅 추천·겹침·도달 규모·인사이트 파인더 링크
+    - 본문은 구글 REST 그대로, customerInsightsGroup은 비우면 계정 이름
+    - [확인] 실계정: 이 서비스가 계정에 열려 있는지(구글이 일부 계정만 허용할 수 있음), 응답 크기
