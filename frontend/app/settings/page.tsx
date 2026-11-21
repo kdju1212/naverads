@@ -142,7 +142,7 @@ function Accounts({ isAdmin }: { isAdmin: boolean }) {
 
 interface Channel { id: number; channel: "META" | "GOOGLE"; account_id: string; name: string; max_bid: number | null }
 
-// 메타·구글은 Claude에서만 쓴다(이 웹에는 화면 없음). 구글은 최대 입찰가를 정해야 Claude가 바꿀 수 있다
+// 메타·구글은 Claude에서만 쓴다(이 웹에는 화면 없음). 최대 입찰가를 정해야 Claude가 바꿀 수 있다
 function OtherChannels() {
   const { ws } = useApp();
   const list = useFetch<Channel[]>(ws ? `/workspaces/${ws.id}/channels` : null);
@@ -164,7 +164,7 @@ function OtherChannels() {
   };
   return (
     <Card title="메타·구글 광고 계정 (Claude용)">
-      <p className="mb-3 text-sm text-faint">연결하면 Claude에서 &ldquo;이번 주 네이버·메타·구글 광고비·ROAS 비교해줘&rdquo;처럼 물어볼 수 있습니다. 메타는 조회만, 구글은 클릭당 최대 입찰가를 정하면 Claude가 수정·등록도 합니다(캠페인 켜기·예산 올리기는 구글 광고 화면에서). 관리자만 쓸 수 있습니다.</p>
+      <p className="mb-3 text-sm text-faint">연결하면 Claude에서 &ldquo;이번 주 네이버·메타·구글 광고비·ROAS 비교해줘&rdquo;처럼 물어볼 수 있습니다. 클릭당 최대 입찰가를 정하면 Claude가 수정·등록도 합니다(캠페인 켜기·예산 올리기는 각 매체 화면에서). 메타 수정은 토큰에 ads_management 권한이 있어야 합니다. 관리자만 쓸 수 있습니다.</p>
       <ErrorText error={error} />
       {msg && <p className="mb-2 text-sm text-info" role="status">{msg}</p>}
       <table className="mb-4 w-full text-sm">
@@ -175,14 +175,14 @@ function OtherChannels() {
               <td className="py-2">{c.channel === "META" ? "메타" : "구글"}</td>
               <td className="font-medium">{c.name}</td>
               <td className="font-mono text-xs">{c.account_id}</td>
-              <td>{c.channel === "GOOGLE" && <input className={`${inputCls} w-28`} type="number" min={1} defaultValue={c.max_bid ?? ""} placeholder="안 정함"
+              <td><input className={`${inputCls} w-28`} type="number" min={1} defaultValue={c.max_bid ?? ""} placeholder="안 정함"
                 aria-label={`${c.name} 클릭당 최대 입찰가`} disabled={busy} onBlur={(e) => {
                   const v = Number(e.target.value);
                   if (v > 0 && v !== c.max_bid) run(async () => {
                     await api(`/workspaces/${ws!.id}/channels/${c.id}/max-bid`, { method: "PUT", body: { max_bid: v } });
                     await list.reload();
                   });
-                }} />}</td>
+                }} /></td>
               <td className="text-right"><Button variant="danger" disabled={busy} onClick={() => confirm(`${c.name} 연결을 해제할까요? 저장된 토큰이 지워집니다.`) && run(async () => {
                 await api(`/workspaces/${ws!.id}/channels/${c.id}`, { method: "DELETE" });
                 await list.reload();
@@ -200,7 +200,7 @@ function OtherChannels() {
         }); }}>
           <h3 className="text-[15px] font-semibold">메타 광고계정 연결</h3>
           <input className={inputCls} placeholder="광고계정 ID (act_ 뒤의 숫자)" value={meta.ad_account_id} onChange={(e) => setMeta({ ...meta, ad_account_id: e.target.value.trim() })} required aria-label="메타 광고계정 ID" />
-          <input className={inputCls} type="text" style={{ WebkitTextSecurity: "disc" } as React.CSSProperties} spellCheck={false} autoComplete="off" placeholder="시스템 사용자 토큰 (ads_read, 저장 후 다시 표시되지 않음)" value={meta.access_token} onChange={(e) => setMeta({ ...meta, access_token: e.target.value })} required aria-label="메타 토큰" />
+          <input className={inputCls} type="text" style={{ WebkitTextSecurity: "disc" } as React.CSSProperties} spellCheck={false} autoComplete="off" placeholder="시스템 사용자 토큰 (조회 ads_read, 수정까지 ads_management, 저장 후 다시 표시되지 않음)" value={meta.access_token} onChange={(e) => setMeta({ ...meta, access_token: e.target.value })} required aria-label="메타 토큰" />
           <Button type="submit" disabled={busy}>접근 확인 후 연결</Button>
         </form>
         <form className="flex flex-col gap-2" onSubmit={(e) => { e.preventDefault(); connectGoogle(); }}>
