@@ -135,8 +135,13 @@ def test_summarize_report_real_layout():
     with pytest.raises(HTTPException):
         summarize_report("AD", ad, ["hour"])  # AD에는 시간대 칸이 없다
 
-    crit = ["20261117\t4286027\tgrp-35~GNF\tM\t58\t1\t110", "20261117\t4286027\tgrp-35~GNF\tP\t22\t0\t0"]
-    assert summarize_report("CRITERION", crit)["rows"] == [{"adgroup_id": "grp-35", "criterion": "GNF", "impressions": 80, "clicks": 1, "cost": 110}]
+    # 같은 노출이 성별·연령 줄에 한 번씩 → 유형별로만 합친다(섞으면 2배)
+    crit = ["20261117\t4286027\tgrp-35~GNF\tM\t58\t1\t110", "20261117\t4286027\tgrp-35~GNF\tP\t22\t0\t0",
+            "20261117\t4286027\tgrp-35~AG1924\tM\t80\t1\t110"]
+    out = summarize_report("CRITERION", crit)
+    assert out["rows"][0] == {"criterion_type": "GN", "adgroup_id": "grp-35", "criterion": "GNF", "impressions": 80, "clicks": 1, "cost": 110}
+    assert out["totals"] == {"AG": {"impressions": 80, "clicks": 1, "cost": 110}, "GN": {"impressions": 80, "clicks": 1, "cost": 110}}
+    assert summarize_report("CRITERION", crit, ["device"])["group_by"] == ["criterion_type", "device"]
 
     conv = ["20261117\t4286027\tcmp-1\tgrp-35\tkwd-92\tnad-45\tbsn-1\t8753\tM\t1\tpurchase\t2\t39800",
             "20261117\t4286027\tcmp-1\tgrp-35\tkwd-92\tnad-45\tbsn-1\t8753\tM\t2\tcart\t1\t0"]
