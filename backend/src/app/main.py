@@ -322,8 +322,19 @@ async def google_start(request: Request, redirect: str = "", link: bool = False,
         st = {"q": q}
     elif f"{(u := urlsplit(redirect)).scheme}://{u.netloc}" in WEB_ORIGINS:
         st = {"r": redirect}
-        if link:
+        if link or p.get("ads_ws"):
             st["l"] = user_from_header(db, f"Bearer {session_token(request, request.headers.get('authorization', ''))[0]}").id
+        if p.get("ads_ws"):  # 설정 화면의 구글 광고 계정 연결: 그 조직 관리자만, 고객 ID는 동의 전에 형식 확인
+            ws_id = int(p["ads_ws"]) if p["ads_ws"].isdigit() else 0  # 없는 조직 → 403
+            if membership_of(db, ws_id, db.get(User, st["l"])).role not in ADMIN_ROLES:
+                raise HTTPException(403, "관리자 권한이 필요합니다")
+            try:
+                st["ga"] = {"w": ws_id, "u": st.pop("l"), "c": channels.google_customer_id(p.get("customer_id")),
+                            "lc": channels.google_customer_id(p.get("login_customer_id"))}
+            except ValueError as e:
+                return RedirectResponse(redirect + "#" + urlencode({"ads_error": str(e)}), 302)
+            if not st["ga"]["c"]:
+                return RedirectResponse(redirect + "#" + urlencode({"ads_error": "구글 광고 고객 ID를 입력하세요"}), 302)
     else:
         raise HTTPException(400, "허용되지 않은 주소입니다")
     if not os.getenv("GOOGLE_CLIENT_ID"):
@@ -332,8 +343,10 @@ async def google_start(request: Request, redirect: str = "", link: bool = False,
     nonce = secrets.token_urlsafe(16)
     state = sign_payload({"t": "google", "n": nonce, **st}, 600)
     res = RedirectResponse(GOOGLE_AUTH + "?" + urlencode({"client_id": os.getenv("GOOGLE_CLIENT_ID"), "redirect_uri": _google_callback_url(request),
-                                                         "response_type": "code", "scope": "openid email profile", "state": state,
-                                                         "prompt": "select_account"}), 302)
+                                                         "response_type": "code", "state": state, **({
+        # 광고 조회 권한은 갱신 토큰이 있어야 질문마다 쓸 수 있어 offline + 매번 동의(consent여야 갱신 토큰을 다시 준다)
+        "scope": f"openid email {channels.GOOGLE_ADS_SCOPE}", "access_type": "offline", "prompt": "consent select_account"}
+        if "ga" in st else {"scope": "openid email profile", "prompt": "select_account"})}), 302)
     res.set_cookie(STATE_COOKIE, nonce, max_age=600, path="/auth/google", httponly=True, samesite="lax", secure=request.url.scheme == "https")
     return res
 
@@ -349,6 +362,10 @@ async def google_callback(request: Request, state: str = "", code: str = "", db:
     try:
         r = httpx.post(GOOGLE_TOKEN, data={"code": code, "client_id": client_id, "client_secret": os.getenv("GOOGLE_CLIENT_SECRET", ""),
                                            "redirect_uri": _google_callback_url(request), "grant_type": "authorization_code"}, timeout=15)
+        if "ga" in st:  # 구글 광고 계정 연결은 로그인을 바꾸지 않고 갱신 토큰만 저장
+            res = channels.google_connect_done(db, st["ga"], r.json(), st["r"])
+            res.delete_cookie(STATE_COOKIE, path="/auth/google")
+            return res
         seg = r.json()["id_token"].split(".")[1]
         # Google 토큰 엔드포인트에서 HTTPS로 직접 받은 id_token이라 서명 검증 없이 내용만 읽는다(Google OpenID Connect 문서가 허용).
         # 대신 iss·aud·exp·email_verified·sub를 확인한다
@@ -1363,9 +1380,10 @@ async def subscription(m: Membership = Depends(admin_membership), db: Session = 
 
 
 # Claude 커넥터(MCP)는 위 엔드포인트 함수들을 불러 쓰므로 맨 아래에서 등록
-from . import approvals, mcp, place, shopping_ads  # noqa: E402
+from . import approvals, channels, mcp, place, shopping_ads  # noqa: E402
 
 app.include_router(approvals.router)
+app.include_router(channels.router)
 app.include_router(mcp.router)
 app.include_router(shopping_ads.router)
 app.include_router(place.router)

@@ -129,6 +129,23 @@ class WorkspaceAdAccount(Base):
     connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+class ChannelConnection(Base):
+    """네이버 밖 광고 계정(메타·구글) 연결(channels.py). 구글은 조회·변경(google_ads.py), 메타는 아직 조회만.
+    token_enc: 메타는 시스템 사용자 토큰, 구글은 adwords 범위 갱신 토큰(CRED_KEY로 암호화)."""
+    __tablename__ = "channel_connections"
+    __table_args__ = (UniqueConstraint("workspace_id", "channel", "account_id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    channel: Mapped[str] = mapped_column(String(10))  # META | GOOGLE
+    account_id: Mapped[str] = mapped_column(String(30))  # 메타 광고계정 ID(act_ 없이) | 구글 고객 ID(숫자 10자리)
+    name: Mapped[str] = mapped_column(String(200))
+    token_enc: Mapped[str] = mapped_column(String(2000))
+    login_customer_id: Mapped[str | None] = mapped_column(String(30), nullable=True)  # 구글: 관리자(MCC) 계정을 거쳐 볼 때
+    max_bid: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 구글 변경 도구의 클릭당 최대 입찰가(계정 통화). NULL이면 변경 못 함
+    connected_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class AccountAccess(Base):
     __tablename__ = "account_access"
     __table_args__ = (UniqueConstraint("membership_id", "ad_account_id"),)
