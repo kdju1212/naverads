@@ -484,14 +484,14 @@ async def mcp(request: Request):
                       "serverInfo": {"name": "naverads", "version": "0.1.0"},
                       "instructions": "네이버 검색광고 관리. 먼저 list_ad_accounts로 조직·계정을 확인한다. "
                                       "변경은 preview_changes → 채팅에 미리보기 표 → execute_job(또는 schedule_job으로 예약) 순서로만 한다. "
-                                      "변경 도구(execute_job, schedule_job, create_ad, create_shopping_ad, create_ad_extension, delete_ad_extension, set_auto_bid, delete_auto_bid, run_auto_bids, add_ip_exclusion, delete_ip_exclusion, create_site_channel, reinspect_channel, set_targeting, request_inspect, copy_ads, set_adgroup_options, set_media_target, add_exp_negative_keywords, delete_exp_negative_keyword, set_keyword_url, google_ads_change, google_customer_match)를 "
+                                      "변경 도구(execute_job, schedule_job, create_ad, create_shopping_ad, create_ad_extension, delete_ad_extension, set_auto_bid, delete_auto_bid, run_auto_bids, add_ip_exclusion, delete_ip_exclusion, create_site_channel, reinspect_channel, set_targeting, request_inspect, copy_ads, set_adgroup_options, set_media_target, add_exp_negative_keywords, delete_exp_negative_keyword, set_keyword_url, google_ads_change, google_customer_match, meta_ads_change)를 "
                                       "부르기 직전에 바뀔 내용(계정·광고그룹·대상·지금 값 → 바뀔 값, 문구와 글자 수, 입찰가, 예약 시각, preview_changes의 VALID/INVALID 행)을 "
                                       "채팅에 표로 보여 준 다음 그 도구를 부른다. 사용자는 표를 보고 Claude 화면의 허용 버튼으로 승인한다(채팅 답을 따로 기다리지 않는다). "
                                       "표 없이 변경 도구를 부르지 않는다. 계정 하루예산 합계가 늘 수 있는 변경(캠페인 하루예산 올리기·캠페인 켜기·"
                                       "ADVoost 켜기)은 도구가 실행하지 않고 웹 승인 요청(approval)을 돌려준다(관리자가 그 계정의 'Claude에서 바로 실행'을 켰으면 바로 실행). 그때는 실행됐다고 말하지 말고 승인 주소를 알려 주며, "
                                       "결과는 get_approval로 확인해 성공·실패·대기를 구분해서 전한다. 하루예산 설정액은 실제 과금의 절대 상한이 아니다. "
                                       "소재·확장소재 문구는 네이버에서 고칠 수 없다: 문구를 바꿔 달라면 새로 등록하고, 검수 통과 뒤 예전 것을 지운다. "
-                                      "구글 광고는 google_ads_search(GAQL 조회)·google_ads_change(validate_only=true 검사 → 표 → false로 실행)로 다룬다. 구글 캠페인 켜기·예산 올리기는 도구가 막으니 구글 광고 화면에서 하라고 안내한다. 메타 광고는 meta_ads_search로 조회만 한다."}
+                                      "구글 광고는 google_ads_search(GAQL 조회)·google_ads_change(validate_only=true 검사 → 표 → false로 실행)로 다룬다. 구글 캠페인 켜기·예산 올리기는 도구가 막으니 구글 광고 화면에서 하라고 안내한다. 메타 광고는 meta_ads_search(조회)·meta_ads_change(validate_only=true 검사 → 표 → false로 실행)로 다루고, 메타 캠페인·광고세트 켜기·예산 올리기도 도구가 막으니 메타 광고 관리자에서 하라고 안내한다."}
         elif method == "ping":
             result = {}
         elif method == "tools/list":

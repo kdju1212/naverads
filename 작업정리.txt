@@ -620,3 +620,12 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
       큰 insights는 async_report(POST로 만들어 두기 → report_run_id로 상태·결과). 리드·페이지·카탈로그는 토큰 권한 있을 때만
     - 뺀 것: 구글 assetGenerations(소재 생성), generatePMaxDraftCampaign(초안 생성) — 조회가 아니라 만들기
     - [확인] 실계정 응답 전부
+34. 11/22 구글·메타 운영 가능하게(마이그레이션 없음)
+    - 구글 안전장치 구멍 수정: 구글 REST가 snake_case 칸 이름(cpc_bid_micros)과 숫자 enum(status 2 = ENABLED)도 받아
+      입찰가·예산 올리기·켜기 검사를 우회할 수 있었음 → 본문을 camelCase로 맞춘 뒤 검사하고 그 모양 그대로 보냄,
+      캠페인 상태는 허용 목록(PAUSED·REMOVED), 총예산(totalAmountMicros) 올리기도 막음. 토큰이 없어 운영에서 실제로 뚫린 적은 없음
+    - 메타 meta_ads_change: Graph API POST. 기존 캠페인·광고세트·광고 고치기(끄기·예산 내리기·입찰가·이름·타기팅, 광고는 켜기도),
+      캠페인·광고세트·광고·소재·맞춤 타겟 만들기(PAUSED로만). validate_only(execution_options) 기본 → 표 → 실행, 감사 기록 META_CHANGE
+    - 메타 안전장치: 이 계정 객체인지 확인(account_id), 캠페인·광고세트 켜기·예산 올리기 막음, bid_amount ≤ 최대 입찰가(원화 기준),
+      status 안 넣고 만들기 막음(메타가 켜진 채로 만들 수 있음). 설정 화면 최대 입찰가 칸을 메타에도
+    - 운영에 필요한 사용자 준비: 구글 개발자 토큰(Basic 승인), 메타 토큰 ads_management, 계정 연결, 최대 입찰가

@@ -157,6 +157,13 @@ def _check_bids(body: dict, max_bid: int):
         raise HTTPException(400, f"클릭당 입찰가 {max(over) / 1e6:,.0f}이(가) 이 계정의 최대 입찰가 {max_bid:,}보다 높아요(웹 설정에서 바꿀 수 있음)")
 
 
+def _camel(o):
+    """구글 REST는 칸 이름을 cpc_bid_micros·cpcBidMicros 둘 다 받는다. 검사한 모양 그대로 보내도록 camelCase로 맞춘다(안전장치 우회 방지)."""
+    if isinstance(o, dict):
+        return {re.sub(r"_([a-z0-9])", lambda x: x.group(1).upper(), k): _camel(v) for k, v in o.items()}
+    return [_camel(v) for v in o] if isinstance(o, list) else o
+
+
 def guard(ops: list[dict], max_bid: int, budgets_now) -> None:
     """하루예산을 늘릴 수 있는 변경을 막는다. budgets_now(이름 목록) → {예산 이름: 지금 amountMicros}."""
     raise_to = {}
@@ -167,21 +174,22 @@ def guard(ops: list[dict], max_bid: int, budgets_now) -> None:
         new = body.get("create") or body.get("update") or {}
         if kind == "campaignOperation" and "create" in body and new.get("status") != "PAUSED":
             raise HTTPException(400, "캠페인은 status: PAUSED로만 만들 수 있어요. 켜기는 구글 광고 화면에서 직접 하세요(하루예산 합계가 늘 수 있는 변경)")
-        if kind == "campaignOperation" and "update" in body and (new.get("status") == "ENABLED" or "campaignBudget" in new):
+        # 상태는 허용 목록으로(구글은 enum을 숫자로도 받는다: 2 = ENABLED)
+        if kind == "campaignOperation" and "update" in body and (new.get("status", "PAUSED") not in ("PAUSED", "REMOVED") or "campaignBudget" in new):
             raise HTTPException(400, "캠페인 켜기·예산 바꿔 끼우기는 구글 광고 화면에서 직접 하세요(하루예산 합계가 늘 수 있는 변경)")
-        if kind == "campaignBudgetOperation" and "update" in body and "amountMicros" in new:
+        if kind == "campaignBudgetOperation" and "update" in body and {"amountMicros", "totalAmountMicros"} & set(new):
             if not BUDGET_NAME.fullmatch(str(new.get("resourceName"))):
                 raise HTTPException(400, "예산 update에는 resourceName(customers/…/campaignBudgets/…)이 필요해요")
-            raise_to[new["resourceName"]] = int(new["amountMicros"])
+            raise_to[new["resourceName"]] = (int(new.get("amountMicros") or 0), int(new.get("totalAmountMicros") or 0))
     _check_bids(ops, max_bid)
     if raise_to:
         now = budgets_now(list(raise_to))
-        if up := [n for n, v in raise_to.items() if n not in now or v > now[n]]:
+        if up := [n for n, v in raise_to.items() if n not in now or v[0] > now[n][0] or v[1] > now[n][1]]:
             raise HTTPException(400, f"예산 올리기는 구글 광고 화면에서 직접 하세요(내리기만 됨): {', '.join(up)}")
 
 
 def change_tool(db: Session, m: Membership, a: dict) -> dict:
-    c, action, body = _conn(db, m, a["account_id"]), a["action"], dict(a.get("body") or {})
+    c, action, body = _conn(db, m, a["account_id"]), a["action"], _camel(dict(a.get("body") or {}))
     if action not in PATHS:
         raise HTTPException(400, f"action은 {', '.join(PATHS)} 중 하나")
     if not c.max_bid:
@@ -190,9 +198,9 @@ def change_tool(db: Session, m: Membership, a: dict) -> dict:
     search = lambda q: _api(lambda: google_search(token, c.account_id, c.login_customer_id, q))  # noqa: E731
     if action == "mutate":
         def budgets_now(names):
-            rows = search(f"SELECT campaign_budget.resource_name, campaign_budget.amount_micros FROM campaign_budget "
+            rows = search(f"SELECT campaign_budget.resource_name, campaign_budget.amount_micros, campaign_budget.total_amount_micros FROM campaign_budget "
                           f"WHERE campaign_budget.resource_name IN ({', '.join(repr(n) for n in names)})")
-            return {r["campaignBudget"]["resourceName"]: int(r["campaignBudget"].get("amountMicros") or 0) for r in rows}
+            return {(b := r["campaignBudget"])["resourceName"]: (int(b.get("amountMicros") or 0), int(b.get("totalAmountMicros") or 0)) for r in rows}
         guard(body.get("mutateOperations") or [], c.max_bid, budgets_now)
         body["validateOnly"] = check
     elif action == "apply_recommendations":

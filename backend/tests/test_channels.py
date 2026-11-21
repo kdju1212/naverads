@@ -225,12 +225,21 @@ def test_google_tools(monkeypatch):
         {"campaignOperation": {"update": {"resourceName": "customers/5555555555/campaigns/1", "status": "ENABLED"}}},
         {"campaignBudgetOperation": {"update": {"resourceName": "customers/5555555555/campaignBudgets/7", "amountMicros": "60000000000"}}},
         {"adGroupOperation": {"create": {"name": "g", "cpcBidMicros": "1500000000"}}},
+        # 다른 표기로 우회: snake_case 칸 이름, 숫자 enum(2 = ENABLED), 총예산
+        {"ad_group_operation": {"create": {"name": "g", "cpc_bid_micros": "1500000000"}}},
+        {"campaign_budget_operation": {"update": {"resource_name": "customers/5555555555/campaignBudgets/7", "amount_micros": "60000000000"}}},
+        {"campaignOperation": {"update": {"resourceName": "customers/5555555555/campaigns/1", "status": 2}}},
+        {"campaignOperation": {"update": {"resourceName": "customers/5555555555/campaigns/1", "campaign_budget": "customers/5555555555/campaignBudgets/8"}}},
+        {"campaignBudgetOperation": {"update": {"resourceName": "customers/5555555555/campaignBudgets/7", "totalAmountMicros": "1"}}},
     ]
     for op in blocked:
         n = len(sent)
         out, err = tool("google_ads_change", action="mutate", body=ops(op), validate_only=False)
         assert err and not any(u.endswith("googleAds:mutate") for u, _ in sent[n:]), (op, out)
     down = {"campaignBudgetOperation": {"update": {"resourceName": "customers/5555555555/campaignBudgets/7", "amountMicros": "40000000000"}}}
+    snake = {"campaign_operation": {"update": {"resource_name": "customers/5555555555/campaigns/1", "status": "PAUSED"}, "update_mask": "status"}}
+    assert not tool("google_ads_change", action="mutate", body=ops(snake))[1]
+    assert sent[-1][1]["mutateOperations"][0]["campaignOperation"]["update"]["resourceName"]  # 검사한 모양(camelCase) 그대로 보냄
     out, err = tool("google_ads_change", action="mutate", body=ops(down, pause), validate_only=False)
     assert err and "Too low." in out["error"]  # 구글이 준 칸별 이유를 그대로 전한다
     out, err = tool("google_ads_change", action="apply_recommendations", body={"operations": [{"resourceName": "customers/5555555555/recommendations/r1"}]})
@@ -284,3 +293,50 @@ def test_meta_search(monkeypatch):
     assert not err and out["report_run_id"] == "777" and sent[-1][:2] == ("POST", "https://graph.facebook.com/v27.0/act_222/insights")
     assert tool(path="ads", async_report=True)[1]  # insights만
     assert tool(path="me/accounts")[1]  # 정한 전체 주소만
+
+
+def test_meta_change(monkeypatch):
+    """메타 수정: 최대 입찰가 전엔 못 함, 이 계정 객체만, 캠페인·광고세트 켜기·예산 올리기·높은 입찰가 막음, 기본은 메타 검사(validate_only)."""
+    owner, ws, acc = _account("mchange@a.com", "9704")
+    sent = []
+    objs = {"10": ("campaign", "222", {"daily_budget": "50000"}), "20": ("adset", "222", {}), "30": ("ad", "222", {}), "99": ("campaign", "999", {})}
+
+    def get(url, params=None, headers=None, **kw):
+        oid = url.rsplit("/", 1)[-1]
+        if oid == "act_222":
+            return R({"name": "메타"})
+        kind, owner_acc, budgets = objs[oid]
+        return R({"account_id": owner_acc, "metadata": {"type": kind}} if params.get("metadata") else budgets)
+
+    def post(url, params=None, headers=None, **kw):
+        sent.append((url, params))
+        return R({"success": True})
+
+    monkeypatch.setattr(httpx, "get", get)
+    monkeypatch.setattr(httpx, "post", post)
+    c.post(f"/workspaces/{ws}/channels/meta", headers=owner, json={"ad_account_id": "act_222", "access_token": "t"})
+    conn = c.get(f"/workspaces/{ws}/channels", headers=owner).json()[0]
+
+    def tool(**a):
+        res = c.post("/mcp", headers=_mcp_headers(owner), json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+            "name": "meta_ads_change", "arguments": {"workspace_id": ws, "account_id": "222", **a}}}).json()["result"]
+        return json.loads(res["content"][0]["text"]), res["isError"]
+
+    out, err = tool(path="10", params={"status": "PAUSED"})
+    assert err and "최대 입찰가" in out["error"]
+    c.put(f"/workspaces/{ws}/channels/{conn['id']}/max-bid", headers=owner, json={"max_bid": 1000})
+
+    out, err = tool(path="10", params={"status": "PAUSED", "daily_budget": 40000})  # 끄기·예산 내리기
+    assert not err and out["validate_only"] and sent[-1][1]["execution_options"] == '["validate_only"]'
+    out, err = tool(path="30", params={"status": "ACTIVE"}, validate_only=False)  # 광고 켜기는 됨
+    assert not err and "execution_options" not in sent[-1][1] and sent[-1][0].endswith("v27.0/30")
+    out, err = tool(path="campaigns", params={"name": "새", "objective": "OUTCOME_SALES", "status": "PAUSED"})
+    assert not err and sent[-1][0].endswith("/act_222/campaigns")
+    n = len(sent)
+    for bad in ({"path": "10", "params": {"status": "ACTIVE"}}, {"path": "20", "params": {"status": "ACTIVE"}},
+                {"path": "10", "params": {"daily_budget": 60000}}, {"path": "20", "params": {"bid_amount": 1500}},
+                {"path": "campaigns", "params": {"name": "x"}}, {"path": "99", "params": {"status": "PAUSED"}},
+                {"path": "30", "params": {"method": "delete"}}, {"path": "act_222/adimages", "params": {}}):
+        out, err = tool(validate_only=False, **bad)
+        assert err, (bad, out)
+    assert len(sent) == n  # 막힌 건 메타에 안 보냄
