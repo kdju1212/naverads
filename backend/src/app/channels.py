@@ -50,9 +50,9 @@ def visible(db: Session, m: Membership) -> list[dict]:
 
 
 # ---------- 메타 ----------
-def _meta_get(path: str, token: str, params: dict | None = None) -> dict:
+def _meta_get(path: str, token: str, params: dict | None = None, post: bool = False) -> dict:
     try:
-        r = httpx.get(META_API + path, params=params, headers={"Authorization": f"Bearer {token}"}, timeout=20)
+        r = (httpx.post if post else httpx.get)(META_API + path, params=params, headers={"Authorization": f"Bearer {token}"}, timeout=20)
         data = r.json()
     except (httpx.HTTPError, ValueError) as e:
         raise ChannelError(f"메타 API 호출 실패: {e}") from e
@@ -113,10 +113,11 @@ def google_headers(refresh_token: str, login_customer_id: str | None) -> dict:
     return headers
 
 
-def google_post(path: str, body: dict, headers: dict) -> dict:
-    """path: 'customers/123/googleAds:search' 같은 API 주소 뒷부분. 오류는 구글이 준 칸별 이유까지 붙여 돌려준다(Claude가 고쳐 다시 보낼 수 있게)."""
+def google_post(path: str, body: dict, headers: dict, get: bool = False) -> dict:
+    """path: 'customers/123/googleAds:search' 같은 API 주소 뒷부분(get이면 body를 주소 칸으로). 오류는 구글이 준 칸별 이유까지 붙여 돌려준다(Claude가 고쳐 다시 보낼 수 있게)."""
     try:
-        r = httpx.post(f"{GOOGLE_ADS_API}/{path}", json=body, headers=headers, timeout=30)
+        r = (httpx.get(f"{GOOGLE_ADS_API}/{path}", params=body, headers=headers, timeout=30) if get
+             else httpx.post(f"{GOOGLE_ADS_API}/{path}", json=body, headers=headers, timeout=30))
         data = r.json()
     except (httpx.HTTPError, ValueError) as e:
         raise ChannelError(f"구글 광고 API 호출 실패: {e}") from e

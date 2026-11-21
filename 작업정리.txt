@@ -612,3 +612,11 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
     - path는 이 계정(act_ID) 아래 목록·계정 정보·객체 ID만, method·access_token·batch 칸은 막음(GET 덮어쓰기), 200행까지
     - 빠진 것(필요 낮음): 수정·등록 전부, CAPI, 리드 양식, 광고 라이브러리, 도달 예상, 관심사 찾기
     - [확인] 실계정 응답(메타 계정 연결 필요)
+33. 11/21 조회 API 남은 것 전부(조회만, 마이그레이션 없음)
+    - 구글 google_ads_read: v26 discovery 문서에서 광고를 안 바꾸는 메서드 전부를 이름 → 주소 표(READS)로. 키워드 월별 검색량·예측·광고그룹 묶음,
+      도달 계획(지역·상품·관심사·목록·예측·예약 견적), 벤치마크, 유튜브 크리에이터·트렌드, 잠재고객 정의, 지역·브랜드·키워드 주제 찾기,
+      스마트 캠페인 제안, 접근 가능 계정·청구서·결제 계정·신원 확인·인센티브, GAQL 칸 찾기, 작업 상태(이 계정 resource만)
+    - 메타 meta_ads_search: search(관심사·지역 찾기), me/adaccounts·me/businesses, ads_archive(광고 라이브러리) 열기,
+      큰 insights는 async_report(POST로 만들어 두기 → report_run_id로 상태·결과). 리드·페이지·카탈로그는 토큰 권한 있을 때만
+    - 뺀 것: 구글 assetGenerations(소재 생성), generatePMaxDraftCampaign(초안 생성) — 조회가 아니라 만들기
+    - [확인] 실계정 응답 전부
