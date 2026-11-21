@@ -172,6 +172,7 @@ def test_google_tools(monkeypatch):
         return R({"ok": True})
 
     monkeypatch.setattr(httpx, "post", post)
+    monkeypatch.setattr(httpx, "get", lambda url, params=None, headers=None, **kw: sent.append((url, params)) or R({"ok": True}))
     web = "http://localhost:3000/settings"
     r = c.get("/auth/google/start", params={"redirect": web, "ads_ws": ws, "customer_id": "555-555-5555"}, headers=owner, follow_redirects=False)
     c.get("/auth/google/callback", params={"state": parse_qs(urlsplit(r.headers["location"]).query)["state"][0], "code": "c"}, follow_redirects=False)
@@ -194,6 +195,18 @@ def test_google_tools(monkeypatch):
     out, err = tool("google_ad_preview", asset_group_ids=["11"])
     assert not err and sent[-1][0].endswith("customers/5555555555:generateShareablePreviews")
     assert sent[-1][1] == {"shareablePreviews": [{"assetGroupIdentifier": {"assetGroupId": "11"}}]}
+    # 나머지 조회 API: 고객 주소·전체 주소·GET, 작업 상태는 이 계정 resource만
+    assert not tool("google_ads_read", method="generateKeywordHistoricalMetrics", body={"keywords": ["말랑이"]})[1]
+    assert sent[-1] == ("https://googleads.googleapis.com/v26/customers/5555555555:generateKeywordHistoricalMetrics", {"keywords": ["말랑이"]})
+    assert not tool("google_ads_read", method="suggestGeoTargetConstants", body={"locale": "ko"})[1]
+    assert sent[-1][0] == "https://googleads.googleapis.com/v26/geoTargetConstants:suggest"
+    assert not tool("google_ads_read", method="listInvoices", body={"issueYear": "2026"})[1]
+    assert sent[-1] == ("https://googleads.googleapis.com/v26/customers/5555555555/invoices", {"issueYear": "2026"})  # GET
+    assert not tool("google_ads_read", method="listResults", resource_name="customers/5555555555/batchJobs/1")[1]
+    assert sent[-1][0].endswith("v26/customers/5555555555/batchJobs/1:listResults")
+    for bad in ({"method": "uploadUserData"}, {"method": "listResults", "resource_name": "customers/1/batchJobs/1"},
+                {"method": "getOperation", "resource_name": "customers/5555555555/../1"}):
+        assert tool("google_ads_read", **bad)[1], bad
     rec = {"recommendationTypes": ["KEYWORD"], "advertisingChannelType": "SEARCH", "seedInfo": {"urlSeed": "https://a.com"}}
     out, err = tool("google_generate_recommendations", body=rec)
     assert not err and sent[-1][0].endswith("customers/5555555555/recommendations:generate") and sent[-1][1] == rec
@@ -247,6 +260,7 @@ def test_meta_search(monkeypatch):
                   "paging": {"cursors": {"after": str(page + 1)}, "next": "https://graph.facebook.com/next"}})
 
     monkeypatch.setattr(httpx, "get", get)
+    monkeypatch.setattr(httpx, "post", lambda url, params=None, headers=None, **kw: sent.append(("POST", url, params)) or R({"report_run_id": "777"}))
     c.post(f"/workspaces/{ws}/channels/meta", headers=owner, json={"ad_account_id": "act_222", "access_token": "t"})
 
     def tool(**a):
@@ -260,6 +274,13 @@ def test_meta_search(monkeypatch):
     out, err = tool(path="act_222", params={"fields": "spend_cap"})
     assert not err and out["result"]["spend_cap"] == "1000000"
     assert tool(path="123/insights")[1] is False
-    for bad in ({"path": "act_999/insights"}, {"path": "ads", "params": {"method": "post"}}, {"path": "../me"}, {"path": "me/adaccounts"}):
+    for bad in ({"path": "act_999/insights"}, {"path": "ads", "params": {"method": "post"}}, {"path": "../me"}, {"path": "me/permissions"}):
         assert tool(**bad)[1], bad
     assert tool(account_id="333")[1]  # 연결 안 된 계정
+    # 막혀 있던 조회: 관심사·지역 찾기, 내 계정 목록, 큰 보고서(만들어 두기 → id로 받기)
+    assert not tool(path="search", params={"type": "adinterest", "q": "육아"})[1] and sent[-1][0].endswith("v27.0/search")
+    assert not tool(path="me/adaccounts")[1] and sent[-1][0].endswith("/me/adaccounts")
+    out, err = tool(params={"level": "ad"}, async_report=True)
+    assert not err and out["report_run_id"] == "777" and sent[-1][:2] == ("POST", "https://graph.facebook.com/v27.0/act_222/insights")
+    assert tool(path="ads", async_report=True)[1]  # insights만
+    assert tool(path="me/accounts")[1]  # 정한 전체 주소만

@@ -78,20 +78,57 @@ def audience_insights(db: Session, m: Membership, a: dict) -> dict:
     c, method = _conn(db, m, a["account_id"]), a["method"]
     if method not in INSIGHTS:
         raise HTTPException(400, f"method는 {', '.join(INSIGHTS)} 중 하나")
-    return {"method": method, **_read(c, f":{method}", {"customerInsightsGroup": c.name, **(a.get("body") or {})})}
+    return {"method": method, **_read(c, f"customers/{c.account_id}:{method}", {"customerInsightsGroup": c.name, **(a.get("body") or {})})}
 
 
-def _read(c: ChannelConnection, suffix: str, body: dict) -> dict:
-    """GAQL 밖 조회 API(광고를 바꾸지 않는 POST)."""
-    data = _api(lambda: google_post(f"customers/{c.account_id}{suffix}", body, google_headers(decrypt(c.token_enc), c.login_customer_id)))
+def _read(c: ChannelConnection, path: str, body: dict, get: bool = False) -> dict:
+    """GAQL 밖 조회 API(광고를 바꾸지 않음)."""
+    data = _api(lambda: google_post(path, body, google_headers(decrypt(c.token_enc), c.login_customer_id), get))
     return {"account_id": c.account_id, "result": data}
+
+
+# 광고를 바꾸지 않는 나머지 API 전부(v26 discovery 문서 기준). 이름: (GET 여부, 주소). {c}=고객 ID, {r}=resource 칸
+READS = {
+    **{n: (False, f"customers/{{c}}:{n}") for n in (
+        "generateKeywordHistoricalMetrics", "generateKeywordForecastMetrics", "generateAdGroupThemes", "generateReachForecast",
+        "generateBenchmarksMetrics", "generateCreatorInsights", "generateTrendingInsights", "generateAudienceDefinition", "suggestBrands",
+        "suggestKeywordThemes", "suggestSmartCampaignAd", "suggestSmartCampaignBudgetOptions", "suggestTravelAssets", "checkLocalServicesEligibility")},
+    **{n: (False, n) for n in (
+        "listPlannableLocations", "listPlannableProducts", "listPlannableUserInterests", "listPlannableUserLists", "listBenchmarksAvailableDates",
+        "listBenchmarksLocations", "listBenchmarksProducts", "listBenchmarksSources", "generateConversionRates")},
+    "quoteCampaigns": (False, "customers/{c}/reservations:quoteCampaigns"),  # 예약 캠페인 견적만(예약은 bookCampaigns)
+    "listInsightsEligibleDates": (False, "audienceInsights:listInsightsEligibleDates"),
+    "suggestGeoTargetConstants": (False, "geoTargetConstants:suggest"),
+    "suggestKeywordThemeConstants": (False, "keywordThemeConstants:suggest"),
+    "searchGoogleAdsFields": (False, "googleAdsFields:search"),
+    "listInvoices": (True, "customers/{c}/invoices"),
+    "listPaymentsAccounts": (True, "customers/{c}/paymentsAccounts"),
+    "getIdentityVerification": (True, "customers/{c}/getIdentityVerification"),
+    "listAccessibleCustomers": (True, "customers:listAccessibleCustomers"),
+    "fetchIncentive": (True, "incentives:fetchIncentive"),
+    **{n: (True, f"{{r}}:{n}") for n in ("getSmartCampaignStatus", "listAsyncErrors", "listExperimentAsyncErrors", "listResults")},
+    "getOperation": (True, "{r}"),
+}
+
+
+def read_tool(db: Session, m: Membership, a: dict) -> dict:
+    c, method, body = _conn(db, m, a["account_id"]), a["method"], dict(a.get("body") or {})
+    if method not in READS:
+        raise HTTPException(400, f"method는 {', '.join(READS)} 중 하나")
+    get, path = READS[method]
+    if "{r}" in path:
+        r = str(a.get("resource_name") or "")
+        if not re.fullmatch(rf"customers/{c.account_id}/[\w~/-]+", r) or ".." in r:
+            raise HTTPException(400, f"resource_name은 customers/{c.account_id}/… 모양(이 계정 것만)")
+        path = path.replace("{r}", r)
+    return {"method": method, **_read(c, path.replace("{c}", c.account_id), body, get)}
 
 
 def previews(db: Session, m: Membership, a: dict) -> dict:
     c, ids = _conn(db, m, a["account_id"]), [str(x) for x in a["asset_group_ids"]][:20]
     if not ids or not all(x.isdigit() for x in ids):
         raise HTTPException(400, "asset_group_ids는 PMax 애셋 그룹 ID(숫자) 목록")
-    return _read(c, ":generateShareablePreviews", {"shareablePreviews": [{"assetGroupIdentifier": {"assetGroupId": x}} for x in ids]})
+    return _read(c, f"customers/{c.account_id}:generateShareablePreviews", {"shareablePreviews": [{"assetGroupIdentifier": {"assetGroupId": x}} for x in ids]})
 
 
 def generate_recommendations(db: Session, m: Membership, a: dict) -> dict:
@@ -99,7 +136,7 @@ def generate_recommendations(db: Session, m: Membership, a: dict) -> dict:
     c, body = _conn(db, m, a["account_id"]), dict(a.get("body") or {})
     if not body.get("recommendationTypes") or body.get("advertisingChannelType") not in ("SEARCH", "PERFORMANCE_MAX"):
         raise HTTPException(400, "body에 recommendationTypes와 advertisingChannelType(SEARCH 또는 PERFORMANCE_MAX)이 필요해요")
-    return _read(c, "/recommendations:generate", body)
+    return _read(c, f"customers/{c.account_id}/recommendations:generate", body)
 
 
 def _bids(o, out: list[int]) -> list[int]:
@@ -252,6 +289,24 @@ TOOLS = [
          "workspace_id": WS, "account_id": ACCOUNT, "method": {"type": "string", "enum": list(INSIGHTS)},
          "body": {"type": "object", "description": "구글 REST 요청 본문"}}},
      "annotations": {"readOnlyHint": True}},
+    {"name": "google_ads_read",
+     "description": "구글 광고 API 중 GAQL·다른 구글 도구 밖의 조회 전부(광고를 바꾸지 않음). body는 구글 REST 요청 본문 그대로(camelCase, GET은 주소 칸). method: "
+                    "키워드 = generateKeywordHistoricalMetrics(정한 키워드의 월별 검색량 추이 {keywords, language, geoTargetConstants}), "
+                    "generateKeywordForecastMetrics(예상 노출·클릭·비용 {campaign: {keywordPlanNetwork, biddingStrategy, adGroups: [{biddableKeywords}]}, forecastPeriod}), "
+                    "generateAdGroupThemes(키워드를 광고그룹 묶음으로 {keywords, adGroups}); "
+                    "도달 계획 = listPlannableLocations, listPlannableProducts{plannableLocationId}, listPlannableUserInterests, listPlannableUserLists, generateReachForecast, "
+                    "quoteCampaigns(예약 캠페인 견적만); 벤치마크 = listBenchmarksAvailableDates·Locations·Products·Sources, generateBenchmarksMetrics, generateConversionRates; "
+                    "유튜브 = generateCreatorInsights, generateTrendingInsights; 잠재고객 = generateAudienceDefinition, listInsightsEligibleDates; "
+                    "찾기·제안 = suggestGeoTargetConstants(지역 이름 → 지역 ID {locale: 'ko', countryCode: 'KR', locationNames: {names: [...]}}), suggestBrands, "
+                    "suggestKeywordThemeConstants, suggestKeywordThemes, suggestSmartCampaignAd, suggestSmartCampaignBudgetOptions, suggestTravelAssets, checkLocalServicesEligibility; "
+                    "계정·결제 = listAccessibleCustomers(내 로그인으로 볼 수 있는 계정), listInvoices{billingSetup, issueYear, issueMonth}, listPaymentsAccounts, getIdentityVerification, fetchIncentive; "
+                    "GAQL 칸 찾기 = searchGoogleAdsFields{query}; 작업 상태(resource_name 필요) = getSmartCampaignStatus, listAsyncErrors, listExperimentAsyncErrors, listResults, getOperation. "
+                    "관리자만, 조회만 한다.",
+     "inputSchema": {"type": "object", "required": ["workspace_id", "account_id", "method"], "properties": {
+         "workspace_id": WS, "account_id": ACCOUNT, "method": {"type": "string", "enum": list(READS)},
+         "body": {"type": "object", "description": "구글 REST 요청 본문(GET method는 주소 칸)"},
+         "resource_name": {"type": "string", "description": "작업 상태 method에서 대상(customers/<ID>/…)"}}},
+     "annotations": {"readOnlyHint": True}},
     {"name": "google_ad_preview",
      "description": "구글 광고 미리보기 공유 링크(ShareablePreviewService). PMax 애셋 그룹만 된다(반응형 검색·디스플레이 광고는 구글이 지원 안 함). "
                     "애셋 그룹 ID는 google_ads_search로 asset_group.id 조회. 링크는 iframe에 못 넣으니 그대로 알려 준다. 관리자만, 조회만 한다.",
@@ -290,5 +345,5 @@ TOOLS = [
          "emails": {"type": "array", "items": {"type": "string"}}, "phones": {"type": "array", "items": {"type": "string"}}, "validate_only": CHECK}},
      "annotations": {"destructiveHint": True}},
 ]
-CALLS = {"google_ads_search": search_tool, "google_keyword_ideas": keyword_ideas, "google_audience_insights": audience_insights, "google_ad_preview": previews,
+CALLS = {"google_ads_search": search_tool, "google_keyword_ideas": keyword_ideas, "google_audience_insights": audience_insights, "google_ad_preview": previews, "google_ads_read": read_tool,
          "google_generate_recommendations": generate_recommendations, "google_ads_change": change_tool, "google_customer_match": customer_match}
