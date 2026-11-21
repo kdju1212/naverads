@@ -191,6 +191,13 @@ def test_google_tools(monkeypatch):
     assert not err and sent[-1][0].endswith("customers/5555555555:searchAudienceInsightsAttributes")
     assert sent[-1][1] == {"customerInsightsGroup": "구글", "queryText": "육아", "dimensions": ["AFFINITY_USER_INTEREST"]}  # 이름표는 계정 이름
     assert tool("google_audience_insights", method="googleAds:mutate")[1]  # 정한 조회 method만
+    out, err = tool("google_ad_preview", asset_group_ids=["11"])
+    assert not err and sent[-1][0].endswith("customers/5555555555:generateShareablePreviews")
+    assert sent[-1][1] == {"shareablePreviews": [{"assetGroupIdentifier": {"assetGroupId": "11"}}]}
+    rec = {"recommendationTypes": ["KEYWORD"], "advertisingChannelType": "SEARCH", "seedInfo": {"urlSeed": "https://a.com"}}
+    out, err = tool("google_generate_recommendations", body=rec)
+    assert not err and sent[-1][0].endswith("customers/5555555555/recommendations:generate") and sent[-1][1] == rec
+    assert tool("google_generate_recommendations", body={"recommendationTypes": ["KEYWORD"], "advertisingChannelType": "DISPLAY"})[1]
 
     ops = lambda *o: {"mutateOperations": list(o)}  # noqa: E731
     pause = {"campaignOperation": {"update": {"resourceName": "customers/5555555555/campaigns/1", "status": "PAUSED"}, "updateMask": "status"}}

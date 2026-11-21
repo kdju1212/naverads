@@ -602,3 +602,7 @@ MCP:     https://naverads-api.djkim0509.workers.dev/mcp  (Claude 커넥터 "네�
     - method 6개: 속성 찾기(searchAudienceInsightsAttributes) → 구성(나이·성별·관심사)·타기팅 추천·겹침·도달 규모·인사이트 파인더 링크
     - 본문은 구글 REST 그대로, customerInsightsGroup은 비우면 계정 이름
     - [확인] 실계정: 이 서비스가 계정에 열려 있는지(구글이 일부 계정만 허용할 수 있음), 응답 크기
+31. 11/21 구글 광고 미리보기·새 캠페인 추천(조회만, 마이그레이션 없음)
+    - google_ad_preview: ShareablePreviewService 공유 링크. PMax 애셋 그룹만(구글이 반응형 검색·디스플레이는 지원 안 함)
+    - google_generate_recommendations: 만들기 전 캠페인(SEARCH·PMAX)에 대한 예산·키워드·입찰 전략·사이트링크 추천, 받기만 함
+    - 주소는 v26 공식 문서로 확인. [확인] 실계정 응답 모양
