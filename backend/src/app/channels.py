@@ -1,4 +1,4 @@
-"""메타·구글 광고 계정 연결과 네이버와 나란히 보는 성과 조회(조회만, 광고는 바꾸지 않는다).
+"""메타·구글 광고 계정 연결과 네이버와 나란히 보는 성과 조회. 구글 수정·등록은 google_ads.py.
 질문마다 각 매체 API를 바로 부르고 서버에 쌓지 않는다(무료 플랜·서버 DB에 광고 데이터 안 둠).
 - 메타: 비즈니스 관리자 시스템 사용자 토큰 + 광고계정 ID를 설정 화면에 붙여넣기(ads_read 권한)
 - 구글: 설정 화면에서 Google로 adwords 범위 동의 → 갱신 토큰 저장. 개발자 토큰은 Worker 시크릿 GOOGLE_ADS_DEVELOPER_TOKEN"""
@@ -45,8 +45,8 @@ def visible(db: Session, m: Membership) -> list[dict]:
     # shortcut: 메타·구글 계정은 담당 계정 배정(AccountAccess)이 없어 관리자만 본다, 직원에게 보여 줄 일이 생기면 배정 표에 매체 칸 추가
     if m.role not in ADMIN_ROLES:
         return []
-    return [{"id": c.id, "channel": c.channel, "account_id": c.account_id, "name": c.name, "login_customer_id": c.login_customer_id}
-            for c in _ws_rows(db, m.workspace_id)]
+    return [{"id": c.id, "channel": c.channel, "account_id": c.account_id, "name": c.name, "login_customer_id": c.login_customer_id,
+             "max_bid": c.max_bid} for c in _ws_rows(db, m.workspace_id)]
 
 
 # ---------- 메타 ----------
@@ -103,26 +103,38 @@ def google_search(refresh_token: str, customer_id: str, login_customer_id: str |
     return google_searches(refresh_token, customer_id, login_customer_id, [query])[0]
 
 
-def google_searches(refresh_token: str, customer_id: str, login_customer_id: str | None, queries: list[str]) -> list[list[dict]]:
-    """질문 여러 개를 출입증 한 번으로(무료 플랜 요청당 외부 호출 수 한도)."""
+def google_headers(refresh_token: str, login_customer_id: str | None) -> dict:
     dev = os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN")
     if not dev:
         raise ChannelError("서버에 구글 광고 개발자 토큰(GOOGLE_ADS_DEVELOPER_TOKEN)이 없습니다(관리자 확인 필요)")
     headers = {"Authorization": f"Bearer {google_access_token(refresh_token)}", "developer-token": dev}
     if login_customer_id:
         headers["login-customer-id"] = login_customer_id
+    return headers
+
+
+def google_post(path: str, body: dict, headers: dict) -> dict:
+    """path: 'customers/123/googleAds:search' 같은 API 주소 뒷부분. 오류는 구글이 준 칸별 이유까지 붙여 돌려준다(Claude가 고쳐 다시 보낼 수 있게)."""
+    try:
+        r = httpx.post(f"{GOOGLE_ADS_API}/{path}", json=body, headers=headers, timeout=30)
+        data = r.json()
+    except (httpx.HTTPError, ValueError) as e:
+        raise ChannelError(f"구글 광고 API 호출 실패: {e}") from e
+    if r.status_code >= 400:
+        err = (data[0] if isinstance(data, list) else data).get("error") or {}  # 오류는 배열로 올 때가 있다
+        why = [x.get("message") for d in err.get("details") or [] for x in d.get("errors") or [] if x.get("message")]
+        raise ChannelError(f"구글 광고 API 오류: {err.get('message') or r.status_code}" + (f" — {'; '.join(why[:10])}" if why else ""))
+    return data
+
+
+def google_searches(refresh_token: str, customer_id: str, login_customer_id: str | None, queries: list[str]) -> list[list[dict]]:
+    """질문 여러 개를 출입증 한 번으로(무료 플랜 요청당 외부 호출 수 한도)."""
+    headers = google_headers(refresh_token, login_customer_id)
     out = []
     for query in queries:
         body, rows = {"query": query}, []
         for _ in range(10):  # 한 페이지 1만 행
-            try:
-                r = httpx.post(f"{GOOGLE_ADS_API}/customers/{customer_id}/googleAds:search", json=body, headers=headers, timeout=30)
-                data = r.json()
-            except (httpx.HTTPError, ValueError) as e:
-                raise ChannelError(f"구글 광고 API 호출 실패: {e}") from e
-            if r.status_code >= 400:
-                err = data[0] if isinstance(data, list) else data  # 오류는 배열로 올 때가 있다
-                raise ChannelError(f"구글 광고 API 오류: {(err.get('error') or {}).get('message') or r.status_code}")
+            data = google_post(f"customers/{customer_id}/googleAds:search", body, headers)
             rows += data.get("results", [])
             if not data.get("nextPageToken"):
                 break
@@ -279,6 +291,25 @@ async def connect_meta(body: MetaIn, m: Membership = Depends(admin_membership), 
         raise HTTPException(400, f"메타 광고계정 접근 확인 실패: {e}") from e
     row = _save(db, m.workspace_id, m.user_id, "META", acc, info.get("name") or acc, token)
     return {"id": row.id, "channel": "META", "account_id": acc, "name": row.name}
+
+
+class MaxBidIn(BaseModel):
+    max_bid: int
+
+
+@router.put("/workspaces/{ws_id}/channels/{conn_id}/max-bid")
+async def set_max_bid(conn_id: int, body: MaxBidIn, m: Membership = Depends(admin_membership), db: Session = Depends(get_db)):
+    """구글 광고 변경 도구(google_ads.py)의 클릭당 최대 입찰가(계정 통화 단위). 정하기 전엔 변경 도구를 못 쓴다."""
+    row = db.get(ChannelConnection, conn_id)
+    if not row or row.workspace_id != m.workspace_id:
+        raise HTTPException(404, "연결을 찾을 수 없습니다")
+    if body.max_bid <= 0:
+        raise HTTPException(400, "최대 입찰가는 0보다 커야 합니다")
+    db.add(AuditLog(workspace_id=m.workspace_id, user_id=m.user_id, action="UPDATE", entity_type="channel", field="max_bid",
+                    naver_id=f"{row.channel}:{row.account_id}", before=str(row.max_bid), after=str(body.max_bid)))
+    row.max_bid = body.max_bid
+    db.commit()
+    return {"ok": True}
 
 
 @router.delete("/workspaces/{ws_id}/channels/{conn_id}")

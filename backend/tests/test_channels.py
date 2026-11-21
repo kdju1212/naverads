@@ -136,3 +136,87 @@ def test_cross_channel(monkeypatch):
     # 연결 해제하면 토큰이 지워지고 조회에서 빠진다
     assert c.delete(f"/workspaces/{ws}/channels/{chans[0]['id']}", headers=owner).json() == {"ok": True}
     assert [x["channel"] for x in c.get(f"/workspaces/{ws}/channels", headers=owner).json()] == ["GOOGLE"]
+
+
+def test_google_tools(monkeypatch):
+    """구글 조회·변경 도구: 최대 입찰가 전엔 변경 못 함, 예산 늘리는 변경·높은 입찰가는 서버가 막음, 실행 전 구글 검사(validateOnly)."""
+    import hashlib
+
+    from app.google_ads import _phone
+
+    owner, ws, acc = _account("gtools@a.com", "9702")
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "gid")
+    monkeypatch.setenv("GOOGLE_ADS_DEVELOPER_TOKEN", "dev")
+    sent = []
+
+    def post(url, data=None, json=None, headers=None, **kw):
+        sent.append((url, json))
+        if url == "https://oauth2.googleapis.com/token":
+            return R({"access_token": "a", "refresh_token": "g-refresh", "scope": "openid https://www.googleapis.com/auth/adwords"})
+        if url.endswith("googleAds:search"):
+            q = json["query"]
+            if "descriptive_name" in q:
+                return R({"results": [{"customer": {"descriptiveName": "구글"}}]})
+            if "FROM campaign_budget" in q:
+                return R({"results": [{"campaignBudget": {"resourceName": "customers/5555555555/campaignBudgets/7", "amountMicros": "50000000000"}}]})
+            if "FROM recommendation" in q:
+                return R({"results": [{"recommendation": {"resourceName": "customers/5555555555/recommendations/r1", "type": "CAMPAIGN_BUDGET"}}]})
+            return R({"results": [{"campaign": {"id": str(i)}} for i in range(250)]})
+        if url.endswith(":generateKeywordIdeas"):
+            return R({"results": [{"text": "a", "keywordIdeaMetrics": {"avgMonthlySearches": "10"}},
+                                  {"text": "b", "keywordIdeaMetrics": {"avgMonthlySearches": "90", "highTopOfPageBidMicros": "1500000000"}}]})
+        if url.endswith("googleAds:mutate") and not json["validateOnly"]:
+            return R({"error": {"message": "Request contains an invalid argument.", "details": [{"errors": [{"message": "Too low."}]}]}}, 400)
+        if url.endswith("offlineUserDataJobs:create"):
+            return R({"resourceName": "customers/5555555555/offlineUserDataJobs/1"})
+        return R({"ok": True})
+
+    monkeypatch.setattr(httpx, "post", post)
+    web = "http://localhost:3000/settings"
+    r = c.get("/auth/google/start", params={"redirect": web, "ads_ws": ws, "customer_id": "555-555-5555"}, headers=owner, follow_redirects=False)
+    c.get("/auth/google/callback", params={"state": parse_qs(urlsplit(r.headers["location"]).query)["state"][0], "code": "c"}, follow_redirects=False)
+    conn = c.get(f"/workspaces/{ws}/channels", headers=owner).json()[0]
+
+    def tool(name, **a):
+        res = c.post("/mcp", headers=_mcp_headers(owner), json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+            "name": name, "arguments": {"workspace_id": ws, "account_id": "555-555-5555", **a}}}).json()["result"]
+        return json.loads(res["content"][0]["text"]), res["isError"]
+
+    out, err = tool("google_ads_search", query="SELECT campaign.id FROM campaign")
+    assert not err and out["rows"] == 250 and len(out["results"]) == 200 and "truncated" in out
+    assert tool("google_ads_search", query="DELETE x")[1]
+    out, _ = tool("google_keyword_ideas", keywords=["말랑이"])
+    assert [(x["keyword"], x["top_bid_high"]) for x in out["ideas"]] == [("b", 1500), ("a", 0)]
+
+    ops = lambda *o: {"mutateOperations": list(o)}  # noqa: E731
+    pause = {"campaignOperation": {"update": {"resourceName": "customers/5555555555/campaigns/1", "status": "PAUSED"}, "updateMask": "status"}}
+    out, err = tool("google_ads_change", action="mutate", body=ops(pause))
+    assert err and "최대 입찰가" in out["error"]  # 최대 입찰가 정하기 전
+    assert c.put(f"/workspaces/{ws}/channels/{conn['id']}/max-bid", headers=owner, json={"max_bid": 1000}).json() == {"ok": True}
+
+    out, err = tool("google_ads_change", action="mutate", body=ops(pause))
+    assert not err and out["validate_only"] and sent[-1][1]["validateOnly"] is True  # 기본은 구글 검사만
+    blocked = [
+        {"campaignOperation": {"create": {"name": "새 캠페인", "status": "ENABLED"}}},
+        {"campaignOperation": {"update": {"resourceName": "customers/5555555555/campaigns/1", "status": "ENABLED"}}},
+        {"campaignBudgetOperation": {"update": {"resourceName": "customers/5555555555/campaignBudgets/7", "amountMicros": "60000000000"}}},
+        {"adGroupOperation": {"create": {"name": "g", "cpcBidMicros": "1500000000"}}},
+    ]
+    for op in blocked:
+        n = len(sent)
+        out, err = tool("google_ads_change", action="mutate", body=ops(op), validate_only=False)
+        assert err and not any(u.endswith("googleAds:mutate") for u, _ in sent[n:]), (op, out)
+    down = {"campaignBudgetOperation": {"update": {"resourceName": "customers/5555555555/campaignBudgets/7", "amountMicros": "40000000000"}}}
+    out, err = tool("google_ads_change", action="mutate", body=ops(down, pause), validate_only=False)
+    assert err and "Too low." in out["error"]  # 구글이 준 칸별 이유를 그대로 전한다
+    out, err = tool("google_ads_change", action="apply_recommendations", body={"operations": [{"resourceName": "customers/5555555555/recommendations/r1"}]})
+    assert err and "CAMPAIGN_BUDGET" in out["error"]
+
+    out, _ = tool("google_customer_match", user_list_id="3", emails=[" A@b.com", "bad"], phones=["010-1234-5678"])
+    assert (out["emails"], out["phones"]) == (1, 1)
+    out, err = tool("google_customer_match", user_list_id="3", emails=[" A@b.com"], validate_only=False)
+    assert not err and out["uploaded"] == 1
+    add = next(j for u, j in sent if u.endswith(":addOperations"))
+    assert add["operations"][0]["create"]["userIdentifiers"][0]["hashedEmail"] == hashlib.sha256(b"a@b.com").hexdigest()
+    assert "a@b.com" not in json.dumps(sent)
+    assert _phone("010-1234-5678") == "+821012345678" and _phone("+1 650 555 0100") == "+16505550100"

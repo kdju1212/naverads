@@ -140,9 +140,9 @@ function Accounts({ isAdmin }: { isAdmin: boolean }) {
   );
 }
 
-interface Channel { id: number; channel: "META" | "GOOGLE"; account_id: string; name: string }
+interface Channel { id: number; channel: "META" | "GOOGLE"; account_id: string; name: string; max_bid: number | null }
 
-// 메타·구글은 Claude에서 네이버와 성과를 나란히 볼 때만 쓴다(조회만, 이 웹에는 화면 없음)
+// 메타·구글은 Claude에서만 쓴다(이 웹에는 화면 없음). 구글은 최대 입찰가를 정해야 Claude가 바꿀 수 있다
 function OtherChannels() {
   const { ws } = useApp();
   const list = useFetch<Channel[]>(ws ? `/workspaces/${ws.id}/channels` : null);
@@ -163,25 +163,33 @@ function OtherChannels() {
     location.href = `${API_URL}/auth/google/start?${q}`;
   };
   return (
-    <Card title="메타·구글 광고 계정 (Claude 비교 조회용)">
-      <p className="mb-3 text-sm text-faint">연결하면 Claude에서 &ldquo;이번 주 네이버·메타·구글 광고비·ROAS 비교해줘&rdquo;처럼 물어볼 수 있습니다. 조회만 하고 광고는 바꾸지 않습니다. 관리자만 볼 수 있습니다.</p>
+    <Card title="메타·구글 광고 계정 (Claude용)">
+      <p className="mb-3 text-sm text-faint">연결하면 Claude에서 &ldquo;이번 주 네이버·메타·구글 광고비·ROAS 비교해줘&rdquo;처럼 물어볼 수 있습니다. 메타는 조회만, 구글은 클릭당 최대 입찰가를 정하면 Claude가 수정·등록도 합니다(캠페인 켜기·예산 올리기는 구글 광고 화면에서). 관리자만 쓸 수 있습니다.</p>
       <ErrorText error={error} />
       {msg && <p className="mb-2 text-sm text-info" role="status">{msg}</p>}
       <table className="mb-4 w-full text-sm">
-        <thead className="text-left text-xs text-faint"><tr><th className="py-2">매체</th><th>계정</th><th>ID</th><th /></tr></thead>
+        <thead className="text-left text-xs text-faint"><tr><th className="py-2">매체</th><th>계정</th><th>ID</th><th>최대 입찰가</th><th /></tr></thead>
         <tbody>
           {(list.data ?? []).map((c) => (
             <tr key={c.id} className="border-t border-line">
               <td className="py-2">{c.channel === "META" ? "메타" : "구글"}</td>
               <td className="font-medium">{c.name}</td>
               <td className="font-mono text-xs">{c.account_id}</td>
+              <td>{c.channel === "GOOGLE" && <input className={`${inputCls} w-28`} type="number" min={1} defaultValue={c.max_bid ?? ""} placeholder="안 정함"
+                aria-label={`${c.name} 클릭당 최대 입찰가`} disabled={busy} onBlur={(e) => {
+                  const v = Number(e.target.value);
+                  if (v > 0 && v !== c.max_bid) run(async () => {
+                    await api(`/workspaces/${ws!.id}/channels/${c.id}/max-bid`, { method: "PUT", body: { max_bid: v } });
+                    await list.reload();
+                  });
+                }} />}</td>
               <td className="text-right"><Button variant="danger" disabled={busy} onClick={() => confirm(`${c.name} 연결을 해제할까요? 저장된 토큰이 지워집니다.`) && run(async () => {
                 await api(`/workspaces/${ws!.id}/channels/${c.id}`, { method: "DELETE" });
                 await list.reload();
               })}>해제</Button></td>
             </tr>
           ))}
-          {list.data?.length === 0 && <tr><td colSpan={4} className="py-4 text-center text-faint">연결된 계정이 없습니다</td></tr>}
+          {list.data?.length === 0 && <tr><td colSpan={5} className="py-4 text-center text-faint">연결된 계정이 없습니다</td></tr>}
         </tbody>
       </table>
       <div className="grid gap-4 border-t border-line pt-4 lg:grid-cols-2">
